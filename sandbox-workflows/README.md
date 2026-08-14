@@ -356,6 +356,18 @@ rejects any expression that is not a plain reference, so this cannot recur silen
    `WP<n>` half, so it is a **no-op for an edit**, whose GPML already names its own id.
    `.png` files are skipped.
 
+   The same script fixes two smaller things in the same tag, since it is already open there.
+   **`Last-Modified` is refreshed**, taken from the revision the `Version` already carries so
+   the two agree and the stamp is when the pathway was last *edited* rather than when it
+   happened to be approved; a revision that is not a 14-digit stamp (a MediaWiki revision
+   number on an older file) falls back to the run time. WP5429 shipped with
+   `Last-Modified="20220717141800"`, four years stale, because nothing had ever refreshed it.
+   And **`Data-Source` is filled in when absent** — every published pathway checked carries
+   `WikiPathways` and a submitter's file may simply omit it, as WP5429's did. Never
+   overwritten: a file recording where it genuinely came from has to keep saying so, and this
+   step cannot tell that apart from an omission. Checked with a `Data-Source="Reactome"` file,
+   which comes through untouched.
+
    This has to happen here and nowhere else: the publish push is made with `GITHUB_TOKEN`,
    which starts no further workflow run, so nothing downstream ever re-derives these files.
    Checked by running the step against the real WP5429 artifacts, and against a GPML with no

@@ -306,32 +306,61 @@ jobs:
           if root is None:
               sys.exit("no <Pathway> root element in %s" % path)
 
-          tag = root.group(0)
-          found = re.search(r'\bVersion="([^"]*)"', tag)
-          old = found.group(1) if found else ""
-          if re.match(r"^WP\d+", old):
+          original = root.group(0)
+          tag = original
+
+          def attribute(name):
+              return re.search(r'\b%s="([^"]*)"' % name, tag)
+
+          def put(name, value):
+              # Replace the attribute where it exists, add it to the opening tag where it
+              # does not. Same surgical edit the portal makes, for the same reason: a full
+              # XML round-trip would rewrite prefixes and formatting across the document.
+              global tag
+              found = attribute(name)
+              if found:
+                  tag = tag[: found.start()] + '%s="%s"' % (name, value) + tag[found.end() :]
+              else:
+                  tag = tag.replace("<Pathway", '<Pathway %s="%s"' % (name, value), 1)
+
+          now = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+
+          found = attribute("Version")
+          old_version = found.group(1) if found else ""
+          if re.match(r"^WP\d+", old_version):
               # Keep the revision the file came in with; only the WP<n> half is wrong.
-              new = re.sub(r"^WP\d+", wpid, old)
-          elif old:
-              new = "%s_%s" % (wpid, old)
+              new_version = re.sub(r"^WP\d+", wpid, old_version)
+          elif old_version:
+              new_version = "%s_%s" % (wpid, old_version)
           else:
-              new = "%s_%s" % (wpid, datetime.now(timezone.utc).strftime("r%Y%m%d%H%M%S"))
+              new_version = "%s_r%s" % (wpid, now)
+          put("Version", new_version)
 
-          if found:
-              fixed = tag[: found.start()] + 'Version="%s"' % new + tag[found.end() :]
-          else:
-              fixed = tag.replace("<Pathway", '<Pathway Version="%s"' % new, 1)
+          # Last-Modified: taken from the revision the Version already carries, so the two
+          # agree and the timestamp is the moment the pathway was actually last edited
+          # rather than the moment it happened to be approved. Published WikiPathways files
+          # all carry a 14-digit stamp here; WP5429 shipped with 20220717141800, four years
+          # stale, because nothing has ever refreshed it. A revision that is not a stamp --
+          # a MediaWiki revision number on an older file, say -- falls back to now.
+          stamp = re.search(r"_r(\d{14})$", new_version)
+          put("Last-Modified", stamp.group(1) if stamp else now)
 
-          if fixed != tag:
+          # Data-Source: only when absent. Every published pathway checked carries
+          # "WikiPathways" and a submitter's file may simply omit it, as WP5429's did -- but
+          # a file that records where it genuinely came from must keep saying so, and this
+          # step cannot tell the two apart. Never overwriting makes that unnecessary.
+          if not attribute("Data-Source"):
+              put("Data-Source", "WikiPathways")
+
+          if tag != original:
               open(path, "w", encoding="utf-8").write(
-                  text[: root.start()] + fixed + text[root.end() :]
+                  text[: root.start()] + tag + text[root.end() :]
               )
-              print("%s: Version %r -> %r" % (path, old, new))
-          else:
-              print("%s: Version already %r" % (path, new))
+          print("%s: Version %r -> %r" % (path, old_version, new_version))
+          print("%s: %s" % (path, attribute("Last-Modified").group(0)))
 
           with open(report, "w", encoding="utf-8") as handle:
-              handle.write("%s\n%s\n" % (old, new))
+              handle.write("%s\n%s\n" % (old_version, new_version))
           PY
           OLD_VERSION=$(sed -n 1p gpml-version.txt)
           NEW_VERSION=$(sed -n 2p gpml-version.txt)

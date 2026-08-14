@@ -269,10 +269,25 @@ which put `WP0001` on `main` (two `on_gpml_change` runs died on it) — the app'
 when the path is already gone; `git rm --ignore-unmatch` would make it idempotent. That workflow is
 not staged in this repo.
 
-Still open and deliberately not done: the GPML's `Last-Modified` is never refreshed at publication
-(WP5429 carries a 2022 timestamp), and `Data-Source="WikiPathways"` is absent from WP5429 because
-the submitter's file lacked it — the app backfills `Author` the same way and could backfill this.
-WP5426–WP5429 are **not** being repaired; the decision was to fix forward.
+The same script fixes two smaller things in the tag it already has open. **`Last-Modified` is
+refreshed** from the revision the `Version` carries, so the two agree and the stamp is when the
+pathway was last edited rather than when it was approved — WP5429 shipped with a 2022 timestamp
+because nothing had ever refreshed it. **`Data-Source` is filled in when absent**, never
+overwritten: a file that records real provenance has to keep saying so, and this step cannot tell
+that apart from an omission, so not overwriting removes the question. Checked with a
+`Data-Source="Reactome"` file, which comes through untouched.
+
+WP5426–WP5429 are **not** being repaired; the decision was to fix forward. Merging a pipeline pull
+request stays mitigated by the mirror comment alone — draft pull requests and branch protection
+were both considered and declined, so a hand-merge remains possible and its collateral (below) is
+still reachable.
+
+Still open: **`on_gpml_change.yml`'s `sync-database-repo-deleted` job is not idempotent**. It runs
+`git rm 'pathways/WP<n>/*'` and dies with `pathspec … did not match any files` when the path is
+already gone — which is exactly what the app's own `_repair_stray_placeholder` arranges, so the
+repair for a hand-merge reliably produces a red run. `git rm --ignore-unmatch` is the whole fix,
+but that workflow is **not staged in this repo** and would have to be added to
+`sandbox-workflows/` first.
 
 529 tests. The 3A changes are staged only — nothing is live until the fork's copy is updated, and
 none of it is proven until one real submission goes through from an account that is not Marvin's.
