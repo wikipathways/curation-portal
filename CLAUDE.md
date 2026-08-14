@@ -296,8 +296,73 @@ content repository from a `fetch-depth: 1` checkout. There is no observed failur
 against, and guessing at a forced push to the branch holding every published pathway is worse than
 leaving it documented.
 
-529 tests. The 3A changes are staged only — nothing is live until the fork's copy is updated, and
-none of it is proven until one real submission goes through from an account that is not Marvin's.
+**Proven end to end, and the fix is measurable: WP5430, PR #42.** `mmarvinm2` submitted through
+the portal; cross-repository pull request authored by them; workflow 1 all ten green under a real
+`pull_request_target`; a revision landed on **their own fork** and went ten-green again on
+`synchronize`; Approve pressed **at the dashboard button**; `accepted` label → dispatcher → 3A
+green on every step including the new `Resolve the submitter` and a clean `Close PR`; pull request
+closed **unmerged** with `published` and **no** `publish failed`; and the app settled itself over
+the webhook to `status=published, wpid=5430, approved_by=marvinm2`.
+
+Against yesterday's publication, same repository, one day apart:
+
+| | WP5429 | WP5430 |
+|---|---|---|
+| `Version` | `WP0001_r20260813082819` | `WP5430_r20260814093636` |
+| `Last-Modified` | `20220717141800` | `20260814093636` |
+| `Data-Source` | absent | `WikiPathways` |
+| `info.json` wpid | `WP0__PR37` | `WP5430` |
+| draft slug in pvjson/SVG | present | none anywhere |
+| publish commit | `GitHub Action <action@github.com>` | `mmarvinm2 <312958610+mmarvinm2@…>` |
+
+WP5425–WP5429 are all `GitHub Action`. WP5430 is the first publication in this repository
+attributed to the person who made the pathway.
+
+### Four defects found by *using* the portal, none of which a test could have surfaced
+
+The pattern is worth more than the individual bugs: every one lived in a surface nothing renders,
+follows or asserts on from inside the app.
+
+- **The welcome comment sent every submitter to a dead link.** It linked `/reviews/{pr}`; there
+  has never been such a page (`/api/reviews/{pr}` is JSON, the HTML route is `/dashboard/{pr}`).
+  Every submission since welcome comments were added carried it, and the mirror comment directly
+  beneath had the right URL the whole time — which is exactly why the difference was invisible.
+  `tests/test_comment_links.py` now checks every link in every rendered comment against the app's
+  own route table, so the next comment gets the guarantee for free; asserting on the comment text
+  would only have pinned that day's string.
+- **`content.references` counted uncited references.** It counted every `<bp:PublicationXref>`
+  rather than the ones a `<BiopaxRef>` cites. The review page therefore said "Open the 1 reference
+  listed above" directly over a checklist item saying "The GPML declares no literature references"
+  — and the checklist was right. `cited_reference_count` already existed and `main.py` already
+  used it for the required item; this rule never did.
+- **A pipeline verdict could not correct itself after a revision.** `refresh_pipeline_checks` only
+  wrote items still `pending`, though its docstring has always said "pending **and** auto-derived".
+  Once it wrote `fail`, the item was no longer pending — so a submitter fixing exactly what it
+  complained about, and a fresh run agreeing, left the failure standing. `auto` is the right test
+  and already means "nobody answered by hand"; `_merge_checklist` uses it for the same question.
+- **A curator's override kept the note that contradicted it**, so the item read "References
+  resolve — pass" above "The pipeline resolved 0 of the 1 reference". The note is kept but marked,
+  not cleared: what the pipeline saw is evidence, and a curator overruling it is the interesting
+  part of the record.
+
+**And the demo fixtures cited papers they are not.** PMID `12829793` is a colon-cancer paper, not
+"IRS proteins and the common path to diabetes" (`12169433`); `17635937` is about EGF-stimulated
+migration, not "AKT/PKB signaling: navigating downstream" (`17604717`). Both also declared their
+references with **no `<BiopaxRef>` citing them**, so every downstream generator saw none — which is
+where the same defect in the verification fixture came from, and why the references rule had never
+been exercised against a file that cites anything. Fixed in `demo/`.
+
+> [!note] Approving honestly is what surfaced two of these
+> The first upload's checklist could not be completed truthfully — its interactions were unanchored
+> floating lines and its one reference was uncited — so the gate refused, correctly. Recording a
+> false `pass` to make the run go green would have hidden both the stale-verdict bug and the
+> orphan-reference bug, and proved nothing about publication. Fixing the *fixture* and re-uploading
+> was the shorter path as well as the honest one, and it exercised revise-on-fork for free.
+
+540 tests. Live at `sha256:f924cdf1…` (from `7581b2d`), deployed and verified **against behaviour**:
+`/dashboard/42` returns 200 while `/reviews/42` still 404s, and `POST /api/validate` on an
+orphan-reference probe returns the new `warn` with the new wording. Rollback target
+`sha256:8fe50ea5…` — a plain digest change, no migration and no new secret.
 
 ### Previously (2026-08-03) — `docs/session-handoff-2026-08-03.md`
 
