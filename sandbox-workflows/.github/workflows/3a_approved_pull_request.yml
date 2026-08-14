@@ -145,6 +145,47 @@ jobs:
             echo "old_prefix=WP${WPID_NUM}__PR${PR_NUMBER}"
           } >> "$GITHUB_OUTPUT"
 
+      - name: Resolve the submitter
+        id: submitter
+        # The three commits below are the record of somebody's contribution to WikiPathways,
+        # and until now every one of them was `GitHub Action <action@github.com>` -- WP5425
+        # through WP5429 all show up under the `actions-user` account. The person who drew the
+        # pathway appeared nowhere in the history of the repository that holds it.
+        #
+        # The pull request's author is the submitter wherever the portal opens the pull request
+        # from the contributor's own fork, which is how it is deployed, and it is also right for
+        # a pull request opened by hand or by the PathVisio plugin. Where the portal opens the
+        # pull request under its own app identity instead, the author is that bot and the human
+        # is not recoverable from here, so the identity stays the Action's rather than guessing.
+        #
+        # `<id>+<login>@users.noreply.github.com` is the address GitHub itself writes on commits
+        # made through its web interface. It resolves to the account whatever that account's
+        # email-privacy setting is, which a guessed public address does not, and it is what makes
+        # the commit count as a contribution. Nothing about authentication changes: the push is
+        # still made with the deploy key, and the commit is unsigned exactly as it was before.
+        run: |
+          set -euo pipefail
+          # USER_ID, not UID: UID is readonly in bash and assigning to it would fail the step.
+          read -r LOGIN USER_ID USER_TYPE <<<"$(gh api \
+            "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" \
+            --jq '[.user.login, (.user.id|tostring), .user.type] | @tsv')"
+
+          if [ -z "$LOGIN" ] || [ "$USER_TYPE" = "Bot" ]; then
+            echo "Pull request author is ${LOGIN:-unknown} (${USER_TYPE:-unknown});" \
+              "committing as the action."
+            COMMIT_NAME="GitHub Action"
+            COMMIT_EMAIL="action@github.com"
+          else
+            echo "Committing as the submitter, ${LOGIN}."
+            COMMIT_NAME="$LOGIN"
+            COMMIT_EMAIL="${USER_ID}+${LOGIN}@users.noreply.github.com"
+          fi
+
+          {
+            echo "commit_name=${COMMIT_NAME}"
+            echo "commit_email=${COMMIT_EMAIL}"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Check target does not already exist
         id: guard
         # A new pathway must never be published over an existing one: if two approvals ever
@@ -210,8 +251,109 @@ jobs:
             while IFS= read -r file; do
               new_file=$(basename "$file" | sed "s/${OLD_PREFIX}/${WPID}/")
               mv "$file" "_data/${new_file}"
+              # Measured clean on WP5429, but rewritten anyway rather than trusted on a
+              # sample of one. The generators name their outputs after the draft file, so
+              # any of them may put the slug in a column tomorrow.
+              sed -i "s/${OLD_PREFIX}/${WPID}/g" "_data/${new_file}"
             done < <(find _data/drafts -type f -name "${OLD_PREFIX}*.tsv")
           fi
+
+          # FIX: renaming is only half of it, and until now the .md above was the only file
+          # whose *contents* were corrected. Every one of the four pathways published from
+          # the portal so far shipped carrying draft identifiers inside it:
+          #
+          #   WP5429.gpml       Version="WP0001_r20260813082819"   (should be WP5429_r...)
+          #   WP5429-info.json  "wpid": "WP0__PR37"
+          #   WP5429.json       the draft slug and the WP0001 version, throughout the pvjson
+          #   WP5429.svg        element ids: WP0__PR37, WP0__PR37-icon, WP0__PR37-text
+          #
+          # Same in WP5426, WP5427 and WP5428. The directory and the filename said one thing
+          # and the file said another, which is the identity a downstream reader trusts.
+          #
+          # This is the last moment anything can be corrected: the publish push below is made
+          # with GITHUB_TOKEN, so it starts no further workflow, and nothing re-derives these
+          # files afterwards. Everything here therefore runs *before* the copy loop, so the
+          # content repository and the assets repository both get the corrected bytes -- the
+          # same ordering the .md rewrite above already depends on.
+
+          # The GPML first, because reading its old Version is what lets the products be
+          # corrected too. GPML2013a carries the pathway's identity in the root <Pathway>
+          # Version attribute as WP<id>_r<revision>. The portal writes the placeholder there
+          # honestly -- at upload time the file genuinely is WP0001.gpml -- and this step is
+          # where that stops being true.
+          #
+          # python3, not sed: the opening <Pathway> tag may span lines and sed is line-based.
+          # The regexes are the ones the portal uses to write the attribute in the first place
+          # (app/submit/gpml.py in the curation portal), so both ends agree on what they are
+          # editing. A no-op for an edit, whose GPML already names its own id.
+          GPML_DRAFT=$(find draft_assets -type f -name "${OLD_PREFIX}.gpml" -print -quit)
+          if [ -z "$GPML_DRAFT" ]; then
+            echo "No GPML matched ${OLD_PREFIX}.gpml in draft_assets, so there is nothing to publish."
+            exit 1
+          fi
+          # The heredoc body sits at the YAML block's own indentation, so that after the block
+          # scalar is de-indented the terminator below lands in column 1, which is the only
+          # place `<<'PY'` will look for it. Indenting it to match the surrounding bash would
+          # leave the heredoc unterminated.
+          python3 - "$GPML_DRAFT" "$WPID" gpml-version.txt <<'PY'
+          import re
+          import sys
+          from datetime import datetime, timezone
+
+          path, wpid, report = sys.argv[1], sys.argv[2], sys.argv[3]
+          text = open(path, encoding="utf-8").read()
+          root = re.search(r"<Pathway\b[^>]*>", text, re.DOTALL)
+          if root is None:
+              sys.exit("no <Pathway> root element in %s" % path)
+
+          tag = root.group(0)
+          found = re.search(r'\bVersion="([^"]*)"', tag)
+          old = found.group(1) if found else ""
+          if re.match(r"^WP\d+", old):
+              # Keep the revision the file came in with; only the WP<n> half is wrong.
+              new = re.sub(r"^WP\d+", wpid, old)
+          elif old:
+              new = "%s_%s" % (wpid, old)
+          else:
+              new = "%s_%s" % (wpid, datetime.now(timezone.utc).strftime("r%Y%m%d%H%M%S"))
+
+          if found:
+              fixed = tag[: found.start()] + 'Version="%s"' % new + tag[found.end() :]
+          else:
+              fixed = tag.replace("<Pathway", '<Pathway Version="%s"' % new, 1)
+
+          if fixed != tag:
+              open(path, "w", encoding="utf-8").write(
+                  text[: root.start()] + fixed + text[root.end() :]
+              )
+              print("%s: Version %r -> %r" % (path, old, new))
+          else:
+              print("%s: Version already %r" % (path, new))
+
+          with open(report, "w", encoding="utf-8") as handle:
+              handle.write("%s\n%s\n" % (old, new))
+          PY
+          OLD_VERSION=$(sed -n 1p gpml-version.txt)
+          NEW_VERSION=$(sed -n 2p gpml-version.txt)
+          rm -f gpml-version.txt
+
+          # Then the products. Two substitutions, because the wrong string is not the same in
+          # both: the generators named their outputs after the draft file and so carry the
+          # slug, while anything derived from the GPML itself carries the old Version. The
+          # pvjson carries both.
+          while IFS= read -r file; do
+            case "$file" in
+              *.png|*.gpml) continue ;;
+            esac
+            sed -i "s/${OLD_PREFIX}/${WPID}/g" "$file"
+            # Only substitute a version that cannot be a sed expression. A hand-made GPML can
+            # put anything in that attribute, and a stray slash would turn this into a broken
+            # s/// rather than a bad rewrite.
+            if [ -n "$OLD_VERSION" ] && [ "$OLD_VERSION" != "$NEW_VERSION" ] &&
+               printf '%s' "$OLD_VERSION" | grep -qE '^[A-Za-z0-9._-]+$'; then
+              sed -i "s/${OLD_VERSION}/${NEW_VERSION}/g" "$file"
+            fi
+          done < <(find draft_assets -type f -name "${OLD_PREFIX}*")
 
           # Process files in draft_assets
           if [ -d draft_assets ]; then
@@ -231,10 +373,15 @@ jobs:
         working-directory: sandbox-wp.gh.io
         env:
           WPID: ${{ steps.get_wpid.outputs.wpid }}
+          COMMIT_NAME: ${{ steps.submitter.outputs.commit_name }}
+          COMMIT_EMAIL: ${{ steps.submitter.outputs.commit_email }}
         run: |
           set -euo pipefail
-          git config --local user.email "action@github.com"
-          git config --local user.name "GitHub Action"
+          # The submitter, resolved above; the action only where there is no person to name.
+          # `git pull --rebase` below replays the commit under these same settings, so the
+          # identity survives a concurrent push rather than reverting to whoever rebased.
+          git config --local user.email "$COMMIT_EMAIL"
+          git config --local user.name "$COMMIT_NAME"
           git add .
           # FIX: the commit message prefixed the step output with a literal WP, but the output
           # already carries that prefix, producing "WPWP1234". The `|| echo` matches 3B: a bare
@@ -257,10 +404,14 @@ jobs:
         working-directory: sandbox-wp-db
         env:
           WPID: ${{ steps.get_wpid.outputs.wpid }}
+          COMMIT_NAME: ${{ steps.submitter.outputs.commit_name }}
+          COMMIT_EMAIL: ${{ steps.submitter.outputs.commit_email }}
         run: |
           set -euo pipefail
-          git config --local user.email "action@github.com"
-          git config --local user.name "GitHub Action"
+          # This is the commit that matters: it is the one that puts the pathway into the
+          # content repository, and so the one a contributor's history is read from.
+          git config --local user.email "$COMMIT_EMAIL"
+          git config --local user.name "$COMMIT_NAME"
           git add .
           git commit -m "Add files for approved pathway ${WPID}" || echo "No changes to commit"
           git pull --rebase
@@ -276,10 +427,12 @@ jobs:
         working-directory: sandbox-wp-assets
         env:
           WPID: ${{ steps.get_wpid.outputs.wpid }}
+          COMMIT_NAME: ${{ steps.submitter.outputs.commit_name }}
+          COMMIT_EMAIL: ${{ steps.submitter.outputs.commit_email }}
         run: |
           set -euo pipefail
-          git config --local user.email "action@github.com"
-          git config --local user.name "GitHub Action"
+          git config --local user.email "$COMMIT_EMAIL"
+          git config --local user.name "$COMMIT_NAME"
           git add .
           git commit -m "Add assets for approved pathway ${WPID}" || echo "No changes to commit"
           git pull --rebase
@@ -376,6 +529,7 @@ jobs:
           OUT_CHECKOUT_DB: ${{ steps.checkout_db.outcome }}
           OUT_CHECKOUT_JEKYLL: ${{ steps.checkout_jekyll.outcome }}
           OUT_WPID: ${{ steps.get_wpid.outcome }}
+          OUT_SUBMITTER: ${{ steps.submitter.outcome }}
           OUT_GUARD: ${{ steps.guard.outcome }}
           OUT_MOVE: ${{ steps.move_files.outcome }}
           OUT_PUSH_JEKYLL: ${{ steps.push_jekyll.outcome }}
@@ -392,6 +546,7 @@ jobs:
           if [ "$OUT_PUSH_JEKYLL" = "failure" ]; then FAILED_STEP="push-sandbox-wp-gh-io"; fi
           if [ "$OUT_MOVE" = "failure" ]; then FAILED_STEP="rename-and-move-files"; fi
           if [ "$OUT_GUARD" = "failure" ]; then FAILED_STEP="target-already-exists"; fi
+          if [ "$OUT_SUBMITTER" = "failure" ]; then FAILED_STEP="resolve-submitter"; fi
           if [ "$OUT_WPID" = "failure" ]; then FAILED_STEP="get-wpid"; fi
           if [ "$OUT_CHECKOUT_JEKYLL" = "failure" ]; then
             FAILED_STEP="checkout-sandbox-wp-gh-io"

@@ -5,6 +5,15 @@ Repaired copies of GitHub Actions workflows belonging to
 staged here so they can be reviewed and then opened as a pull request against that
 repository.
 
+> [!warning] **Staged is not installed, and the gap has already cost a publication.**
+> On 2026-08-13, PR #37 published correctly and was then labelled `publish failed` because
+> `gh pr close` cannot close a pull request somebody merged by hand. That failure was diagnosed
+> on 2026-07-30 and repaired in the staged 3A the same day — and the fork never got the change,
+> so it happened again six weeks later. **A repair written here does nothing until it is applied
+> to `marvinm2/sandbox-wp-db`.** As of 2026-08-14 the fork is behind on three 3A changes: the
+> `Close PR` tolerance, the identifier rewrite (item 9 below) and the commit attribution
+> (item 10). `diff` the staged file against the fork's before assuming any of them is live.
+
 > [!important] Two changes are needed before *any* fork pull request works, and both are applied
 > on `marvinm2/sandbox-wp-db` only
 >
@@ -323,6 +332,56 @@ rejects any expression that is not a plain reference, so this cannot recur silen
    `_data/drafts` and `draft_assets` are guarded with `[ -d … ]` and read from a process
    substitution, because a `find` on a missing directory exits 1 and would otherwise abort
    the step.
+
+9. **Renaming a file does not change what it says it is** (added 2026-08-14, and the one
+   change here that a curator would notice in the published data). `Rename and Move Files`
+   renamed everything and rewrote the contents of the `.md` only. Everything else carried
+   its draft identity into publication. Measured on all four pathways published from the
+   portal, WP5426 through WP5429:
+
+   | File | Said | Should say |
+   |---|---|---|
+   | `WP5429.gpml` | `Version="WP0001_r20260813082819"` | `WP5429_r20260813082819` |
+   | `WP5429-info.json` | `"wpid": "WP0__PR37"` | `WP5429` |
+   | `WP5429.json` | the draft slug and `WP0001_r…` throughout the pvjson | `WP5429` |
+   | `WP5429.svg` | element ids `WP0__PR37`, `-icon`, `-text` | `WP5429…` |
+
+   The directory and the filename said one thing and the file said another, which is the
+   identity anything reading the data downstream trusts. Two substitutions, because the
+   wrong string is not the same in both cases: the generators name their outputs after the
+   draft file and so carry the slug, while anything derived from the GPML carries its old
+   `Version`. The pvjson carries both. The GPML itself is handled with a short `python3`
+   script rather than `sed`, because the opening `<Pathway>` tag may span lines and `sed`
+   is line-based; it keeps whatever revision the file came in with and replaces only the
+   `WP<n>` half, so it is a **no-op for an edit**, whose GPML already names its own id.
+   `.png` files are skipped.
+
+   This has to happen here and nowhere else: the publish push is made with `GITHUB_TOKEN`,
+   which starts no further workflow run, so nothing downstream ever re-derives these files.
+   Checked by running the step against the real WP5429 artifacts, and against a GPML with no
+   `Version` attribute, one whose `Version` has no `WP` prefix, one with an empty `Version`,
+   and one with no `<Pathway>` root at all — the last stops the publication rather than
+   guessing.
+10. **The publish commits were anonymous** (added 2026-08-14). All three were
+    `GitHub Action <action@github.com>`; WP5425 through WP5429 show up under the
+    `actions-user` account, so the person who drew the pathway appears nowhere in the
+    history of the repository that holds it. A new `Resolve the submitter` step reads the
+    pull request's author and the three pushes commit as them, both author and committer.
+
+    The address is `<id>+<login>@users.noreply.github.com`, which is what GitHub itself
+    writes on commits made through its web interface: it resolves to the account whatever
+    that account's email-privacy setting is, and it is what makes the commit count as a
+    contribution. A guessed public address does neither. Nothing about authentication
+    changes — the push is still made with the deploy key, and the commit is unsigned exactly
+    as before.
+
+    The pull request's author is the right answer for a fork submission, a pull request
+    opened by hand, and the PathVisio plugin. Where a portal opens pull requests under its
+    own app identity the author is a bot and the human is not recoverable from here, so the
+    step falls back to the action rather than guessing. Checked against three real pull
+    requests on the fork: #37 resolves to `egonw`, #39 to `MadhushriMSV`, #34 to the
+    fallback. `git pull --rebase` replays the commit under the same settings, so the
+    identity survives a concurrent push — also checked, in a throwaway repository.
 
 Beyond the defect list, 3A gains three things it did not have:
 

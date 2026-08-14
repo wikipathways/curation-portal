@@ -770,11 +770,24 @@ class FakeGitHubClient(GitHubClient):
         *,
         wpid: int | None,
         marker: str = "<!-- wikipathways-publish ",
+        branch: str = "main",
+        write_file: bool = True,
+        declares: str | None = None,
     ) -> None:
         """The target repo's publish workflow: announce the WPID, then close **unmerged**.
 
         ``wpid=None`` replays the failure this repo has actually shown — the PR gets closed with
         no announcement, so the app has to notice rather than assume success.
+
+        ``write_file=False`` replays the other one: the announcement arrives before the push is
+        visible, which the app must read as "early", not as a failure.
+
+        ``declares`` is what the pushed file says about *itself*, in its root ``Version``
+        attribute, and defaults to the truth. Until 2026-08-14 this fake announced a WPID and
+        wrote nothing, so no test could tell a correct publication from the one that actually
+        happened four times running: 3a renames ``WP0__PR<n>.gpml`` to ``WP<n>.gpml`` without
+        opening it, so WP5426 through WP5429 all landed still declaring ``WP0001``. Pass
+        ``declares="WP0001"`` to reproduce that.
         """
         if wpid is not None:
             self.create_issue_comment(
@@ -783,6 +796,17 @@ class FakeGitHubClient(GitHubClient):
                 f'{marker}{{"pr":{pr_number},"wpid":{wpid},"status":"published"}} -->\n'
                 f"Published as WP{wpid}.",
             )
+            if write_file:
+                version = declares or f"WP{wpid}"
+                gpml = (
+                    '<?xml version="1.0" encoding="UTF-8"?>\n'
+                    '<Pathway xmlns="http://pathvisio.org/GPML/2013a" Name="p" '
+                    f'Version="{version}_r20260813082819" Organism="Homo sapiens">\n'
+                    '  <Graphics BoardWidth="100.0" BoardHeight="100.0"/>\n'
+                    "</Pathway>\n"
+                )
+                key = (repo, branch, f"pathways/WP{wpid}/WP{wpid}.gpml")
+                self.files[key] = (gpml, f"Add files for approved pathway WP{wpid}", "publishsha")
         self.closed.add(pr_number)
 
     def simulate_3b(self, repo: str, pr_number: int) -> None:

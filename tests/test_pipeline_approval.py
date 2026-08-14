@@ -154,6 +154,46 @@ def test_publication_records_the_assigned_wpid(session_factory):
     assert review.status == ReviewStatus.PUBLISHED
     assert review.wpid == 5678
     assert review.published_at is not None
+    assert review.decision_note is None
+
+
+# -- reading the published file back -------------------------------------------------------
+#
+# The target repository's publish workflow renames WP0__PR<n>.gpml to WP<n>.gpml without opening
+# it, so WP5426, WP5427, WP5428 and WP5429 all landed on the content repository still declaring
+# Version="WP0001_r...". Four publications, none of them read back. The bytes were already being
+# fetched here to answer "did it land"; they are now also asked what they say they are.
+
+
+def test_a_file_that_declares_the_wrong_wpid_is_reported(session_factory):
+    gh = _fake()
+    svc = _service(session_factory, gh)
+    pr = _register(svc, gh)
+    _complete_checklist(svc, pr)
+    svc.approve(pr, CURATOR)
+
+    gh.simulate_3a(REPO, pr, wpid=5678, declares="WP0001")  # exactly what WP5429 did
+    review = svc.handle_pr_closed(pr, merged=False)
+
+    # The pathway is out; the status stands. The disagreement is recorded beside it.
+    assert review.status == ReviewStatus.PUBLISHED
+    assert review.wpid == 5678
+    assert "WP0001" in review.decision_note
+    assert "Version" in review.decision_note
+
+
+def test_an_announcement_ahead_of_the_push_is_called_early_not_wrong(session_factory):
+    gh = _fake()
+    svc = _service(session_factory, gh)
+    pr = _register(svc, gh)
+    _complete_checklist(svc, pr)
+    svc.approve(pr, CURATOR)
+
+    gh.simulate_3a(REPO, pr, wpid=5678, write_file=False)
+    review = svc.handle_pr_closed(pr, merged=False)
+
+    assert review.status == ReviewStatus.PUBLISHED
+    assert "not visible" in review.decision_note
 
 
 def test_a_close_with_no_announcement_is_a_failure_not_a_success(session_factory):

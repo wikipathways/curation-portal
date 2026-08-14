@@ -29,7 +29,12 @@ from app.review.checklist import (
     is_valid_key,
     requirement_for,
 )
-from app.submit.gpml import PLACEHOLDER_GPML_PATH, PLACEHOLDER_WPID_STR
+from app.submit.gpml import (
+    PLACEHOLDER_GPML_PATH,
+    PLACEHOLDER_WPID_STR,
+    InvalidGpml,
+    parse_pathway_meta,
+)
 from app.wpid import WpidAllocator
 
 # ``wpsubmit.review``, not ``__name__``. Logging is configured on the ``wpsubmit`` parent, so a
@@ -1162,17 +1167,54 @@ class CurationService:
                 newest = payload
         return newest
 
-    def _wpid_is_on_main(self, wpid: int) -> bool:
-        """Confirm the pathway really landed before we call a review published."""
+    def _published_file_note(self, wpid: int) -> str | None:
+        """Read the published GPML back; return what is wrong with it, or None if nothing is.
+
+        Two different things can be wrong here, and only the first was ever checked.
+
+        **The file may not be there.** The publish workflow pushes to the default branch
+        directly, so this read can simply be early. Not a failure, but worth saying out loud
+        rather than silently asserting success.
+
+        **Or it may be there and declare somebody else's identity.** GPML2013a carries the
+        pathway's id in the root ``Version`` attribute as ``WP<id>_r<revision>``, and the target
+        repository's publish workflow renames files without rewriting their contents — so every
+        pathway published from this portal between WP5426 and WP5429 landed at
+        ``pathways/WP<n>/WP<n>.gpml`` still declaring ``Version="WP0001_r…"``, the placeholder it
+        was uploaded under. Four publications went by before anybody opened one of the files.
+
+        Checking costs nothing: these bytes were already being fetched and thrown away. It is the
+        same lesson as everywhere else in this repository — the thing that finds a defect like
+        this is reading what the real pipeline actually wrote, not asking a test double.
+        """
         if self._github is None:
-            return False
+            return None
         try:
             content = self._github.get_file_content(
                 self._repo, self._default_branch, f"pathways/WP{wpid}/WP{wpid}.gpml"
             )
         except (GitHubError, httpx.HTTPError):
-            return False
-        return content is not None
+            content = None
+
+        if content is None:
+            return (
+                f"WP{wpid} was announced but is not visible on {self._default_branch} yet."
+            )
+
+        try:
+            declared = parse_pathway_meta(content).wpid
+        except InvalidGpml:
+            return (
+                f"WP{wpid} is on {self._default_branch} but its GPML has no readable "
+                "<Pathway> root element."
+            )
+        if declared and declared != f"WP{wpid}":
+            return (
+                f"WP{wpid} is on {self._default_branch}, but the file itself still says it is "
+                f"{declared}. The publishing pipeline renamed it without rewriting its Version "
+                "attribute."
+            )
+        return None
 
     #: Statuses no further automatic transition applies to.
     #:
@@ -1364,13 +1406,9 @@ class CurationService:
                 )
         else:
             status = ReviewStatus.PUBLISHED
-            if not self._wpid_is_on_main(published_wpid):
-                # Not a failure: the publish workflow pushes to main directly and our read can
-                # simply be early. Worth saying out loud rather than silently asserting success.
-                note = (
-                    f"WP{published_wpid} was announced but is not visible on "
-                    f"{self._default_branch} yet."
-                )
+            # Neither of the things this can find is a failure — the pathway is out either way —
+            # so the status stands and the disagreement is recorded beside it.
+            note = self._published_file_note(published_wpid)
 
         # A reservation only means something while the submission might still land. Direct mode
         # is where this bites: the id was really allocated, and holding it forever after a failed

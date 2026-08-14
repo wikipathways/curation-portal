@@ -218,7 +218,66 @@ GlusterFS-backed data at `/mnt/gluster/docker/<service>/data`, **no node pinning
 Docker secrets (never in the repo). The app needs a GitHub App identity installed on
 `wikipathways-database` with contents RW, pull_requests RW, and issues/comments RW.
 
-## Current state (2026-08-03) — read `docs/session-handoff-2026-08-03.md` first
+## Current state (2026-08-14)
+
+**A published pathway did not say which pathway it was.** `pathways/WP5429/WP5429.gpml` on the
+content repository declared `Version="WP0001_r20260813082819"` — the placeholder it was uploaded
+under. So did WP5426, WP5427 and WP5428: every pathway this portal has ever published. Beside the
+GPML, `WP5429-info.json` said `"wpid": "WP0__PR37"` and the pvjson and the SVG carried the draft
+slug throughout. Only the `.md` page was right, because 3A `sed`s that one file and nothing else.
+
+The cause is a seam nobody owned. Workflow 1 names every product after the draft file
+(`WP0__PR<n>`), the portal writes `WP0001` into the GPML's `Version` — honestly, since at upload
+time the file *is* `WP0001.gpml` — and 3A's `Rename and Move Files` renames without opening. It
+has to be fixed there and nowhere else: **the publish push is made with `GITHUB_TOKEN`, so it
+starts no further workflow run**, and nothing downstream ever re-derives those files.
+`docs/sandbox-pipeline.md:472-481` predicted this in writing weeks ago and left it as an open
+question; it is measured now.
+
+Fixed in the staged 3A (`sandbox-workflows/`, README items 9 and 10) with two substitutions —
+the draft slug for the generated products, and a short `python3` rewrite of the GPML's `Version`
+that keeps the revision and replaces only the `WP<n>` half, so it is a no-op for an edit. Exercised
+against the real WP5429 artifacts plus a GPML with no `Version`, one with a non-`WP` `Version`, one
+with an empty one, and one with no `<Pathway>` root — the last stops publication rather than
+guessing.
+
+**The publish commits were also anonymous**, `GitHub Action <action@github.com>` under the
+`actions-user` account for all of WP5425–WP5429: the person who drew the pathway appeared nowhere
+in the history of the repository holding it. 3A now resolves the pull request's author and commits
+as them, author *and* committer, at `<id>+<login>@users.noreply.github.com` — the address GitHub
+writes on its own web commits, which resolves regardless of the account's email-privacy setting and
+is what makes the commit count as a contribution. A bot author (portal in `bot` identity) falls
+back to the action rather than guessing. Resolved correctly against PRs #37, #39 and #34 on the
+fork; `git pull --rebase` was checked to preserve the identity.
+
+**The app now reads the published file back.** `_published_file_note` replaces `_wpid_is_on_main`
+and asks the bytes it was already fetching what they say they are. Four publications went by before
+anybody opened one — the same house failure as everywhere else in this file, and reverting the
+check makes the new test fail, which is the only thing that makes it worth having.
+
+> [!warning] **A repair staged here does nothing until it is applied to the fork.**
+> PR #37 published correctly on 2026-08-13 and was then labelled `publish failed`, because
+> `gh pr close` cannot close a pull request somebody merged by hand. That was diagnosed on
+> 2026-07-30 and repaired in the staged 3A the same day — and the fork never got it, so it
+> recurred six weeks later. `diff` the staged file against the fork's before believing any repair
+> in `sandbox-workflows/` is live. Three are outstanding as of 2026-08-14.
+
+Two things about PR #37 itself worth keeping. **It was merged by hand** rather than left to close,
+which put `WP0001` on `main` (two `on_gpml_change` runs died on it) — the app's
+`_repair_stray_placeholder` cleaned up, so the four-layer defence from 2026-07-30 held. And
+`on_gpml_change`'s `sync-database-repo-deleted` job fails with `pathspec … did not match any files`
+when the path is already gone; `git rm --ignore-unmatch` would make it idempotent. That workflow is
+not staged in this repo.
+
+Still open and deliberately not done: the GPML's `Last-Modified` is never refreshed at publication
+(WP5429 carries a 2022 timestamp), and `Data-Source="WikiPathways"` is absent from WP5429 because
+the submitter's file lacked it — the app backfills `Author` the same way and could backfill this.
+WP5426–WP5429 are **not** being repaired; the decision was to fix forward.
+
+529 tests. The 3A changes are staged only — nothing is live until the fork's copy is updated, and
+none of it is proven until one real submission goes through from an account that is not Marvin's.
+
+### Previously (2026-08-03) — `docs/session-handoff-2026-08-03.md`
 
 That is the read-me-first handoff. It supersedes the 07-29 one, which remains the account of the
 deployment, the fork's draft pipeline and the first publication. In short, since then: quality
