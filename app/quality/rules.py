@@ -505,14 +505,34 @@ def _check_references(s: Subject) -> tuple[str, str] | None:
     item non-blocking, so the one required item that a curator most needs to weigh was the one
     silently dropped from the approval gate.
     """
-    refs = list(getattr(s.metadata, "references", []) or [])
-    if not refs:
+    declared = list(getattr(s.metadata, "references", []) or [])
+    # The *cited* count, not the total. A GPML can carry a ``<bp:PublicationXref>`` that no
+    # ``<BiopaxRef>`` anywhere points at — PathVisio leaves them behind when an annotation is
+    # removed, and a hand-written file can simply forget the citation — and every downstream
+    # generator emits only the cited ones, so the repository's ``refs.tsv`` and
+    # ``bibliography.tsv`` both come back empty while this rule announced a reference.
+    #
+    # Both statements then appear on the same review page, disagreeing: "Open the 1 reference
+    # listed above" under Automated checks, and "The GPML declares no literature references" on
+    # the checklist, which has read the cited count since the pipeline check was wired. Measured
+    # on PR #42, 2026-08-14, on a fixture whose reference had been *added to answer this very
+    # rule* and was never cited — so the rule was validated against a file encoding the same
+    # misunderstanding it contains.
+    cited = getattr(s.metadata, "cited_reference_count", None)
+    n = cited if isinstance(cited, int) else len(declared)
+    if not n:
+        uncited = (
+            f" The file declares {len(declared)} but no <BiopaxRef> cites "
+            f"{'it' if len(declared) == 1 else 'any of them'}, so nothing downstream will see "
+            f"{'it' if len(declared) == 1 else 'them'}."
+            if declared
+            else ""
+        )
         return (
             Severity.WARN.value,
             "No literature references. The repository asks for at least one, so this is for a "
-            "curator to weigh rather than nothing to check.",
+            "curator to weigh rather than nothing to check." + uncited,
         )
-    n = len(refs)
     return (
         Severity.PASS.value,
         f"Open the {n} reference{'' if n == 1 else 's'} listed above and check "

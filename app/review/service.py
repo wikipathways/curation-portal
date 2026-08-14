@@ -156,7 +156,13 @@ def render_welcome_comment(review: Review, *, base_url: str = "") -> str:
         "this same pull request. There is no need to open a new one.",
     ]
     if base_url:
-        where = f"{base_url.rstrip('/')}/reviews/{review.pr_number}"
+        # ``/dashboard/{pr}``, not ``/reviews/{pr}``. There has never been a ``/reviews`` page —
+        # ``/api/reviews/{pr}`` is JSON and the HTML route has always been ``/dashboard/{pr}`` —
+        # so the one link in the first message a submitter ever receives returned
+        # ``{"detail":"Not Found"}``. Every submission since welcome comments were added carried
+        # it. Found by following the link, 2026-08-14; the mirror comment below had it right the
+        # whole time, which is why nothing else ever noticed.
+        where = f"{base_url.rstrip('/')}/dashboard/{review.pr_number}"
         lines += ["", f"You can follow the review at {where}."]
     return "\n".join(lines)
 

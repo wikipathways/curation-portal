@@ -330,3 +330,26 @@ def test_the_demo_fixtures_would_survive_the_repositorys_metadata_job():
         report = inspect_gpml((demo / name).read_text(encoding="utf-8"))
         assert _severity(report, "gpml.line_thickness") == Severity.PASS.value, name
         assert _severity(report, "gpml.board") == Severity.PASS.value, name
+
+
+def test_a_reference_nothing_cites_does_not_count_as_a_reference():
+    """A `<bp:PublicationXref>` with no `<BiopaxRef>` pointing at it reaches nothing downstream.
+
+    PathVisio leaves these behind when an annotation is removed, and a hand-written file can
+    simply forget the citation. Every generator in the target repository emits only the cited
+    ones, so `refs.tsv` and `bibliography.tsv` come back empty — while this rule announced "1
+    reference" and the checklist beside it, which has read the cited count since the pipeline
+    check was wired, said the file declares none. Both on the same review page, disagreeing.
+    Measured on PR #42, 2026-08-14.
+    """
+    orphaned = GOOD.replace("<BiopaxRef>ref1</BiopaxRef>", "")
+    finding = inspect_gpml(orphaned).by_id("content.references")
+    assert finding.severity == Severity.WARN.value
+    # And it says *why*, because "no references" on a file that visibly contains one reads as
+    # a portal bug rather than as the thing the submitter needs to fix.
+    assert "no <BiopaxRef> cites" in finding.detail
+
+
+def test_a_cited_reference_still_passes():
+    """The guard against fixing the above by making the rule never pass."""
+    assert _severity(inspect_gpml(GOOD), "content.references") == Severity.PASS.value
