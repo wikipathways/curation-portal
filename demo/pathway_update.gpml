@@ -2,6 +2,8 @@
 <Pathway xmlns="http://pathvisio.org/GPML/2013a" Name="Insulin signaling (demo)" Organism="Homo sapiens">
   <Graphics BoardWidth="620.0" BoardHeight="520.0" />
   <Comment Source="WikiPathways-description">Demo pathway: insulin (INS) activates its receptor INSR, which signals through IRS1.</Comment>
+  <BiopaxRef>ref1</BiopaxRef>
+  <BiopaxRef>ref2</BiopaxRef>
 
   <DataNode TextLabel="INS" Type="GeneProduct">
     <Graphics CenterX="240.0" CenterY="80.0" Width="120.0" Height="34.0" Color="1a5276" />
@@ -62,13 +64,13 @@
   <Biopax>
     <bp:PublicationXref xmlns:bp="http://www.biopax.org/release/biopax-level3.owl#"
                         xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" rdf:id="ref1">
-      <bp:ID>12829793</bp:ID>
+      <bp:ID>12169433</bp:ID>
       <bp:DB>PubMed</bp:DB>
       <bp:TITLE>IRS proteins and the common path to diabetes</bp:TITLE>
     </bp:PublicationXref>
     <bp:PublicationXref xmlns:bp="http://www.biopax.org/release/biopax-level3.owl#"
                         xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" rdf:id="ref2">
-      <bp:ID>17635937</bp:ID>
+      <bp:ID>17604717</bp:ID>
       <bp:DB>PubMed</bp:DB>
       <bp:TITLE>AKT/PKB signaling: navigating downstream</bp:TITLE>
     </bp:PublicationXref>

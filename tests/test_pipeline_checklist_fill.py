@@ -163,3 +163,97 @@ def test_an_auto_filled_review_can_still_reach_complete(session_factory):
         if item["required"] and item["state"] != ChecklistState.PASS.value:
             svc.set_checklist_item(1, item["key"], ChecklistState.PASS.value)
     assert is_complete(svc.get(1).checklist)
+
+
+def test_a_verdict_this_writer_made_is_re_derived_after_a_revision(session_factory):
+    """The defect that let a fixed submission keep failing. PR #42, 2026-08-14.
+
+    The gate used to be "only if still pending". Once this writer put a `fail` on an item the
+    item was no longer pending, so it could never correct itself — a submitter fixing exactly
+    what it complained about, and a fresh pipeline run agreeing, left the failure standing.
+
+    `references_valid` is the item it actually happened to, and the one whose mapping can reach
+    `pass`; `datanode_check` is documented never to.
+    """
+    drafts = _StubDrafts(
+        _StubArtifacts(datanodes=None, bibliography=[], info={"title": "T", "description": "D"})
+    )
+    svc = _service(session_factory, drafts)
+    _register(svc)
+
+    # First upload: the GPML declares a reference no <BiopaxRef> cites, so the pipeline
+    # resolves none of it.
+    svc.refresh_pipeline_checks(1, gpml_reference_count=1)
+    assert _state(svc.get(1), "references_valid") == ChecklistState.FAIL.value
+
+    # The revision cites it and the pipeline's bibliography comes back with it in.
+    drafts.artifacts = _StubArtifacts(
+        datanodes=None,
+        bibliography=[{"ID": "12829793"}],
+        info={"title": "T", "description": "D"},
+    )
+    svc.refresh_pipeline_checks(1, gpml_reference_count=1)
+
+    assert _state(svc.get(1), "references_valid") == ChecklistState.PASS.value
+
+
+def test_re_deriving_still_leaves_a_curators_override_alone(session_factory):
+    """The guard on the fix above: re-deriving must not become "overwrite everything".
+
+    A curator disagreeing with the pipeline is the case the whole override exists for, and it
+    is also the one a looser gate would silently undo on the next page load.
+    """
+    artifacts = _StubArtifacts(
+        datanodes=[{"Identifier": ""}], bibliography=[], info={"title": "T", "description": "D"}
+    )
+    drafts = _StubDrafts(artifacts)
+    svc = _service(session_factory, drafts)
+    _register(svc)
+
+    svc.refresh_pipeline_checks(1)
+    svc.set_checklist_item(1, "datanodes_mapped", ChecklistState.PASS.value)
+
+    svc.refresh_pipeline_checks(1)  # artifacts still say fail
+
+    assert _state(svc.get(1), "datanodes_mapped") == ChecklistState.PASS.value
+
+
+def test_overriding_an_automated_verdict_marks_the_note_it_contradicts(session_factory):
+    """PR #42 read "References resolve — pass" above "The pipeline resolved 0 of the 1 reference".
+
+    Two answers to one question. The note is kept, because what the pipeline saw is evidence and
+    a curator overruling it is the interesting part of the record; only its standing changes.
+    """
+    artifacts = _StubArtifacts(
+        datanodes=[{"Identifier": ""}], bibliography=[], info={"title": "T", "description": "D"}
+    )
+    svc = _service(session_factory, _StubDrafts(artifacts))
+    _register(svc)
+    svc.refresh_pipeline_checks(1)
+
+    svc.set_checklist_item(1, "datanodes_mapped", ChecklistState.PASS.value)
+
+    note = next(i["note"] for i in svc.get(1).checklist if i["key"] == "datanodes_mapped")
+    assert note.startswith("Overridden by a curator.")
+
+
+def test_agreeing_with_an_automated_verdict_leaves_its_note_clean(session_factory):
+    """Confirming what the pipeline already said is not an override, and must not read as one."""
+    svc = _service(
+        session_factory,
+        _StubDrafts(
+            _StubArtifacts(
+                datanodes=None,
+                bibliography=[{"ID": "12829793"}],
+                info={"title": "T", "description": "D"},
+            )
+        ),
+    )
+    _register(svc)
+    svc.refresh_pipeline_checks(1, gpml_reference_count=1)
+    assert _state(svc.get(1), "references_valid") == ChecklistState.PASS.value
+
+    svc.set_checklist_item(1, "references_valid", ChecklistState.PASS.value)
+
+    note = next(i["note"] for i in svc.get(1).checklist if i["key"] == "references_valid")
+    assert "Overridden" not in note

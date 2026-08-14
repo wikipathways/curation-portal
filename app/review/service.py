@@ -799,6 +799,8 @@ class CurationService:
                     changed = False
                     for item in checklist:
                         if item["key"] == key:
+                            was_auto = bool(item.get("auto"))
+                            contradicts = item.get("state") != state
                             changed = changed or item.get("state") != state
                             item["state"] = state
                             changed = changed or bool(item.get("auto")) != auto
@@ -815,6 +817,17 @@ class CurationService:
                             if note is not None:
                                 changed = changed or item.get("note") != note
                                 item["note"] = note
+                            elif not auto and was_auto and contradicts and item.get("note"):
+                                # ...but where the click *contradicts* that explanation, leaving
+                                # it unmarked states the opposite of what the item now says.
+                                # PR #42 ended up reading "References resolve — pass" above the
+                                # note "The pipeline resolved 0 of the 1 reference in the GPML",
+                                # which is not a nuance, it is two answers to one question.
+                                # Kept rather than cleared: what the pipeline saw is evidence,
+                                # and a curator overriding it is the interesting part of the
+                                # record. Only its standing changes.
+                                item["note"] = f"Overridden by a curator. {item['note']}"
+                                changed = True
                     if not changed:
                         # refresh_pipeline_checks re-derives the same answers on every page load.
                         # Writing them back would bump the row's version and re-post the mirror
@@ -881,7 +894,29 @@ class CurationService:
         review = None
         for key, (state, note) in results.items():
             current = next((i for i in checklist if i.get("key") == key), None)
-            if current is None or current.get("state") != ChecklistState.PENDING.value:
+            if current is None:
+                continue
+            # Re-derive our *own* answers; never touch a curator's. The gate used to be "only
+            # if still pending", which the docstring above has always described as "pending and
+            # auto-derived" — and the difference is a real defect, not pedantry. Once this
+            # writer put a ``fail`` on an item, that item was no longer pending, so it could
+            # never correct itself: a submitter fixing exactly what it complained about, and a
+            # fresh pipeline run agreeing, left the failure standing forever.
+            #
+            # Seen on PR #42, 2026-08-14. ``references_valid`` was written ``fail`` — "resolved
+            # 0 of the 1 reference" — off a first upload whose reference no ``<BiopaxRef>``
+            # cited. The revision cited it, ``refs.tsv`` came back with the reference in it, and
+            # the review page still said the pipeline had resolved none, directly beside its own
+            # panel reporting "1 references resolved". A curator with less evidence to hand would
+            # reasonably have believed the stale verdict and asked for changes already made.
+            #
+            # ``auto`` is exactly the right test and already means what is needed here: every
+            # writer maintains it, and ``_merge_checklist`` uses it for the same question.
+            answered_by_hand = (
+                not current.get("auto", False)
+                and current.get("state") != ChecklistState.PENDING.value
+            )
+            if answered_by_hand:
                 continue
             # The pipeline's tables are a second opinion, and a second opinion does not get to
             # drop a requirement. Since issue #27 an `na` here would no longer wedge approval —
