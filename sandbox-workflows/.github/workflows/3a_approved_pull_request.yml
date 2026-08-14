@@ -343,14 +343,25 @@ jobs:
           # pvjson carries both.
           while IFS= read -r file; do
             case "$file" in
-              *.png|*.gpml) continue ;;
+              *.gpml) continue ;;      # handled above, and it never held the slug
             esac
+            # Test for text rather than listing the binaries. Today draft_assets holds two
+            # PNGs and everything else is text, but the generators upstream decide what lands
+            # here and the next format added would be silently corrupted by an in-place sed.
+            # `grep -I` treats a binary file as not matching, so this is false for one.
+            if ! grep -Iq . "$file" 2>/dev/null; then
+              continue
+            fi
             sed -i "s/${OLD_PREFIX}/${WPID}/g" "$file"
-            # Only substitute a version that cannot be a sed expression. A hand-made GPML can
-            # put anything in that attribute, and a stray slash would turn this into a broken
-            # s/// rather than a bad rewrite.
-            if [ -n "$OLD_VERSION" ] && [ "$OLD_VERSION" != "$NEW_VERSION" ] &&
-               printf '%s' "$OLD_VERSION" | grep -qE '^[A-Za-z0-9._-]+$'; then
+            # The old Version is only substituted when it is recognisably a WikiPathways one.
+            # The obvious guard - "does it look like a safe sed expression" - is not enough:
+            # an old PathVisio file can carry Version="1", which passes any such test and
+            # would then rewrite every digit 1 in the pvjson. Requiring the WP<n>_ shape means
+            # the substitution only ever fires on a string that identifies the pathway. A file
+            # with some other version keeps it in the products, which disagrees with the GPML
+            # cosmetically and is far better than a corrupted one.
+            if [ "$OLD_VERSION" != "$NEW_VERSION" ] &&
+               printf '%s' "$OLD_VERSION" | grep -qE '^WP[0-9]+_[A-Za-z0-9._-]*$'; then
               sed -i "s/${OLD_VERSION}/${NEW_VERSION}/g" "$file"
             fi
           done < <(find draft_assets -type f -name "${OLD_PREFIX}*")
@@ -380,8 +391,8 @@ jobs:
           # The submitter, resolved above; the action only where there is no person to name.
           # `git pull --rebase` below replays the commit under these same settings, so the
           # identity survives a concurrent push rather than reverting to whoever rebased.
-          git config --local user.email "$COMMIT_EMAIL"
-          git config --local user.name "$COMMIT_NAME"
+          git config --local user.email "${COMMIT_EMAIL:-action@github.com}"
+          git config --local user.name "${COMMIT_NAME:-GitHub Action}"
           git add .
           # FIX: the commit message prefixed the step output with a literal WP, but the output
           # already carries that prefix, producing "WPWP1234". The `|| echo` matches 3B: a bare
@@ -410,8 +421,8 @@ jobs:
           set -euo pipefail
           # This is the commit that matters: it is the one that puts the pathway into the
           # content repository, and so the one a contributor's history is read from.
-          git config --local user.email "$COMMIT_EMAIL"
-          git config --local user.name "$COMMIT_NAME"
+          git config --local user.email "${COMMIT_EMAIL:-action@github.com}"
+          git config --local user.name "${COMMIT_NAME:-GitHub Action}"
           git add .
           git commit -m "Add files for approved pathway ${WPID}" || echo "No changes to commit"
           git pull --rebase
@@ -431,8 +442,8 @@ jobs:
           COMMIT_EMAIL: ${{ steps.submitter.outputs.commit_email }}
         run: |
           set -euo pipefail
-          git config --local user.email "$COMMIT_EMAIL"
-          git config --local user.name "$COMMIT_NAME"
+          git config --local user.email "${COMMIT_EMAIL:-action@github.com}"
+          git config --local user.name "${COMMIT_NAME:-GitHub Action}"
           git add .
           git commit -m "Add assets for approved pathway ${WPID}" || echo "No changes to commit"
           git pull --rebase
