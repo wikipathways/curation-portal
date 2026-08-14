@@ -448,6 +448,39 @@ Two things deliberately *not* added:
    same shape the app's own `mvp1/pr-preview.yml` documents avoiding. Values now travel
    through `env:`.
 
+## What changed in on_gpml_change
+
+> [!warning] **This one is staged as the fork's copy, and must not go upstream verbatim.**
+> Unlike the other files here, `on_gpml_change.yml` names no repositories at all, so there is
+> nothing to rewrite between fork and upstream — but three of its four sync jobs
+> (`sync-site-repo-added-modified`, `sync-assets-repo-deleted`, `sync-site-repo-deleted`) have
+> been **stubbed out on the fork** and do nothing but `echo "SANDBOX: Skipping…"`. Only
+> `sync-database-repo-deleted` still does real work. The change below is the part worth carrying
+> to `wikipathways/sandbox-wp-db`; the stubs are emphatically not. Staged in full anyway, so the
+> file is under `tests/test_sandbox_workflows.py` and a diff against the fork is meaningful.
+
+1. **`git rm` is not idempotent, and the non-idempotent case is the ordinary one.**
+   `git rm pathways/"$wpid"/*` exits **128** with `pathspec … did not match any files` when the
+   path is already gone, and the loop dies on the first such name. That is not a rare race: the
+   curation portal removes the `WP0001` submission placeholder from the default branch itself,
+   whenever somebody merges a pipeline pull request instead of letting it close — and the commit
+   that removes it is the same commit this job then reacts to, so the file it is told to delete
+   is already deleted. Every hand-merge therefore produces a red run *because the repair worked*.
+   Observed 2026-08-13, run `31712062937`, after PR #37 was merged by hand.
+
+   Fixed with `git rm -r --ignore-unmatch`. `-r` because the argument is a directory's worth of
+   files. Measured in a throwaway repository: the old form exits 128 with the path absent, the
+   new form exits 0 with the path absent and still stages both files with the path present.
+
+> [!caution] **Not changed, and worth a decision: `git push --force` onto the default branch.**
+> The same job ends `git pull --rebase && git push --force`, against `main` of the content
+> repository, from a `fetch-depth: 1` checkout. A forced push to the branch that holds every
+> published pathway is a large weapon for a job whose purpose is deleting a directory, and the
+> shallow clone is exactly the condition under which the preceding rebase is least trustworthy —
+> the same reasoning that moved 3A's checkouts to `fetch-depth: 0`. It has not misfired, and it
+> is left alone here rather than changed on a guess: unlike the `git rm` above there is no
+> observed failure to measure a fix against. Raise it upstream with the rest.
+
 ## The marker comment
 
 3A posts a comment carrying a machine-readable marker:

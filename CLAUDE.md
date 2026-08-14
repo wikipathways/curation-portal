@@ -282,12 +282,19 @@ request stays mitigated by the mirror comment alone — draft pull requests and 
 were both considered and declined, so a hand-merge remains possible and its collateral (below) is
 still reachable.
 
-Still open: **`on_gpml_change.yml`'s `sync-database-repo-deleted` job is not idempotent**. It runs
-`git rm 'pathways/WP<n>/*'` and dies with `pathspec … did not match any files` when the path is
-already gone — which is exactly what the app's own `_repair_stray_placeholder` arranges, so the
-repair for a hand-merge reliably produces a red run. `git rm --ignore-unmatch` is the whole fix,
-but that workflow is **not staged in this repo** and would have to be added to
-`sandbox-workflows/` first.
+**`on_gpml_change.yml` is now staged too**, for its `sync-database-repo-deleted` job: `git rm
+pathways/WP<n>/*` exits **128** when the path is already gone, and that is the ordinary case, not a
+race — the app's own `_repair_stray_placeholder` removes the placeholder, and the commit that
+removes it is the commit this job reacts to. So every hand-merge produced a red run *because the
+repair worked* (run `31712062937`). `git rm -r --ignore-unmatch`, measured both ways in a throwaway
+repository. Note this file is staged as **the fork's copy**: three of its four sync jobs are
+stubbed out for the sandbox and must not go upstream — see the warning in
+`sandbox-workflows/README.md`.
+
+Raised and deliberately **not** changed: the same job ends `git push --force` onto `main` of the
+content repository from a `fetch-depth: 1` checkout. There is no observed failure to measure a fix
+against, and guessing at a forced push to the branch holding every published pathway is worse than
+leaving it documented.
 
 529 tests. The 3A changes are staged only — nothing is live until the fork's copy is updated, and
 none of it is proven until one real submission goes through from an account that is not Marvin's.
