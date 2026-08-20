@@ -349,8 +349,8 @@ fork slug), the ghost-pages one is not.
 ### Still to do, in order
 
 1. Someone who can push to protected `main` merges **#77**. **#2** can go in any time.
-2. **Then** the cutover: drain the 8 open pull requests on `marvinm2/sandbox-wp-db`, install the
-   GitHub App on `wikipathways/sandbox-wp-db` (contents RW, pull_requests RW, issues RW), and
+2. **Then** the cutover: drain the 8 open pull requests on `marvinm2/sandbox-wp-db`, confirm the
+   GitHub App covers `wikipathways/sandbox-wp-db` (see below — it may already), and
    repoint the live service — `PORTAL_CONTENT_REPO=wikipathways/sandbox-wp-db`,
    `PORTAL_DRAFTS_REPO=wikipathways/sandbox-wp.gh.io`,
    `PORTAL_DRAFTS_SITE_BASE_URL=https://sandbox.wikipathways.org`. No image change, no migration.
@@ -361,6 +361,40 @@ fork slug), the ghost-pages one is not.
 4. Prove it the usual way: one submission end to end against the org repo, approved **at the
    dashboard button**. Expect the assets push to be the one red step until 3 is done, and confirm
    it is the *only* one rather than assuming.
+
+### The GitHub App does not need rebuilding, but it does need an owner
+
+Measured 2026-08-20. `wikipathways-submit-bot-dev`, **App ID 4403728**, owned by the **user
+account** `marvinm2`, permissions metadata read + contents/issues/pull_requests write, events
+`pull_request`.
+
+- It is installable on **any** account, and it is **already installed on the `wikipathways` org**
+  — installation **149425545**, scoped to **"Only select repositories"**. So the cutover does not
+  need a fresh installation, which the earlier to-do assumed.
+- **Adding a repository to it is a `request` for Marvin, not an action.** Every org repository in
+  that installation's picker carries an orange `request` badge, because he is a member rather than
+  an owner. An owner approves.
+- `sandbox-wp-db` **did not appear** in that picker while `sandbox-wp-assets` and `sandbox-wp.gh.io`
+  did, both as `request`. These pickers list what is *not yet* selected, so that probably means
+  `sandbox-wp-db` is already in the installation — **probably, not confirmed.** Reading the
+  selected set needs the org settings page, and the end-to-end test settles it for free either way.
+  (This one is stated as a guess on purpose: inferring from absence in a GitHub picker is exactly
+  what went wrong with the package's Add Repository dialog earlier the same day.)
+
+**Whether it should be *owned* by the org is a separate question from whether it works.** As it
+stands the App dies with Marvin's account, org owners cannot manage it, and every comment and
+merge it makes reads `app/wikipathways-submit-bot-dev` — a name with `-dev` in it, on the org's
+front door. GitHub supports transferring a GitHub App to an organisation, which keeps the App ID,
+the private key and the installations, so it costs no secret change and no redeploy; minting a
+fresh org-owned App instead means a new App ID, private key and webhook secret, so three Docker
+secrets and a redeploy. The **OAuth App** (`Ov23lig1IHGpNd2Y4l7u`) is functionally unaffected by
+any of this — its tokens are account-wide and do not care which repository is the target — but it
+is likewise a personal app, and it is what a submitter sees on the consent screen.
+
+**Admin on `wikipathways/curation-portal` fixes the GHCR publish and nothing else.** The other
+three blockers are all on `wikipathways/sandbox-wp-db`, a different repository: merging #77 past
+the protected branch, the assets deploy key, and the App's repository selection. One ask to an
+owner should cover all of them at once.
 
 **After the cutover Marvin stops being the owner of the content repo**, so his own submissions go
 down the ordinary fork path rather than the never-fork-your-own-repo shortcut. His fork already
