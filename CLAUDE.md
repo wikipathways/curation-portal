@@ -315,8 +315,8 @@ fork slug), the ghost-pages one is not.
 > consumed by coincidence of numbering — and rename detection then paired that deletion with a
 > fork addition, hiding a `WP0__PR24` file from `--diff-filter=A` as well. Both only showed up
 > under `git diff --no-renames --name-status upstream/main...HEAD`, which is the check to run:
-> **the branch should delete nothing.** It is 31 additions and 13 modifications now, down from a
-> 300-file diff.
+> **the branch should delete nothing.** That took the diff from 300 files to 45, and dropping
+> the test content took it to 11.
 
 ### Still to do, in order
 
@@ -331,7 +331,7 @@ fork slug), the ghost-pages one is not.
    create neither the deploy key nor the secret. Until an owner does, 3a's assets push upstream
    stays credential-less — defect 4 in `docs/sandbox-pipeline.md`, unchanged by the move.
 4. Prove it the usual way: one submission end to end against the org repo, approved **at the
-   dashboard button**. Expect the assets push to be the one red step until 4 is done, and confirm
+   dashboard button**. Expect the assets push to be the one red step until 3 is done, and confirm
    it is the *only* one rather than assuming.
 
 **After the cutover Marvin stops being the owner of the content repo**, so his own submissions go
