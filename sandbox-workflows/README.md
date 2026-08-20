@@ -10,9 +10,17 @@ repository.
 > `gh pr close` cannot close a pull request somebody merged by hand. That failure was diagnosed
 > on 2026-07-30 and repaired in the staged 3A the same day — and the fork never got the change,
 > so it happened again six weeks later. **A repair written here does nothing until it is applied
-> to `marvinm2/sandbox-wp-db`.** As of 2026-08-14 the fork is behind on three 3A changes: the
-> `Close PR` tolerance, the identifier rewrite (item 9 below) and the commit attribution
-> (item 10). `diff` the staged file against the fork's before assuming any of them is live.
+> to the repository that runs it.** `diff` the staged file against the running one before
+> assuming any repair is live.
+>
+> Measured 2026-08-20, normalising the owner in the `repository:` inputs: the fork's `3A` and
+> `on_gpml_change` are now **identical** to the staged copies, so the 08-14 note that it was
+> behind on three 3A changes is out of date. `pr_label_dispatcher` still differs, and the
+> **staged copy is the better one** — the fork's passes `pr_number` for the `resubmitted` case,
+> which workflow 1 rejects as an unexpected input, so that label has never worked there.
+> `1_on_pull_request.yml` runs the other way: the **fork's** copy is the one to take, because
+> the two `refs/pull/N/head` checkouts were removed as a change on the fork and never written
+> back here, so the staged file still carries them.
 
 > [!important] Two changes are needed before *any* fork pull request works, and both are applied
 > on `marvinm2/sandbox-wp-db` only

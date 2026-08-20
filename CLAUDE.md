@@ -218,7 +218,105 @@ GlusterFS-backed data at `/mnt/gluster/docker/<service>/data`, **no node pinning
 Docker secrets (never in the repo). The app needs a GitHub App identity installed on
 `wikipathways-database` with contents RW, pull_requests RW, and issues/comments RW.
 
-## Current state (2026-08-14)
+## Current state (2026-08-20)
+
+**The app and its testbed are moving into the `wikipathways` org.** The maintainers agreed the
+fork's work can be merged into the org's own sandbox repositories, so the decision was *merge
+upstream*, not *create new repos*. The app repo moved; the three content merges are open and
+waiting on people.
+
+**`wikipathways/curation-portal` is the app repo now** (transferred from `marvinm2/pathway-portal`,
+2026-08-20). 27 issues and 3 pull requests came with it, the old URL redirects, and `origin` here
+points at the new one. Two consequences worth knowing before touching it:
+
+- **Marvin is `push` on it, not `admin`.** The transfer did not carry admin over, so repository
+  settings and **Actions secrets** need an org owner. That matters immediately: see the GHCR note
+  below.
+- **`docker-publish.yml` pins the namespace to `marvinm2`** rather than deriving it from
+  `github.repository_owner`. Left alone it would have started publishing to
+  `ghcr.io/wikipathways/wikipathways-submit`, which **defaults to private**, and the swarm
+  service pulls `ghcr.io/marvinm2/…` — so both nodes would have failed to pull with nothing in
+  the repo explaining why. A workflow token's permissions stop at its own repository, so once the
+  org owns this repo its `GITHUB_TOKEN` **cannot** write a user-owned package; the login step
+  takes `GHCR_USER`/`GHCR_TOKEN` if present. **Creating those secrets needs the admin Marvin does
+  not have.** Renaming the package is the better end state, but as its own change with a redeploy
+  beside it.
+
+**Four pull requests are open against the org and none can be merged from this account.**
+
+| | PR | state | why |
+|---|---|---|---|
+| `sandbox-wp-db` | [#77](https://github.com/wikipathways/sandbox-wp-db/pull/77) — the four workflows | BLOCKED | `main` is protected and Marvin is a `push`-only collaborator |
+| `sandbox-wp-db` | [#76](https://github.com/wikipathways/sandbox-wp-db/pull/76) — WP1001 + WP5423–WP5430 | BLOCKED | same, **and** it needs #77 first (below) |
+| `sandbox-wp.gh.io` | [#2](https://github.com/wikipathways/sandbox-wp.gh.io/pull/2) — pages, `_config.yml` | CLEAN | mergeable (he has `maintain`), but should follow the assets PR |
+| `sandbox-wp-assets` | [#1](https://github.com/wikipathways/sandbox-wp-assets/pull/1) — 81 asset files | CLEAN | he has **`pull` only**; needs someone else |
+
+> [!warning] **"No branch protection" was read off a 404, and the 404 meant "you can't see it".**
+> `GET /repos/{o}/{r}/branches/main/protection` **requires admin**, so a non-admin gets 404
+> whether protection exists or not. `sandbox-wp-db`'s `main` **is** protected
+> (`GET .../branches/main` → `protected: true`); `sandbox-wp.gh.io` and `sandbox-wp-assets` are
+> not. Use the `branches/{b}` endpoint, not the `protection` one, when you are not an admin.
+
+**#76 cannot make its own check pass, and that is not a flaw in it.** Workflow 1 runs on
+`pull_request_target`, which always executes the copy on the **base** branch. #76 adds `.gpml`
+files, so it triggers workflow 1, and `get-gpml` dies at its first step with *"Refusing to check
+out fork pull request code from a 'pull_request_target' workflow"* — which is precisely the
+defect #76 repairs. Hence the split: **#77 touches no GPML, so workflow 1 never fires on it**;
+merge #77, then re-run #76. The workflow files are byte-identical in both, so #76 becomes
+content-only afterwards. Every one of the org repo's last five workflow-1 runs is a failure, all
+predating this, so the repository has not processed a pull request in some time.
+
+**Which copy of each workflow is the right one is not uniform, and getting it wrong is silent.**
+Measured 2026-08-20 with the owner normalised out of the `repository:` inputs:
+
+| file | take | why |
+|---|---|---|
+| `1_on_pull_request.yml` | **the fork's** | the two `refs/pull/N/head` checkouts were removed *as a change on the fork* and never written back, so `sandbox-workflows/`'s copy still carried them. Backported now. |
+| `3a`, `on_gpml_change` | either | **identical** to the staged copies. The 08-14 note that the fork was behind on three 3A changes is out of date. |
+| `pr_label_dispatcher` | **the staged** | the fork's passes `pr_number` for the `resubmitted` case; workflow 1's input is `manual-pr-number`, so that label has never worked on the fork. |
+| `3b` | the org's | the fork differs only by its self-pointing `repository:`. |
+
+The site merge carries **one** fork-specific file, `_config.yml`, and it is not a plain revert:
+the org's `baseurl: ""` / `url: sandbox.wikipathways.org` are restored, but the fork's added
+`assets_base_url` is **kept**, repointed at `wikipathways/sandbox-wp-assets` — the layouts
+hardcoded the production assets host, so a published pathway showed a broken diagram on every
+non-production deployment, the org's sandbox included. The `{{ site.baseurl }}` prefixes render to
+nothing with an empty baseurl and are correct either way. 275 draft files keyed to the fork's pull
+request numbers were dropped, 23 of them `_drafts/*.md` that the site **serves as pages** — the
+collision argument for dropping them was wrong (the org repo is already at PR #75, above every
+fork slug), the ghost-pages one is not.
+
+> [!warning] **A merge branch built by `--diff-filter=A` deletes things you did not look at.**
+> The fork had deleted upstream's own `draft_assets/WP0__PR10` — its PR #10, not the fork's,
+> consumed by coincidence of numbering — and rename detection then paired that deletion with a
+> fork addition, hiding a `WP0__PR24` file from `--diff-filter=A` as well. Both only showed up
+> under `git diff --no-renames --name-status upstream/main...HEAD`, which is the check to run:
+> **the branch should delete nothing.** It is 31 additions and 13 modifications now, down from a
+> 300-file diff.
+
+### Still to do, in order
+
+1. Someone with write on `sandbox-wp-assets` merges **#1**; then **#2**.
+2. Someone who can push to protected `main` merges **#77**, re-runs #76's check, merges **#76**.
+3. **Then** Part B: drain the 8 open pull requests on `marvinm2/sandbox-wp-db`, install the
+   GitHub App on `wikipathways/sandbox-wp-db` (contents RW, pull_requests RW, issues RW), and
+   repoint the live service — `PORTAL_CONTENT_REPO=wikipathways/sandbox-wp-db`,
+   `PORTAL_DRAFTS_REPO=wikipathways/sandbox-wp.gh.io`,
+   `PORTAL_DRAFTS_SITE_BASE_URL=https://sandbox.wikipathways.org`. No image change, no migration.
+4. `ACTIONS_SANDBOX_ASSETS_DEPLOY_KEY` **does not exist** on `wikipathways/sandbox-wp-db` (it has
+   `ACTIONS_SANDBOX_DEPLOY_KEY` and `PICOPAT`), and Marvin has `pull` on the assets repo, so he can
+   create neither the deploy key nor the secret. Until an owner does, 3a's assets push upstream
+   stays credential-less — defect 4 in `docs/sandbox-pipeline.md`, unchanged by the move.
+5. Prove it the usual way: one submission end to end against the org repo, approved **at the
+   dashboard button**. Expect the assets push to be the one red step until 4 is done, and confirm
+   it is the *only* one rather than assuming.
+
+**After the cutover Marvin stops being the owner of the content repo**, so his own submissions go
+down the ordinary fork path rather than the never-fork-your-own-repo shortcut. His fork already
+exists, so `ensure_fork` returns it. `test_the_owner_of_the_content_repo_never_forks_it` keeps its
+own fixture names rather than borrowing a live one that has to keep up.
+
+## Previously (2026-08-14)
 
 **A published pathway did not say which pathway it was.** `pathways/WP5429/WP5429.gpml` on the
 content repository declared `Version="WP0001_r20260813082819"` — the placeholder it was uploaded

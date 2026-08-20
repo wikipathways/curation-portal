@@ -77,11 +77,18 @@ jobs:
     env:
       PR_NUMBER: ${{ needs.get-pr.outputs.pr-number }}
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
-        with:
-          ref: refs/pull/${{ needs.get-pr.outputs.pr-number }}/head  
-          
+      # No checkout. This job runs on `pull_request_target`, so it holds the base
+      # repository's secrets — including the deploy keys for the drafts and assets repos —
+      # and checking out a fork's code into that context is the "pwn request" shape that
+      # actions/checkout@v6 now refuses outright. It refused every fork pull request this
+      # repository received (PRs #23/#24, 2026-08-04), which is every submission made through
+      # the portal by anyone without push access here.
+      #
+      # The checkout was never needed for code. It was used to read one GPML file and to push
+      # a branch nothing consumes. The GPML is fetched below as *data* over the API, and the
+      # generators that follow run from this repository's own code via the artifact — so the
+      # fork's contents are never executed. That is the fix, rather than opting out of the
+      # warning with allow-unsafe-pr-checkout.
       - name: Install XML processing tools
         # Used to parse XML values from GPML
         run: |
@@ -91,7 +98,9 @@ jobs:
       - name: Get GPML
         id: get-gpml
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} 
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Without a checkout there is no git remote for `gh` to infer the repository from.
+          GH_REPO: ${{ github.repository }}
         run: |
           GPML_FILEPATH=$(gh pr view $PR_NUMBER --json files --jq '.files.[].path' | grep '.gpml$')
           echo "Found GPML file at: $GPML_FILEPATH"
@@ -120,9 +129,25 @@ jobs:
           fi
 
           echo "status=$STATUS" >> $GITHUB_OUTPUT
-          
-          cp "$GPML_FILEPATH" ./"$GPML_FILE"
+
+          # Fetch the file itself from the pull request's head, wherever that lives. Reading it
+          # over the API keeps it data: nothing from the fork is placed on disk as code and
+          # nothing from the fork is executed. Works identically for a same-repository pull
+          # request, whose head repo is simply this one.
+          HEAD_REPO="$(gh pr view $PR_NUMBER --json headRepositoryOwner,headRepository \
+            --jq '.headRepositoryOwner.login + "/" + .headRepository.name')"
+          HEAD_SHA="$(gh pr view $PR_NUMBER --json headRefOid --jq '.headRefOid')"
+          echo "Fetching $GPML_FILEPATH from $HEAD_REPO@$HEAD_SHA"
+          gh api "repos/$HEAD_REPO/contents/$GPML_FILEPATH?ref=$HEAD_SHA" \
+            -H "Accept: application/vnd.github.raw" > ./"$GPML_FILE"
           GPML_FILEPATH="./${GPML_FILE}"
+
+          # An empty file here means the fetch failed quietly; everything downstream would then
+          # fail somewhere less obvious (the encoding bug of 2026-08-03 is the precedent).
+          if [ ! -s "$GPML_FILEPATH" ]; then
+            echo "::error::Fetched no content for $GPML_FILE from $HEAD_REPO@$HEAD_SHA"
+            exit 1
+          fi
 
           echo "gpml-file=$GPML_FILE" >> $GITHUB_OUTPUT
           echo "gpml-filepath=$GPML_FILEPATH" >> $GITHUB_OUTPUT #for subsequent jobs
@@ -198,9 +223,10 @@ jobs:
           echo "branch-name=$BRANCH_NAME"
           echo "branch-name=$BRANCH_NAME" >> $GITHUB_OUTPUT
 
-          if ! git ls-remote --heads origin $BRANCH_NAME; then
-            git push origin HEAD:refs/heads/$BRANCH_NAME
-          fi
+          # The `git push` that used to be here is gone with the checkout. It answered the TODO
+          # above on its own: `branch-name` is declared as a job output and **consumed by no job**
+          # in this workflow, and 3A checks out `main` rather than any submission branch. So it
+          # was copying a fork's commits into this repository for nothing.
 
   metadata:
     # This job generates files dervied from the GPML, including info.json, datanodes.tsv and refs.tsv.
@@ -981,7 +1007,7 @@ jobs:
           fi
         fi
 
-
+        
         # The three node lists used to be written to $GITHUB_ENV here "for later use". Nothing in
         # this workflow ever read them, and all three are multi-line, so the writes were malformed
         # anyway: without a heredoc delimiter every line after the first is parsed as its own
@@ -1154,14 +1180,15 @@ jobs:
     needs: [get-pr,get-gpml,metadata,authors,pubmed,frontmatter,testing] #json-svg add once that step is resolved
     runs-on: ubuntu-latest
     steps:
-    - name: Check out code
-      uses: actions/checkout@v6
-      with:
-        ref: refs/pull/${{ needs.get-pr.outputs.pr-number }}/head  
-        
+    # No checkout, for the reason given on `get-gpml`: `actions/checkout@v6` refuses to place
+    # a fork's code inside a `pull_request_target` workflow holding this repository's secrets.
+    # This job needed it least of all — it reads job outputs and runs `gh pr edit`, and never
+    # touched the working tree. It was simply the last one anybody looked at.
     - name: Compile and update PR description
       env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} 
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # No checkout means no git remote for `gh` to infer the repository from.
+        GH_REPO: ${{ github.repository }}
         PR_NUMBER: ${{ needs.get-pr.outputs.pr-number }}
         GPML_FILE: ${{ needs.get-gpml.outputs.gpml-file }}
         STATUS: ${{ needs.get-gpml.outputs.status }}

@@ -268,10 +268,16 @@ def test_fork_failure_with_no_bot_configured_uses_the_users_own_token():
 def test_the_owner_of_the_content_repo_never_forks_it():
     """GitHub refuses to fork a repository into the account that owns it.
 
-    Live-configuration case, not a hypothetical: the deployment targets `marvinm2/sandbox-wp-db`
-    and `marvinm2` is who tests it. Without this, every one of his submissions would take the
-    bot fallback — a worse pull request than the one he can open directly, and one that would
-    have made fork mode look broken while it was working.
+    This was the live configuration until 2026-08-20: the deployment targeted
+    `marvinm2/sandbox-wp-db` and `marvinm2` was who tested it. Without this, every one of his
+    submissions would have taken the bot fallback — a worse pull request than the one he can
+    open directly, and one that would have made fork mode look broken while it was working.
+
+    The target is `wikipathways/sandbox-wp-db` now, which he does not own, so his own
+    submissions go down the ordinary fork path like anybody else's. The case stays tested
+    because the rule is about ownership rather than about one deployment: the next target
+    owned by whoever is submitting hits it again, and the fixtures here say so directly
+    instead of borrowing a repository name that has to keep up.
     """
     user = FakeGitHubClient(default_branches={f"{REPO}#main": "upstream-head"}, login="marvinm2")
     target = resolve_write_target(
