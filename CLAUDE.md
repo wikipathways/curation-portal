@@ -371,9 +371,12 @@ account** `marvinm2`, permissions metadata read + contents/issues/pull_requests 
 - It is installable on **any** account, and it is **already installed on the `wikipathways` org**
   — installation **149425545**, scoped to **"Only select repositories"**. So the cutover does not
   need a fresh installation, which the earlier to-do assumed.
-- **Adding a repository to it is a `request` for Marvin, not an action.** Every org repository in
-  that installation's picker carries an orange `request` badge, because he is a member rather than
-  an owner. An owner approves.
+- **The `request` badge tracks repository admin, and that is measured.** Every org repository in
+  the installation's picker carries an orange `request` badge — except
+  `wikipathways/wikipathways-iri-resolver`, which he **admins**, and which appears with no badge
+  at all. He is admin on 17 org repositories and on none of the four in play here. So adding a
+  repository to this installation needs **admin on that repository**, not org ownership: an owner
+  is one way, admin on the repo is the other, and the second is a much smaller ask.
 - `sandbox-wp-db` **did not appear** in that picker while `sandbox-wp-assets` and `sandbox-wp.gh.io`
   did, both as `request`. These pickers list what is *not yet* selected, so that probably means
   `sandbox-wp-db` is already in the installation — **probably, not confirmed.** Reading the
@@ -391,10 +394,22 @@ secrets and a redeploy. The **OAuth App** (`Ov23lig1IHGpNd2Y4l7u`) is functional
 any of this — its tokens are account-wide and do not care which repository is the target — but it
 is likewise a personal app, and it is what a submitter sees on the consent screen.
 
-**Admin on `wikipathways/curation-portal` fixes the GHCR publish and nothing else.** The other
-three blockers are all on `wikipathways/sandbox-wp-db`, a different repository: merging #77 past
-the protected branch, the assets deploy key, and the App's repository selection. One ask to an
-owner should cover all of them at once.
+### What each grant would actually unblock
+
+No single repository makes this self-serve, because the blockers are spread across three
+repositories:
+
+| grant | unblocks |
+|---|---|
+| admin on `wikipathways/sandbox-wp-db` | merging **#77** past the protected branch; adding `sandbox-wp-db` to the **App installation** (proven above); Actions secrets there |
+| admin on `wikipathways/curation-portal` | the **GHCR publish** — either the `GHCR_*` secrets or migrating the package |
+| write on `wikipathways/sandbox-wp-assets` | the **assets deploy key**, whose public half has to live on that repo |
+| — already held (`maintain` on `sandbox-wp.gh.io`) | merging **#2** |
+
+**The first two together unblock the entire cutover.** The third is not a cutover blocker at all:
+without it the service repoints, publishes and settles, and 3a's assets push is the single red
+step — the state the fork has been in all along. Org ownership would cover everything, but it is a
+much larger ask than admin on two repositories.
 
 **After the cutover Marvin stops being the owner of the content repo**, so his own submissions go
 down the ordinary fork path rather than the never-fork-your-own-repo shortcut. His fork already
