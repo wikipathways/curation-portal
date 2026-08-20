@@ -242,6 +242,24 @@ points at the new one. Two consequences worth knowing before touching it:
   not have.** Renaming the package is the better end state, but as its own change with a redeploy
   beside it.
 
+> [!warning] **CI cannot publish an image right now.** Measured, not predicted: run
+> `32391162408` (commit `1478690`, the first push after the transfer) failed with
+> `denied: permission_denied: The requested installation does not exist` pushing to
+> `ghcr.io/marvinm2/wikipathways-submit`. The prediction was that a workflow token's reach stops
+> at its own repository, and that is what it looks like from the inside.
+>
+> **The fix needs no repository admin, because the package is not the repository's.** The package
+> is owned by the *user* `marvinm2`, so it is administered from his own account, not from the org
+> repo he is only `push` on:
+> `github.com/users/marvinm2/packages/container/wikipathways-submit/settings` → **Manage Actions
+> access** → add `wikipathways/curation-portal` with **Write**. Two clicks, no secret, no owner.
+> `GHCR_USER`/`GHCR_TOKEN` is the fallback if that is refused across owners, and it is the one
+> that needs an org owner.
+>
+> **Nothing is down.** The swarm runs a pinned digest (`sha256:f924cdf1…`), which still exists;
+> `upload.wikipathways.org` and `sandbox.wikipathways.org` both answer 200. Only *future*
+> publishes are blocked, so this costs nothing until the next deploy.
+
 **Four pull requests are open against the org and none can be merged from this account.**
 
 | | PR | state | why |
