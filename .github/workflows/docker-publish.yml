@@ -13,21 +13,41 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The image lives in the marvinm2 namespace while this repository is owned by the org
+      # (see the tags below), and a workflow token's permissions stop at its own repository,
+      # so GITHUB_TOKEN cannot write it. Until GHCR_USER/GHCR_TOKEN exist, pushing is not
+      # possible -- and a job that fails on every commit for a known reason is just noise that
+      # trains people to ignore the notification. Build anyway, so the Dockerfile stays
+      # verified on every push, and skip only the push.
+      - name: Check for registry credentials
+        id: creds
+        # `secrets` is not one of the contexts allowed in an `if:`, so the answer is turned
+        # into a step output here. Read through env rather than interpolated into the script:
+        # a `${{ }}` expression is substituted into the run block's text before bash exists.
+        env:
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -n "${GHCR_TOKEN:-}" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::No GHCR_TOKEN is set, so the image is built but not pushed. Add GHCR_USER and GHCR_TOKEN (a token that can write ghcr.io/marvinm2/wikipathways-submit) to resume publishing."
+          fi
+
       - name: Log in to GitHub Container Registry
+        if: steps.creds.outputs.present == 'true'
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
-          # GHCR_USER/GHCR_TOKEN when the package namespace is not this repository's owner
-          # (see the tags below); GITHUB_TOKEN otherwise. A workflow token's permissions stop
-          # at its own repository, so it cannot write a package owned by somebody else.
-          username: ${{ secrets.GHCR_USER || github.actor }}
-          password: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+          username: ${{ secrets.GHCR_USER }}
+          password: ${{ secrets.GHCR_TOKEN }}
 
-      - name: Build and push image
+      - name: Build the image, and push it when there is somewhere to push
         uses: docker/build-push-action@v6
         with:
           context: .
-          push: true
+          push: ${{ steps.creds.outputs.present == 'true' }}
           # Pinned to marvinm2 rather than github.repository_owner. This repository moved to
           # the wikipathways org on 2026-08-20, and deriving the namespace from the owner would
           # have silently started publishing to ghcr.io/wikipathways/..., which defaults to
