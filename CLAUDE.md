@@ -260,14 +260,20 @@ points at the new one. Two consequences worth knowing before touching it:
 > `upload.wikipathways.org` and `sandbox.wikipathways.org` both answer 200. Only *future*
 > publishes are blocked, so this costs nothing until the next deploy.
 
-**Four pull requests are open against the org and none can be merged from this account.**
+**Two pull requests are open against the org, both content-free.**
 
 | | PR | state | why |
 |---|---|---|---|
 | `sandbox-wp-db` | [#77](https://github.com/wikipathways/sandbox-wp-db/pull/77) — the four workflows | BLOCKED | `main` is protected and Marvin is a `push`-only collaborator |
-| `sandbox-wp-db` | [#76](https://github.com/wikipathways/sandbox-wp-db/pull/76) — WP1001 + WP5423–WP5430 | BLOCKED | same, **and** it needs #77 first (below) |
-| `sandbox-wp.gh.io` | [#2](https://github.com/wikipathways/sandbox-wp.gh.io/pull/2) — pages, `_config.yml` | CLEAN | mergeable (he has `maintain`), but should follow the assets PR |
-| `sandbox-wp-assets` | [#1](https://github.com/wikipathways/sandbox-wp-assets/pull/1) — 81 asset files | CLEAN | he has **`pull` only**; needs someone else |
+| `sandbox-wp.gh.io` | [#2](https://github.com/wikipathways/sandbox-wp.gh.io/pull/2) — `assets_base_url` + `baseurl` prefixes, 11 files | CLEAN | mergeable; he has `maintain` |
+
+**The test pathways are not being transferred** (decided 2026-08-20). #76 and `sandbox-wp-assets`
+#1 are **closed**. Nothing original was in them: five of the nine are the same insulin demo
+fixture, and WP5427 / WP5428 / WP5429 are copies of pathways that already exist, re-published
+under sandbox identifiers. The reason that only appeared on inspection is better: **#76 also
+replaced WP1001**, which upstream is *Peptide GPCRs* with 80 data nodes and which the fork had
+overwritten with the 3-node insulin demo while using it as an update-test target. The pathways
+stay on `marvinm2/sandbox-wp-db`.
 
 > [!warning] **"No branch protection" was read off a 404, and the 404 meant "you can't see it".**
 > `GET /repos/{o}/{r}/branches/main/protection` **requires admin**, so a non-admin gets 404
@@ -314,18 +320,17 @@ fork slug), the ghost-pages one is not.
 
 ### Still to do, in order
 
-1. Someone with write on `sandbox-wp-assets` merges **#1**; then **#2**.
-2. Someone who can push to protected `main` merges **#77**, re-runs #76's check, merges **#76**.
-3. **Then** Part B: drain the 8 open pull requests on `marvinm2/sandbox-wp-db`, install the
+1. Someone who can push to protected `main` merges **#77**. **#2** can go in any time.
+2. **Then** the cutover: drain the 8 open pull requests on `marvinm2/sandbox-wp-db`, install the
    GitHub App on `wikipathways/sandbox-wp-db` (contents RW, pull_requests RW, issues RW), and
    repoint the live service — `PORTAL_CONTENT_REPO=wikipathways/sandbox-wp-db`,
    `PORTAL_DRAFTS_REPO=wikipathways/sandbox-wp.gh.io`,
    `PORTAL_DRAFTS_SITE_BASE_URL=https://sandbox.wikipathways.org`. No image change, no migration.
-4. `ACTIONS_SANDBOX_ASSETS_DEPLOY_KEY` **does not exist** on `wikipathways/sandbox-wp-db` (it has
+3. `ACTIONS_SANDBOX_ASSETS_DEPLOY_KEY` **does not exist** on `wikipathways/sandbox-wp-db` (it has
    `ACTIONS_SANDBOX_DEPLOY_KEY` and `PICOPAT`), and Marvin has `pull` on the assets repo, so he can
    create neither the deploy key nor the secret. Until an owner does, 3a's assets push upstream
    stays credential-less — defect 4 in `docs/sandbox-pipeline.md`, unchanged by the move.
-5. Prove it the usual way: one submission end to end against the org repo, approved **at the
+4. Prove it the usual way: one submission end to end against the org repo, approved **at the
    dashboard button**. Expect the assets push to be the one red step until 4 is done, and confirm
    it is the *only* one rather than assuming.
 
