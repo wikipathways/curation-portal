@@ -248,13 +248,24 @@ points at the new one. Two consequences worth knowing before touching it:
 > `ghcr.io/marvinm2/wikipathways-submit`. The prediction was that a workflow token's reach stops
 > at its own repository, and that is what it looks like from the inside.
 >
-> **The fix needs no repository admin, because the package is not the repository's.** The package
-> is owned by the *user* `marvinm2`, so it is administered from his own account, not from the org
-> repo he is only `push` on:
-> `github.com/users/marvinm2/packages/container/wikipathways-submit/settings` → **Manage Actions
-> access** → add `wikipathways/curation-portal` with **Write**. Two clicks, no secret, no owner.
-> `GHCR_USER`/`GHCR_TOKEN` is the fallback if that is refused across owners, and it is the one
-> that needs an org owner.
+> **The fix I first recommended does not exist.** The idea was that the package is owned by the
+> *user*, so its own Actions-access list could grant the org repo write without needing repository
+> admin. Checked in the browser on 2026-08-20: the package's **Add Repository** picker lists only
+> repositories owned by `marvinm2` — his own and his forks, `marvinm2/wikipathways-database`
+> included — and **no org repository at all**. A user-owned package cannot be granted to an
+> org-owned repository. (Its filter box is also broken: it returns "No repositories found" for
+> `AOPWikiRDF`, which is visibly in the unfiltered list. Scroll the list; do not trust the filter,
+> and do not conclude anything from an empty result.)
+>
+> **Every remaining path needs an org owner**, so the smallest ask is the last one:
+>
+> 1. `GHCR_USER`/`GHCR_TOKEN` secrets on `wikipathways/curation-portal` — the workflow already
+>    reads them. Creating a secret needs repository **admin**.
+> 2. Publish to `ghcr.io/wikipathways/curation-portal` instead and make the package public, then
+>    redeploy the swarm onto the new digest. Publishing works with `GITHUB_TOKEN` because the
+>    owner then matches; setting a new org package's visibility does not.
+> 3. **Ask an org owner for admin on `wikipathways/curation-portal`.** That unblocks either of the
+>    above without another round trip, and it is the access Marvin had before the transfer.
 >
 > **Nothing is down.** The swarm runs a pinned digest (`sha256:f924cdf1…`), which still exists;
 > `upload.wikipathways.org` and `sandbox.wikipathways.org` both answer 200. Only *future*
@@ -266,6 +277,23 @@ points at the new one. Two consequences worth knowing before touching it:
 |---|---|---|---|
 | `sandbox-wp-db` | [#77](https://github.com/wikipathways/sandbox-wp-db/pull/77) — the four workflows | BLOCKED | `main` is protected and Marvin is a `push`-only collaborator |
 | `sandbox-wp.gh.io` | [#2](https://github.com/wikipathways/sandbox-wp.gh.io/pull/2) — `assets_base_url` + `baseurl` prefixes, 11 files | CLEAN | mergeable; he has `maintain` |
+
+> [!warning] **PR #2 was a 999-page regression until it was measured on the live site.**
+> The `assets_base_url` indirection is right; the value was not. Pointed at
+> `wikipathways/sandbox-wp-assets`, it would have repointed **1000** pathway pages at a repository
+> holding exactly **one** pathway (WP554) — `.../sandbox-wp-assets/main/pathways/WP1/WP1.svg`
+> answers **404** where production answers **200**.
+>
+> Measuring it found the opposite bug. The download links are root-relative
+> (`/wikipathways-assets/…`), so they resolve against whatever host serves the site:
+> `sandbox.wikipathways.org/wikipathways-assets/pathways/WP1/WP1.png` → **404**, on every one of
+> those 1000 pages. Only the diagram works, because that single URL was written absolute. The
+> default is the production host now, so diagrams are untouched and the downloads start
+> resolving — a repair rather than a regression, and a fork still overrides the one value.
+>
+> The general form: **a config default that is right for the deployment you are working on can be
+> wrong for the repository you are sending it to.** The fork needed its own assets host; this
+> repository needs the one it already had.
 
 **The test pathways are not being transferred** (decided 2026-08-20). #76 and `sandbox-wp-assets`
 #1 are **closed**. Nothing original was in them: five of the nine are the same insulin demo
