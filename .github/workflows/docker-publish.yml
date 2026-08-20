@@ -17,15 +17,23 @@ jobs:
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          # GHCR_USER/GHCR_TOKEN when the package namespace is not this repository's owner
+          # (see the tags below); GITHUB_TOKEN otherwise. A workflow token's permissions stop
+          # at its own repository, so it cannot write a package owned by somebody else.
+          username: ${{ secrets.GHCR_USER || github.actor }}
+          password: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
 
       - name: Build and push image
         uses: docker/build-push-action@v6
         with:
           context: .
           push: true
-          # github.repository_owner is lowercase here (marvinm2); GHCR rejects uppercase tags.
+          # Pinned to marvinm2 rather than github.repository_owner. This repository moved to
+          # the wikipathways org on 2026-08-20, and deriving the namespace from the owner would
+          # have silently started publishing to ghcr.io/wikipathways/..., which defaults to
+          # private -- so the swarm service pulling this image would have failed on both nodes.
+          # Renaming the package is worth doing, but as its own change with a redeploy beside
+          # it, not as a side effect of moving the repository.
           tags: |
-            ghcr.io/${{ github.repository_owner }}/wikipathways-submit:latest
-            ghcr.io/${{ github.repository_owner }}/wikipathways-submit:${{ github.sha }}
+            ghcr.io/marvinm2/wikipathways-submit:latest
+            ghcr.io/marvinm2/wikipathways-submit:${{ github.sha }}
