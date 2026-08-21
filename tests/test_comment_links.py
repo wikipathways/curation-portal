@@ -50,7 +50,7 @@ def _resolves(path: str, served: list[str]) -> bool:
     return False
 
 
-def _review() -> Review:
+def _review(*, origin: str = "portal") -> Review:
     return Review(
         pr_number=42,
         wpid=None,
@@ -58,9 +58,12 @@ def _review() -> Review:
         kind="new",
         status=ReviewStatus.OPEN,
         checklist=[],
+        origin=origin,
+        head_branch="WP3894_traybug23_20260820-053517",
     )
 
 
+@pytest.mark.parametrize("origin", ["portal", "adopted"])
 @pytest.mark.parametrize(
     "render",
     [
@@ -70,8 +73,11 @@ def _review() -> Review:
         ),
     ],
 )
-def test_links_in_comments_resolve_to_a_real_route(render):
-    body = render(_review())
+def test_links_in_comments_resolve_to_a_real_route(render, origin):
+    # Both origins: an adopted pull request gets different wording, and wording is where the dead
+    # link lived last time. Asserting on the text would only pin today's sentence; this pins the
+    # links against the app's own route table, whatever the sentence says.
+    body = render(_review(origin=origin))
     paths = _URL.findall(body)
     assert paths, "the comment carried no link to this app at all — has base_url stopped working?"
 

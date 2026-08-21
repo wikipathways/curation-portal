@@ -411,6 +411,70 @@ both swarm nodes use to *pull*. Adding `write:packages` to it would preserve its
 minting a token, and it is the wrong trade: the credential sitting on the deploy targets would
 gain the ability to push to the namespace those targets pull from.
 
+### Pull requests the portal did not open are adopted (2026-08-21)
+
+**The PathVisio plugin submits straight to the GitHub API, and its pull requests had no path into
+the dashboard.** `PathVisio/gsoc2026-pathvisio-wp-github` (GSoC 2026, `traybug23`, mentored by
+Martina Summer-Kutmon and Hasan Balci) has `wikipathways/sandbox-wp-db` hardcoded as its upstream
+— the repository the portal was repointed at the same day — and its own README names the gap:
+the dashboard reads the app's database, and a pull request opened over the API never writes a row.
+
+`PORTAL_ADOPT_FOREIGN_PRS=true` (off by default) makes the app build a review around **any** pull
+request touching `pathways/`, with full parity: render, quality report, checklist, lock, mirror
+comment, Approve at the dashboard button. `docs/adoption.md` is the account; the shape worth
+carrying here:
+
+- **No GitHub-side change was needed.** The App already subscribes to `pull_request`, and
+  `opened` / `synchronize` deliveries have always arrived and always been dropped
+  (`app/main.py:1626` acted on `closed`/`labeled`/`unlabeled` only). Measured before building:
+  the last 100 deliveries held 10 `opened` and 2 `synchronize`, every one answered 200.
+- **A new-pathway plugin submission has no WPID anywhere in the tree.** It sanitises the pathway
+  *title* into the path — PR #74 really contains `pathways/testing_new_pathway/…`. The repository
+  files anything outside its edit grammar as new under `WP0`, so this is supported, not
+  malformed, and `derive` must not refuse it.
+- **Adoption reads the head from the content repo, never the fork.** `?ref=<head_sha>` on the base
+  repository serves a fork's pull request — verified against PR #73, identical blob sha from
+  either side. An earlier draft justified this by claiming the App installation cannot see the
+  fork; **measured false** (an installation token reads any public repository), so the reason is
+  simply that one repository answers for everything and it survives the fork being deleted.
+- **The lock would have refused on the pull request being adopted.** `acquire()`'s scanner finds
+  exactly that pull request, and its "one of ours" test is a branch-name match on the base repo,
+  which a fork branch never satisfies. `PathwayLocks.adopt()` skips the scan and **never steals** —
+  six open pull requests touch WP1001 on the live target, so releasing by WPID alone was already
+  wrong and is now per-pull-request.
+- **Branch shape cannot tell plugin from portal**: both use `WP<id>_<login>_<stamp>`. So the race
+  (an `opened` webhook arriving before `register()` commits) is not solved by recognition — a
+  portal `register()` *upgrades* an adopted row instead, and either order lands the same.
+- **A PR-body marker cannot survive**: `1_on_pull_request.yml` runs `gh pr edit --body` twice and
+  replaces the body wholesale. Comment markers are untouched, which is why every existing
+  handshake uses one.
+- Adopted rows get **no re-upload** (the branch is on the author's fork; `/revise` 409s and the
+  card says to push) and **no rate limiting** (the limiter bounds what the app opens on someone's
+  behalf, and this is not that).
+- **Off outside pipeline mode, enforced in `Settings`.** `direct` mode approving *merges*, and
+  merging a title-derived directory — or the shared `WP0001` placeholder — onto `main` is the
+  2026-07-30 incident by another door.
+
+Two regression tests were checked by reverting the fix and watching them fail, which is the only
+thing that makes them worth having: the fake's new ref-awareness (without it an adopted update
+renders the base against itself, reports an empty diff and passes), and the rate-limiter scoping.
+
+> [!warning] **`FakeGitHubClient.get_file_content` ignored the `ref` it was given** — it keyed on
+> `(repo, path)` and fell through to the base-branch contents. Every adoption test would have
+> compared a file with itself. Seventh time the fake has been the weaker of the two, and the first
+> time it would have been weaker in exactly the dimension the feature is about.
+
+**Deliberately no backfill.** Only pull requests opened from now on are adopted; a sweep of the
+sandbox's 25 open ones would import 18 of one student's test submissions and comment on each.
+`POST /api/reviews/{n}/adopt` (curator only) recovers a single missed delivery.
+
+**The review table was swept the same day.** 45 of its 48 rows were fork-era, and since
+`pr_number` is the primary key with no base repository recorded, they resolved against the org
+repo: rows 17 and 80 both claimed WP5425, and row 3 (`publish_failed`, non-terminal) had already
+absorbed khanspers's head repo. Dumped to
+`/mnt/gluster/docker/wikipathways-submit/review-pre-sweep-2026-08-21.sql` and deleted; 78, 79 and
+80 remain. `review.base_repo` now records the answer so the next repoint cannot repeat it.
+
 ### Still to do, in order
 
 1. Someone who can push to protected `main` merges **#77**. **#2** can go in any time.

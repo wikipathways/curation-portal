@@ -10,6 +10,7 @@ import base64
 import logging
 import time
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 import httpx
@@ -71,6 +72,22 @@ class PullRequestDetail:
     #: ``PullRequest``. Carried here so a reconcile can *repair* a review row whose head repo was
     #: never recorded — which is every cross-repository submission opened before 2026-08-04.
     head_repo: str | None = None
+
+
+@dataclass(frozen=True)
+class PrFile:
+    """One file in a pull request's diff.
+
+    ``status`` is GitHub's own word — "added", "modified", "removed", "renamed" — and it is worth
+    carrying because it answers "is this pathway already on the base branch?" without a second
+    read. It is a cross-check rather than an authority: the target repository classifies a
+    submission by *filename*, so adoption does too, and a disagreement is recorded rather than
+    acted on (``app.review.adopt``).
+    """
+
+    filename: str
+    status: str
+    previous_filename: str | None = None
 
 
 @dataclass(frozen=True)
@@ -246,6 +263,19 @@ class GitHubClient(ABC):
         requests and reads each one's file list, newest first, stopping at ``limit``. That makes
         it too expensive for a page render; it belongs on the update write path, which happens a
         few times a day.
+        """
+
+    @abstractmethod
+    def list_pr_files(self, repo: str, pr_number: int, *, limit: int = 300) -> list[PrFile]:
+        """Every file a pull request changes, as ``PrFile`` records.
+
+        Addressed to the **base** repository, which serves a fork's pull request as readily as its
+        own — so this needs no access to a submitter's fork and keeps working after the fork is
+        deleted.
+
+        Raises ``GitHubError`` when the listing cannot be read. That matters to
+        ``find_open_pr_touching``, whose whole job is to be sure: one unreadable pull request must
+        not be read as "nothing touches this pathway".
         """
 
     @abstractmethod
@@ -446,6 +476,15 @@ class FakeGitHubClient(GitHubClient):
         # [(repo, branch, path, message)] — every delete_file, so a test can assert the repair
         # touched exactly the placeholder and nothing else.
         self.deleted: list[tuple[str, str, str, str]] = []
+        #: {(repo, commit_sha, path): content} — contents addressed by a *commit*, which is how a
+        #: pull request the app did not open is read. Without it ``get_file_content`` falls
+        #: through to ``existing_contents``, which is keyed on (repo, path) alone: an adopted
+        #: update would then render the base branch as both "before" and "after", the diff would
+        #: report nothing changed, and every scoped checklist item would resolve N/A — with the
+        #: whole suite green, because the fake had answered a question it cannot actually answer.
+        self.commit_contents: dict[tuple[str, str, str], str] = {}
+        #: {(repo, pr_number): [PrFile, ...]} — a pull request's diff, for ``list_pr_files``.
+        self.pr_files: dict[tuple[str, int], list[PrFile]] = {}
         self.fail_on = fail_on or set()
         self._next_pr = 1
         self._next_run = 1000
@@ -531,8 +570,61 @@ class FakeGitHubClient(GitHubClient):
         entry = self.files.get((repo, ref, path))
         if entry is not None:
             return entry[0].encode("utf-8")
+        # A commit ref is answered before the branch-agnostic fallback, or an adopted pull
+        # request's head reads back as the base branch and every before/after comparison in a
+        # test is comparing a file with itself.
+        at_commit = self.commit_contents.get((repo, ref, path))
+        if at_commit is not None:
+            return at_commit.encode("utf-8")
         content = self.existing_contents.get((repo, path))
         return content.encode("utf-8") if content is not None else None
+
+    def list_pr_files(self, repo: str, pr_number: int, *, limit: int = 300) -> list[PrFile]:
+        self._maybe_fail("list_pr_files")
+        return list(self.pr_files.get((repo, pr_number), []))[:limit]
+
+    def seed_foreign_pr(
+        self,
+        repo: str,
+        number: int,
+        *,
+        author: str,
+        title: str,
+        head_branch: str,
+        head_sha: str,
+        files: Sequence[tuple[str, str, str]],
+        body: str = "",
+        head_repo: str | None = None,
+    ) -> None:
+        """Seed a pull request this client did not open — the whole point of adoption.
+
+        ``files`` is [(path, status, content)]. Contents are stored against the **base** repo at
+        ``head_sha``, because that is where the app reads them: GitHub serves a fork's pull
+        request from the base repository at the head commit, verified against the live API on
+        2026-08-21 (identical blob sha from either side).
+        """
+        self.pulls.append(
+            PullRequest(
+                number=number,
+                html_url=f"https://github.com/{repo}/pull/{number}",
+                head_branch=head_branch,
+                head_repo=head_repo,
+            )
+        )
+        self.pull_meta[number] = {
+            "title": title,
+            "body": body,
+            "base": "main",
+            "head": f"{head_repo.split('/')[0]}:{head_branch}" if head_repo else head_branch,
+            "author": author,
+            "head_sha": head_sha,
+        }
+        self.pr_files[(repo, number)] = [
+            PrFile(filename=path, status=status) for path, status, _ in files
+        ]
+        for path, _, content in files:
+            self.commit_contents[(repo, head_sha, path)] = content
+        self._next_pr = max(self._next_pr, number + 1)
 
     def put_file(
         self,
@@ -689,13 +781,17 @@ class FakeGitHubClient(GitHubClient):
             number=pr.number,
             html_url=pr.html_url,
             head_branch=pr.head_branch,
-            head_sha=self.branches.get((repo, pr.head_branch), f"sha-{pr.head_branch}"),
+            # A seeded head sha wins over the branch table: a pull request opened from a fork has
+            # its branch in the *fork*, so looking it up here answers for the wrong repository.
+            head_sha=meta.get("head_sha")
+            or self.branches.get((repo, pr.head_branch), f"sha-{pr.head_branch}"),
             state="closed" if merged or pr_number in self.closed else "open",
             merged=merged,
             title=meta.get("title", ""),
             body=meta.get("body", ""),
             labels=sorted(self.labels.get((repo, pr_number), set())),
             author=meta.get("author", ""),
+            head_repo=pr.head_repo,
         )
 
     def list_issue_comments(self, repo: str, issue_number: int) -> list[str]:
@@ -1158,17 +1254,43 @@ class HttpGitHubClient(GitHubClient):
             head = str((pull.get("head") or {}).get("ref", ""))
             if head.startswith(ours) and _head_repo_of(pull, repo) is None:
                 continue
-            files = self._client.get(
-                f"/repos/{repo}/pulls/{pull['number']}/files", params={"per_page": 100}
-            )
             # One unreadable pull request must not be read as "nothing touches this pathway",
-            # but neither should it abort the scan — keep looking through the rest.
-            if files.is_error:
+            # but neither should it abort the scan — keep looking through the rest. The except
+            # therefore stays *inside* the loop: hoisting it out would truncate the scan at the
+            # first bad pull request and hand out a lock over a real concurrent edit.
+            try:
+                files = self.list_pr_files(repo, int(pull["number"]))
+            except GitHubError:
                 continue
-            for entry in files.json():
-                if str(entry.get("filename", "")).startswith(path_prefix):
+            for entry in files:
+                if entry.filename.startswith(path_prefix):
                     return int(pull["number"])
         return None
+
+    def list_pr_files(self, repo: str, pr_number: int, *, limit: int = 300) -> list[PrFile]:
+        out: list[PrFile] = []
+        page = 1
+        while len(out) < limit:
+            resp = self._client.get(
+                f"/repos/{repo}/pulls/{pr_number}/files",
+                params={"per_page": 100, "page": page},
+            )
+            self._raise_for(resp, "list_pr_files")
+            batch = resp.json()
+            if not batch:
+                break
+            for entry in batch:
+                out.append(
+                    PrFile(
+                        filename=str(entry.get("filename", "")),
+                        status=str(entry.get("status", "")),
+                        previous_filename=entry.get("previous_filename"),
+                    )
+                )
+            if len(batch) < 100:
+                break
+            page += 1
+        return out[:limit]
 
     def open_pull_request(
         self, repo: str, head: str, base: str, title: str, body: str

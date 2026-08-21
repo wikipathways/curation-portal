@@ -210,6 +210,13 @@ CURATION_CHECKLIST: list[ChecklistItemDef] = [
         auto_check=_auto_ontology,
         relevant_for_update=_rel_ontology,
     ),
+    # Derived from the pull request's file list rather than from the GPML, so it has no
+    # ``auto_check`` (which takes metadata) and is filled in by ``build_checklist`` directly.
+    # Always passes for a portal submission — the app commits one file — and exists for the
+    # pull requests the app did not open, where changing several pathways at once is real.
+    ChecklistItemDef(
+        "one_pathway_per_pr", "One pathway per pull request", required=True
+    ),
 ]
 
 _VALID_KEYS = {item.key for item in CURATION_CHECKLIST}
@@ -236,8 +243,38 @@ def requirement_for(key: str, state: str) -> bool:
     return _REQUIRED_BY_KEY.get(key, False)
 
 
+def _one_pathway_result(paths: list[str] | None) -> tuple[str, str]:
+    """State and note for ``one_pathway_per_pr``.
+
+    Unknown paths resolve to ``na`` — "nothing to check" — and **not** to pending. Pending on a
+    required item blocks approval, which would wedge every review written before this item
+    existed, and every row whose file list could not be read. ``na`` is the honest word and
+    ``requirement_for`` already makes it non-blocking, restoring requiredness the moment it
+    leaves ``na`` (issue #27).
+    """
+    if not paths:
+        return (
+            ChecklistState.NA.value,
+            "Not checked: the pull request's file list was not read.",
+        )
+    if len(paths) == 1:
+        return ChecklistState.PASS.value, ""
+    named = ", ".join(f"`{p}`" for p in paths)
+    return (
+        ChecklistState.FAIL.value,
+        f"This pull request changes {len(paths)} pathways ({named}). The repository publishes "
+        f"one pathway per pull request — its own workflow greps a single GPML — so approving "
+        f"this would publish at most one of them. Ask the author to split it.",
+    )
+
+
 def build_checklist(
-    *, metadata=None, before=None, kind: str = "new", pipeline_mode: bool = False
+    *,
+    metadata=None,
+    before=None,
+    kind: str = "new",
+    pipeline_mode: bool = False,
+    pathway_paths: list[str] | None = None,
 ) -> list[dict]:
     """Build a review's checklist, applying auto-checks and (for updates) relevance scoping.
 
@@ -246,6 +283,9 @@ def build_checklist(
 
     ``pipeline_mode`` says the target repository owns naming and publication, which changes what
     one item can truthfully claim (see ``_PIPELINE_NAMING``).
+
+    ``pathway_paths`` is every pathway GPML the pull request touches, known only where the file
+    list was read — adoption. It is the one input here that does not come from the GPML.
     """
     items: list[dict] = []
     for d in CURATION_CHECKLIST:
@@ -270,7 +310,10 @@ def build_checklist(
             continue
 
         state, note, auto = ChecklistState.PENDING.value, "", False
-        if d.key == "naming_ok" and pipeline_mode:
+        if d.key == "one_pathway_per_pr":
+            state, note = _one_pathway_result(pathway_paths)
+            auto = True
+        elif d.key == "naming_ok" and pipeline_mode:
             state, note, auto = _PIPELINE_NAMING.state, _PIPELINE_NAMING.note, True
         elif metadata is not None and d.auto_check is not None:
             res = d.auto_check(metadata)

@@ -168,7 +168,10 @@
    decided. #}
 {% set is_submitter = login and login == r.submitter %}
 {% set can_act = is_curator and r.decidable %}
-{% set can_revise = r.kind == 'new' and r.actionable and (is_curator or is_submitter) %}
+{# An adopted pull request cannot be revised here: the branch is on the author's own fork and
+   the app never wrote it. They push; the portal re-reads. The endpoint refuses too — this keeps
+   the card from offering a button that comes back 409. #}
+{% set can_revise = r.kind == 'new' and r.actionable and not r.adopted and (is_curator or is_submitter) %}
 {% set title_id = 'review-title-' ~ r.pr_number %}
 <article class="review-card{% if expanded %} review-card--expanded{% endif %}" data-pr="{{ r.pr_number }}" data-status="{{ r.status }}" aria-labelledby="{{ title_id }}">
   <div class="review-card__head">
@@ -182,6 +185,10 @@
     <div class="review-card__meta">
       <span class="badge badge--{{ r.kind }}">{{ 'New pathway' if r.kind == 'new' else 'Update' }}</span>
       <span class="badge badge--{{ r.status }}">{{ r.status_label }}</span>
+      {# Says the submitter never used the portal, which changes what a curator can expect of
+         them: no re-upload, and a change request is answered by a push. Deliberately not
+         "PathVisio" — nothing in a pull request reliably says which tool opened it. #}
+      {% if r.adopted %}<span class="badge badge--adopted" title="This pull request was opened on GitHub, not through the portal">Opened on GitHub</span>{% endif %}
       <a class="review-card__pr" href="{{ r.pr_url }}" target="_blank" rel="noopener">PR #{{ r.pr_number }}</a>
     </div>
     {# Carries its label rather than being a bare glyph. This is the route to the page where the
@@ -220,7 +227,12 @@
        own pull request; an update goes back through the update form, which reuses the same
        branch and pull request. Getting this wrong strands the submitter: the revise endpoint
        refuses updates, so pointing them at this page would be pointing at nothing. #}
-    {% if r.status == 'changes_requested' and can_revise and expanded %}
+    {% if r.status == 'changes_requested' and r.adopted %}
+      <span class="review-state__note">
+        This pull request was opened on GitHub, so the fix goes there: push the corrected GPML to
+        its branch and the portal re-reads it, putting the review back in the queue.
+      </span>
+    {% elif r.status == 'changes_requested' and can_revise and expanded %}
       <span class="review-state__note">Upload the fixed GPML below. It lands on this same pull request and puts the review back in the queue.</span>
     {% elif r.status == 'changes_requested' and can_revise %}
       <a href="/dashboard/{{ r.pr_number }}">Open the full review to upload a fix &rarr;</a>

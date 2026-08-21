@@ -357,6 +357,14 @@ main { flex: 1; }
 .badge--merged { background: var(--moss-tint); color: var(--moss-strong); }
 .badge--closed { background: var(--brick-tint); color: var(--brick); }
 .badge--curator { background: var(--wp-green-tint); color: var(--wp-green-strong); }
+/* Provenance rather than state: this pull request was opened on GitHub, not through the portal.
+   Outlined rather than filled so it reads as a note beside the state badges, not as another
+   state. */
+.badge--adopted {
+  background: transparent;
+  color: var(--slate);
+  border-color: var(--rule);
+}
 /* The rest of ReviewStatus. Without these the states a pipeline-mode review actually spends its
    life in fell through to the bare .badge rule: transparent, borderless, unreadable. */
 .badge--changes_requested { background: var(--amber-tint); color: var(--amber); }

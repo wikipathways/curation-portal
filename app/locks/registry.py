@@ -164,6 +164,65 @@ class PathwayLockRegistry:
                 ) from exc
             return lock
 
+    def adopt(self, wpid: int, held_by: str, *, pr_number: int) -> PathwayLock | None:
+        """Record that a pull request opened outside the app has this pathway checked out.
+
+        **No scan**, and that is the whole reason this is not ``acquire``. The scan exists to find
+        a writer this table cannot see; here that writer *is* the thing being recorded, so
+        scanning would find the pull request being adopted and refuse the check-out it is
+        completing — the same reasoning the same-holder refresh branch above already gives.
+
+        Returns None, and takes nothing, when somebody else holds it. **Never steals.** A curator
+        who checked WP1001 out in the portal and is mid-edit must not have it taken away by a
+        pull request that appeared on GitHub; two live edits of one GPML is exactly the
+        divergence the lock exists to prevent, and the honest response is to record that it has
+        happened and show it, not to pick a winner. Several open pull requests on one pathway is
+        not hypothetical on the live target — six of them touch WP1001 today.
+        """
+        self.expire_stale()
+
+        now = utcnow()
+        with self._session_factory() as s:
+            existing = s.get(PathwayLock, wpid)
+            if existing is not None:
+                if existing.held_by != held_by:
+                    return None
+                existing.expires_at = now + self._ttl
+                existing.pr_number = pr_number
+                s.commit()
+                return existing
+            lock = PathwayLock(
+                wpid=wpid,
+                held_by=held_by,
+                acquired_at=now,
+                expires_at=now + self._ttl,
+                pr_number=pr_number,
+            )
+            s.add(lock)
+            try:
+                s.commit()
+            except IntegrityError:
+                # Lost the race to a concurrent acquirer. Same answer as "somebody else holds
+                # it", because that is now true.
+                return None
+            return lock
+
+    def release_for_pr(self, wpid: int, pr_number: int) -> bool:
+        """Release the lock **only** if this pull request is the one holding it.
+
+        ``release(force=True)`` frees a lock whoever holds it, which was safe while one pathway
+        could have only one review. Adoption ends that: closing one of the six open pull requests
+        on WP1001 would otherwise free a lock another of them holds, and the next portal update
+        would sail past the app's own table.
+        """
+        with self._session_factory() as s:
+            lock = s.get(PathwayLock, wpid)
+            if lock is None or lock.pr_number != pr_number:
+                return False
+            s.delete(lock)
+            s.commit()
+            return True
+
     def release(self, wpid: int, held_by: str, *, force: bool = False) -> bool:
         """Release a lock. ``force=True`` is the curator override (any holder).
 

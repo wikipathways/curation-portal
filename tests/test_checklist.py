@@ -74,7 +74,14 @@ def test_unmapped_datanode_auto_fails_with_note():
 
 def test_default_checklist_is_all_pending():
     cl = default_checklist()
-    assert all(i["state"] == "pending" and i["auto"] is False for i in cl)
+    # `one_pathway_per_pr` is derived from the pull request's file list, not from the GPML, so a
+    # template built with no inputs has nothing to check. It resolves to `na` rather than
+    # `pending` on purpose: pending on a required item blocks approval, and a template must not
+    # wedge the gate.
+    checked = [i for i in cl if i["key"] != "one_pathway_per_pr"]
+    assert all(i["state"] == "pending" and i["auto"] is False for i in checked)
+    one = _item(cl, "one_pathway_per_pr")
+    assert (one["state"], one["required"]) == ("na", False)
 
 
 def test_update_scopes_unchanged_checks_to_na():

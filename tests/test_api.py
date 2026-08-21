@@ -1232,3 +1232,104 @@ def test_rejection_names_the_submitter_too(tmp_path):
     assert "@bob" in rejected[0], "the submitter is not named, so GitHub may notify nobody"
     assert "@curator" in rejected[0]
     assert "Duplicate of WP123." in rejected[0]
+
+
+# -- adopting a pull request the app did not open (webhook) ---------------------------------
+
+
+def _pr_opened_body(secret, pr_number, *, action="opened"):
+    return _signed(
+        secret,
+        {"action": action, "number": pr_number, "pull_request": {"number": pr_number}},
+    )
+
+
+def _seed_plugin_pr(settings, pr_number=73):
+    """A cross-repository pull request shaped like the PathVisio plugin's, on the content repo."""
+    repo = settings.content_repo
+    fake = FakeGitHubClient(
+        default_branches={f"{repo}#{settings.default_branch}": "basesha"},
+        existing_contents={f"{repo}#pathways/WP3894/WP3894.gpml": GOOD_GPML.decode()},
+    )
+    fake.seed_foreign_pr(
+        repo,
+        pr_number,
+        author="traybug23",
+        title="Contribution: Update WP3894",
+        head_branch="WP3894_traybug23_20260820-053517",
+        head_repo="traybug23/sandbox-wp-db",
+        head_sha="e47f6026bcfa42d4f4991296a728eb0babb23f41",
+        files=[("pathways/WP3894/WP3894.gpml", "modified", GOOD_GPML.decode())],
+    )
+    return fake
+
+
+def test_webhook_opened_adopts_a_foreign_pull_request(tmp_path):
+    settings = _settings(
+        database_url=f"sqlite:///{tmp_path / 'reg.db'}",
+        curators=["curator"],
+        github_webhook_secret="whsec",
+        preview_cache_dir=str(tmp_path / "preview-cache"),
+        publish_mode="pipeline",
+        adopt_foreign_prs=True,
+    )
+    fake = _seed_plugin_pr(settings)
+    app = build_app(settings)
+    app.dependency_overrides[get_github_client] = lambda: fake
+    app.dependency_overrides[get_bot_optional] = lambda: fake
+    app.dependency_overrides[get_bot_client] = lambda: fake
+    app.dependency_overrides[get_current_user] = lambda: "curator"
+
+    with TestClient(app) as c:
+        body, sig = _pr_opened_body("whsec", 73)
+        r = c.post(
+            "/webhooks/github",
+            content=body,
+            headers={"X-GitHub-Event": "pull_request", "X-Hub-Signature-256": sig},
+        )
+        assert r.status_code == 200 and r.json()["queued"] is True
+        # TestClient runs background tasks before returning, so the row is there now.
+        review = c.get("/api/reviews/73").json()
+        assert review["origin"] == "adopted"
+        assert review["submitter"] == "traybug23"
+        assert review["wpid"] == 3894
+        assert review["adopted"] is True
+        # And it is in the queue the dashboard renders, not merely in the table.
+        assert [r["pr_number"] for r in c.get("/api/reviews").json()] == [73]
+
+
+def test_webhook_does_not_adopt_when_the_feature_is_off(tmp_path):
+    """The default. Upgrading must not start putting other people's pull requests in the queue."""
+    settings = _settings(
+        database_url=f"sqlite:///{tmp_path / 'reg.db'}",
+        github_webhook_secret="whsec",
+        preview_cache_dir=str(tmp_path / "preview-cache"),
+        publish_mode="pipeline",
+    )
+    fake = _seed_plugin_pr(settings)
+    app = build_app(settings)
+    app.dependency_overrides[get_bot_optional] = lambda: fake
+    with TestClient(app) as c:
+        body, sig = _pr_opened_body("whsec", 73)
+        r = c.post(
+            "/webhooks/github",
+            content=body,
+            headers={"X-GitHub-Event": "pull_request", "X-Hub-Signature-256": sig},
+        )
+        assert r.json()["adoption"] == "disabled"
+        assert c.get("/api/reviews/73").status_code == 404
+
+
+def test_adoption_is_refused_outside_pipeline_mode(tmp_path):
+    """Approving in direct mode *merges*, and a foreign pull request must never be merged.
+
+    The plugin's new-pathway submissions arrive at a title-derived path, and its placeholder ones
+    at the shared WP0001 slot every portal submission writes to — merging either onto `main` is
+    the 2026-07-30 incident by a different door.
+    """
+    settings = _settings(
+        database_url=f"sqlite:///{tmp_path / 'reg.db'}",
+        publish_mode="direct",
+        adopt_foreign_prs=True,
+    )
+    assert settings.adopt_foreign_prs is False

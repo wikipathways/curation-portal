@@ -23,7 +23,15 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 import httpx
-from fastapi import Depends, FastAPI, Form, HTTPException, Request, UploadFile
+from fastapi import (
+    BackgroundTasks,
+    Depends,
+    FastAPI,
+    Form,
+    HTTPException,
+    Request,
+    UploadFile,
+)
 from fastapi.responses import (
     FileResponse,
     HTMLResponse,
@@ -54,6 +62,7 @@ from app.pipeline import DraftsReader
 from app.preview import PreviewService
 from app.preview.metadata import parse_curation_metadata
 from app.ratelimit import RateLimited, SubmissionRateLimiter
+from app.review.adoption import AdoptionService
 from app.review.service import (
     TESTING_RULE_IDS,
     ChecklistIncomplete,
@@ -555,6 +564,22 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             ),
             drafts=st.drafts,
             previews=st.preview,
+        )
+
+    def _adoption(request: Request, github: GitHubClient) -> AdoptionService:
+        """The service that builds a review around a pull request the app did not open.
+
+        Always the **bot** client: adoption reads a pull request and comments on it, and there is
+        no submitter session to borrow — the whole point is that nobody signed in.
+        """
+        st = request.app.state
+        return AdoptionService(
+            github=github,
+            previews=st.preview,
+            curation=_curation(request, github),
+            locks=st.locks,
+            content_repo=settings.content_repo,
+            default_branch=settings.default_branch,
         )
 
     def _check_rate_limit(request: Request, submitter: str) -> None:
@@ -1329,6 +1354,17 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             review = curation.get(pr_number)
         except ReviewNotFound as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        if review.adopted:
+            # The branch is theirs, on their own fork, and the app never wrote it. Committing
+            # here would need push access to a stranger's repository — and under a curator's
+            # token it might even succeed, which is worse. They push; the portal re-reads.
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "this pull request was opened outside the portal, so it cannot be revised "
+                    "here. Push the corrected GPML to its branch and the portal re-reads it."
+                ),
+            )
         if review.kind != "new":
             raise HTTPException(
                 status_code=409,
@@ -1482,6 +1518,32 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         return _detail(r)
 
+    @app.post("/api/reviews/{pr_number}/adopt")
+    def adopt_pull_request(
+        request: Request,
+        pr_number: int,
+        actor: str = Depends(get_current_user),
+        bot: GitHubClient | None = Depends(get_bot_optional),
+    ) -> dict[str, object]:
+        """Build a review around one pull request the app did not open.
+
+        The recovery hatch for a webhook delivery that was dropped, and the way to try adoption
+        on a chosen pull request before turning it on for everything. One pull request, named
+        explicitly — deliberately not a sweep of everything open, which on the live target would
+        pull in two dozen rows, most of them somebody's test submissions, and comment on each.
+        """
+        if not request.app.state.curators.is_curator(actor):
+            raise HTTPException(status_code=403, detail=f"{actor} is not a curator")
+        if bot is None:
+            raise HTTPException(status_code=503, detail="no bot identity is configured")
+        outcome = _adoption(request, bot).adopt(pr_number)
+        return {
+            "pr_number": outcome.pr_number,
+            "adopted": outcome.adopted,
+            "refreshed": outcome.refreshed,
+            "reason": outcome.reason,
+        }
+
     @app.post("/api/reviews/{pr_number}/assign", response_model=ReviewDetail)
     def assign_review(
         request: Request,
@@ -1599,9 +1661,28 @@ def build_app(settings: Settings | None = None) -> FastAPI:
 
     # -- GitHub webhook (issue #8): release the lock when a PR is closed/merged outside the app --
 
+    def _adopt_in_background(request: Request, bot: GitHubClient, pr_number: int) -> None:
+        """Adopt one pull request off a webhook, swallowing everything.
+
+        A background task that raises is invisible to GitHub — the delivery already answered 200
+        — so the only way this can be diagnosed later is the log line, which is why every exit
+        from ``AdoptionService.adopt`` writes one.
+
+        Takes the client the request already resolved rather than reaching for a new one, so it
+        acts as the same identity the handler authenticated with.
+        """
+        try:
+            _adoption(request, bot).adopt(pr_number)
+        except Exception:  # noqa: BLE001 — nothing upstream can act on this
+            logging.getLogger("wpsubmit.adopt").warning(
+                "adopting PR #%s failed", pr_number, exc_info=True
+            )
+
     @app.post("/webhooks/github")
     async def github_webhook(
-        request: Request, bot: GitHubClient | None = Depends(get_bot_optional)
+        request: Request,
+        background: BackgroundTasks,
+        bot: GitHubClient | None = Depends(get_bot_optional),
     ) -> dict[str, object]:
         secret = settings.github_webhook_secret
         if not secret:
@@ -1623,7 +1704,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         except json.JSONDecodeError as exc:
             raise HTTPException(status_code=400, detail="invalid JSON") from exc
         action = payload.get("action")
-        if action not in ("closed", "labeled", "unlabeled"):
+        if action not in ("closed", "labeled", "unlabeled", "opened", "reopened", "synchronize"):
             return {"ok": True, "ignored": f"action:{action}"}
 
         pr = payload.get("pull_request") or {}
@@ -1631,6 +1712,24 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         if pr_number is None:
             raise HTTPException(status_code=422, detail="no PR number in payload")
         curation = _curation(request, bot)
+
+        if action in ("opened", "reopened", "synchronize"):
+            # A pull request the app did not open — the PathVisio plugin, or anyone with push
+            # access. These events have always been delivered and always been dropped; adopting
+            # them is what puts such a submission in front of a curator at all.
+            #
+            # Deliberately in the background: adoption is two GitHub reads, two file reads and an
+            # SVG render, and this handler is async, so doing it inline would hold the event loop
+            # and risk GitHub abandoning the delivery and retrying into a half-written adoption.
+            if not settings.adopt_foreign_prs:
+                return {"ok": True, "ignored": f"action:{action}", "adoption": "disabled"}
+            if bot is None:
+                logging.getLogger("wpsubmit.adopt").warning(
+                    "cannot adopt PR #%s: no bot identity is configured", pr_number
+                )
+                return {"ok": True, "queued": False, "reason": "no bot identity"}
+            background.add_task(_adopt_in_background, request, bot, int(pr_number))
+            return {"ok": True, "pr_number": int(pr_number), "queued": True}
 
         if action in ("labeled", "unlabeled"):
             # A curator may well reach for the label on GitHub rather than the dashboard — those
@@ -1693,6 +1792,16 @@ class ReviewSummary(BaseModel):
     kind: str
     status: str
     assigned_curator: str | None
+    #: "portal" or "adopted". Defaulted so a row written before adoption existed — or one whose
+    #: column is somehow empty — still deserialises. `_review_view` runs on every card, and
+    #: `ReviewDetail` is strict, so one row that will not validate takes down the whole
+    #: dashboard rather than its own card.
+    origin: str = "portal"
+    adopted: bool = False
+    #: The GPML this review is about. The only name a new pathway has before it has a WPID —
+    #: the PathVisio plugin files those under a title-derived directory.
+    pathway_path: str | None = None
+    pathway_paths: list[str] = []
 
 
 class ReviewDetail(ReviewSummary):
@@ -1711,6 +1820,10 @@ def _summary(r) -> ReviewSummary:
         kind=r.kind,
         status=r.status.value,
         assigned_curator=r.assigned_curator,
+        origin=getattr(r, "origin", "portal") or "portal",
+        adopted=bool(getattr(r, "adopted", False)),
+        pathway_path=getattr(r, "pathway_path", None),
+        pathway_paths=list(getattr(r, "pathway_paths", None) or []),
     )
 
 

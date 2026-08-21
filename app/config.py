@@ -59,6 +59,18 @@ class Settings(BaseSettings):
     # The default stays "direct" so existing targets keep working unchanged.
     publish_mode: str = "direct"
 
+    # Build a review around pull requests the app did *not* open — the PathVisio plugin, or
+    # anyone with push access to the content repo. Off by default: it puts other people's pull
+    # requests into the curation queue and comments on them, which is not a change any existing
+    # deployment should get by upgrading.
+    #
+    # Ignored outside pipeline mode, and that is a safety property rather than a simplification.
+    # In `direct` mode approving *merges*, and a foreign pull request is not a file the app laid
+    # out: merging one would land `pathways/testing_new_pathway/` — or the `WP0001` placeholder
+    # every submission writes to — on `main` permanently. In pipeline mode approving applies a
+    # label and the repository decides, which is the only shape where this is safe.
+    adopt_foreign_prs: bool = False
+
     # Where the target repo's PR workflow writes its derived artifacts (pipeline mode). These are
     # read anonymously over raw.githubusercontent.com — the App is not installed on that repo and
     # the files are public. Empty drafts_repo disables the read.
@@ -271,6 +283,21 @@ class Settings(BaseSettings):
                     self.submit_identity,
                     self.content_repo,
                 )
+        elif self.adopt_foreign_prs:
+            # Corrected rather than warned about. Outside pipeline mode approving *merges*, and a
+            # pull request the app did not lay out is not one it can safely merge — the plugin's
+            # new-pathway submissions arrive at a title-derived path, and its placeholder
+            # submissions at the shared `WP0001` slot every portal submission also writes to.
+            # There is no configuration under which merging those onto `main` is what anyone
+            # meant.
+            logging.getLogger("wpsubmit.config").warning(
+                "publish_mode=%s: disabling adopt_foreign_prs. Approving in this mode merges the "
+                "pull request, and a pull request the app did not lay out must not be merged "
+                "onto %s.",
+                self.publish_mode,
+                self.content_repo,
+            )
+            self.adopt_foreign_prs = False
         return self
 
     @property

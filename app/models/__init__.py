@@ -115,6 +115,32 @@ class Review(Base):
     #: is the identity of an edit, and storing ``owner:branch`` in ``head_branch`` instead would
     #: poison the revise path silently (issue #22).
     head_repo: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    #: How this review got here. ``portal`` means somebody uploaded through the app, which is
+    #: every row written before adoption existed — hence the server default, which makes the
+    #: migration a schema change with no data migration behind it. ``adopted`` means the app
+    #: found a pull request somebody else opened (the PathVisio plugin, or anyone with push
+    #: access) and built a review around it. The difference is not cosmetic: an adopted
+    #: submitter has no portal session, cannot re-upload, and answers a change request by
+    #: pushing a commit to their own branch.
+    origin: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="portal", server_default="portal"
+    )
+    #: ``owner/name`` of the repository the pull request is *against*. ``pr_number`` is the
+    #: primary key, and a pull request number is unique only within one repository — so once
+    #: ``content_repo`` can be repointed, the key stops being an address. That is not
+    #: hypothetical: the 2026-08-21 cutover silently rebound seven open rows onto strangers'
+    #: pull requests of the same number, three of them still actionable. NULL means "whatever
+    #: ``content_repo`` was", which is the implicit meaning every older row already carries.
+    base_repo: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    #: The head commit the preview, the quality report and the checklist describe. Lets a
+    #: ``synchronize`` event tell a real new commit from a base-branch move — without it, a busy
+    #: base branch re-renders and re-posts the mirror comment on every push to ``main``.
+    head_sha: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    #: Every pathway GPML the pull request touches. One entry is the ordinary case and the app's
+    #: own submissions never have more; a pull request changing several is adopted, flagged, and
+    #: blocked at the approval gate, because the repository publishes one pathway per pull
+    #: request. Also how a new pathway with no WPID gets named on screen.
+    pathway_paths: Mapped[list | None] = mapped_column(JSON, nullable=True)
     #: What the submitter said they changed, and why — the checkbox selections and free text from
     #: the submit form, joined. Stored on the review rather than read back from the render cache
     #: (where ``PreviewService`` also keeps a copy) for two reasons: the cache is deleted at every
@@ -163,6 +189,20 @@ class Review(Base):
     def wpid_str(self) -> str:
         """How to name this pathway on screen, including before it has an id."""
         return f"WP{self.wpid}" if self.wpid is not None else "WP0001 (unassigned)"
+
+    @property
+    def adopted(self) -> bool:
+        """Was this pull request opened outside the portal?"""
+        return self.origin == "adopted"
+
+    @property
+    def pathway_path(self) -> str | None:
+        """The GPML this review is about, when the app knows the path it arrived at.
+
+        A property rather than a column: storing both a singular path and the list would give
+        two places for the same fact to drift, and nothing queries into it.
+        """
+        return self.pathway_paths[0] if self.pathway_paths else None
 
     def __repr__(self) -> str:  # pragma: no cover - debug aid
         return f"<Review PR#{self.pr_number} {self.wpid_str} {self.status.value}>"

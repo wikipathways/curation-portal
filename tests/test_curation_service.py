@@ -69,9 +69,13 @@ def test_register_is_idempotent_and_queue_lists_open(session_factory):
     queue = svc.list_queue()
     assert [r.pr_number for r in queue] == [1, 2]
     assert queue[0].status == ReviewStatus.OPEN
-    # Fresh review starts with the full checklist, all pending.
+    # Fresh review starts with the full checklist. Everything derived from the GPML is pending;
+    # `one_pathway_per_pr` reads the pull request's file list, which this registration did not
+    # supply, so it is `na` — nothing to check — and therefore non-blocking.
     assert len(queue[0].checklist) == len(CURATION_CHECKLIST)
-    assert all(item["state"] == "pending" for item in queue[0].checklist)
+    states = {i["key"]: i["state"] for i in queue[0].checklist}
+    assert states.pop("one_pathway_per_pr") == "na"
+    assert set(states.values()) == {"pending"}
 
 
 def test_get_missing_raises(session_factory):
@@ -361,9 +365,11 @@ def test_approve_requires_complete_checklist(session_factory):
     gh = FakeGitHubClient()
     svc = _service(session_factory, github=gh)
     svc.register(pr_number=1, wpid=5637, submitter="bob", kind="new")
-    # Leave one required item pending.
-    for key in REQUIRED_KEYS[:-1]:
-        svc.set_checklist_item(1, key, "pass")
+    # Leave one required item pending — named rather than positional, because `REQUIRED_KEYS[:-1]`
+    # only blocked while the last declared required item happened to be one that blocks.
+    for key in REQUIRED_KEYS:
+        if key != "render_ok":
+            svc.set_checklist_item(1, key, "pass")
     with pytest.raises(ChecklistIncomplete):
         svc.approve_and_merge(1, "curator")
     assert gh.merged == set()

@@ -144,17 +144,40 @@ def render_welcome_comment(review: Review, *, base_url: str = "") -> str:
     the submitter, so a new comment reaches them by email. The `@` mention covers the other modes,
     where the pull request belongs to the bot and the submitter is not otherwise subscribed.
     """
-    lines = [
-        WELCOME_MARKER,
-        f"Thanks for submitting this, @{review.submitter}.",
-        "",
-        "A curator will review it and reply here, so there is nothing further for you to do for "
-        "now. GitHub will email you when there is news, as long as you stay subscribed to this "
-        "pull request.",
-        "",
-        "If a curator asks for changes, upload the corrected file in the portal and it lands on "
-        "this same pull request. There is no need to open a new one.",
-    ]
+    if review.adopted:
+        # Someone who never visited the portal, and may not know it exists. Two things they
+        # cannot work out for themselves: why an unfamiliar bot is commenting, and how to
+        # respond to a change request — because "upload the corrected file in the portal" is
+        # advice they cannot act on. They answer by pushing, the way they got here.
+        branch = f"`{review.head_branch}`" if review.head_branch else "this pull request's branch"
+        lines = [
+            WELCOME_MARKER,
+            f"Thanks for this, @{review.submitter}.",
+            "",
+            "The WikiPathways curation portal picked this pull request up automatically, because "
+            "it changes a file under `pathways/`. You did not have to do anything, and you do not "
+            "need an account there.",
+            "",
+            "A curator will review it and reply here, so there is nothing further for you to do "
+            "for now. GitHub will email you when there is news, as long as you stay subscribed "
+            "to this pull request.",
+            "",
+            f"If a curator asks for changes, push another commit to {branch} — the same way you "
+            "made this one. The portal re-reads the pull request and puts the review back in the "
+            "queue. There is no need to open a new one.",
+        ]
+    else:
+        lines = [
+            WELCOME_MARKER,
+            f"Thanks for submitting this, @{review.submitter}.",
+            "",
+            "A curator will review it and reply here, so there is nothing further for you to do "
+            "for now. GitHub will email you when there is news, as long as you stay subscribed "
+            "to this pull request.",
+            "",
+            "If a curator asks for changes, upload the corrected file in the portal and it lands "
+            "on this same pull request. There is no need to open a new one.",
+        ]
     if base_url:
         # ``/dashboard/{pr}``, not ``/reviews/{pr}``. There has never been a ``/reviews`` page —
         # ``/api/reviews/{pr}`` is JSON and the HTML route has always been ``/dashboard/{pr}`` —
@@ -526,6 +549,11 @@ class CurationService:
         head_branch: str | None = None,
         head_repo: str | None = None,
         submitter_note: str | None = None,
+        origin: str = "portal",
+        head_sha: str | None = None,
+        pathway_paths: list[str] | None = None,
+        base_repo: str | None = None,
+        announce: bool = True,
     ) -> Review:
         """Create the review row for a freshly opened submission PR (idempotent by PR number).
 
@@ -542,6 +570,15 @@ class CurationService:
         ``submitter_note`` is what they said they changed. A blank one on a re-upload leaves the
         stored note alone: the field is optional, so blank means "nothing further to add" rather
         than "delete what I said last time".
+
+        ``origin="adopted"`` marks a pull request the app did not open. The interesting case is
+        the collision: a ``pull_request.opened`` webhook for a pull request *the portal itself
+        just opened* can arrive before this call commits, because opening the PR, rendering the
+        preview and registering are three steps and GitHub delivers in about a second. Rather
+        than trying to recognise our own branches — the plugin uses the same
+        ``WP<id>_<login>_<stamp>`` shape, so branch names cannot tell them apart — a portal
+        registration **upgrades** an adopted row it finds. Whichever arrives first, the row ends
+        up saying the same thing.
         """
         with self._session_factory() as s:
             review = s.get(Review, pr_number)
@@ -553,18 +590,52 @@ class CurationService:
                     kind=kind,
                     head_branch=head_branch,
                     head_repo=head_repo,
+                    origin=origin,
+                    head_sha=head_sha,
+                    pathway_paths=list(pathway_paths) if pathway_paths else None,
+                    base_repo=base_repo,
                     submitter_note=(submitter_note or "").strip() or None,
                     checklist=build_checklist(
                         metadata=metadata,
                         before=before_metadata,
                         kind=kind,
                         pipeline_mode=self.is_pipeline_mode,
+                        pathway_paths=pathway_paths,
                     ),
                 )
                 s.add(review)
                 s.commit()
-                self._maybe_welcome(review)
+                if announce:
+                    self._maybe_welcome(review)
             else:
+                if origin == "portal" and review.origin == "adopted":
+                    # The webhook adopted this pull request before the submission that opened it
+                    # finished registering. Everything the app knows is better than everything
+                    # adoption inferred: the submitter is the authenticated portal user rather
+                    # than the pull request's author, and the app knows what it committed. The
+                    # welcome comment is re-rendered because the adopted wording tells the reader
+                    # to push a commit to a branch a portal submitter has never checked out — and
+                    # _maybe_welcome upserts on its marker, so this edits rather than duplicates.
+                    logger.info(
+                        "review %s was adopted before register() committed; upgrading to portal "
+                        "origin (submitter %s -> %s)",
+                        pr_number,
+                        review.submitter,
+                        submitter,
+                    )
+                    review.origin = "portal"
+                    review.submitter = submitter
+                    review.kind = kind
+                    review.wpid = wpid
+                    review.head_branch = head_branch
+                    review.head_repo = head_repo
+                    review.pathway_paths = list(pathway_paths) if pathway_paths else None
+                    s.commit()
+                    self._maybe_welcome(review)
+                if head_sha is not None:
+                    review.head_sha = head_sha
+                if base_repo is not None and review.base_repo is None:
+                    review.base_repo = base_repo
                 # A re-upload onto an existing pull request. The update flow reuses the branch
                 # and the PR, so this is the only place a revised *update* is seen — and without
                 # rebuilding, the curator reads a checklist derived from the file the submitter
@@ -578,6 +649,7 @@ class CurationService:
                             before=before_metadata,
                             kind=review.kind,
                             pipeline_mode=self.is_pipeline_mode,
+                            pathway_paths=pathway_paths or review.pathway_paths,
                         ),
                     )
                 if (submitter_note or "").strip():
@@ -748,10 +820,24 @@ class CurationService:
                 )
                 if note.strip():
                     body += f"\n\n{note.strip()}"
-                body += (
-                    "\n\nUpload the fixed GPML again in the curation portal. It lands on this "
-                    "same pull request and puts the review back in the queue."
-                )
+                if review.adopted:
+                    # They never used the portal, so "upload it again" is advice they cannot act
+                    # on. They push, the way they opened this in the first place.
+                    where = (
+                        f"`{review.head_branch}`"
+                        if review.head_branch
+                        else "this pull request's branch"
+                    )
+                    body += (
+                        f"\n\nPush the corrected GPML to {where} and the portal re-reads this "
+                        f"pull request, putting the review back in the queue. There is no need "
+                        f"to open a new one."
+                    )
+                else:
+                    body += (
+                        "\n\nUpload the fixed GPML again in the curation portal. It lands on "
+                        "this same pull request and puts the review back in the queue."
+                    )
                 try:
                     self._github.create_issue_comment(self._repo, pr_number, body)
                 except (GitHubError, httpx.HTTPError):
@@ -1116,15 +1202,41 @@ class CurationService:
             # No pipeline to defer to; closing the PR is the rejection.
             self._github.close_pull_request(self._repo, pr_number)
 
-        self._free_pathway(wpid, curator, return_wpid=True)
+        self._free_pathway(wpid, curator, return_wpid=True, pr_number=pr_number)
 
         with self._session_factory() as s:
             review = s.get(Review, pr_number)
             self._maybe_mirror(review)
             return review
 
+    def _release_lock(self, wpid: int, actor: str, *, pr_number: int | None) -> None:
+        """Release the check-out this review holds — and only this one.
+
+        ``release(force=True)`` frees a lock whoever holds it, which was safe while a pathway
+        could have at most one review. Adoption ends that: several open pull requests can touch
+        one pathway (six of them touch WP1001 on the live target today), so closing one would
+        otherwise free a lock a different one holds, and the next portal update would sail past
+        the app's own table.
+
+        A lock with no ``pr_number`` predates that being recorded; force-releasing it keeps the
+        old behaviour for old rows rather than leaving them stuck until the TTL.
+        """
+        if self._locks is None:
+            return
+        held = self._locks.get(wpid)
+        if held is not None and held.pr_number is not None and held.pr_number != pr_number:
+            logger.info(
+                "not releasing WP%s: it is checked out by PR #%s, not #%s",
+                wpid,
+                held.pr_number,
+                pr_number,
+            )
+            return
+        self._locks.release(wpid, actor, force=True)
+
     def _free_pathway(
-        self, wpid: int | None, actor: str, *, return_wpid: bool = False
+        self, wpid: int | None, actor: str, *, return_wpid: bool = False,
+        pr_number: int | None = None,
     ) -> None:
         """Release what a terminal review was holding.
 
@@ -1136,8 +1248,7 @@ class CurationService:
         """
         if wpid is None:
             return
-        if self._locks is not None:
-            self._locks.release(wpid, actor, force=True)
+        self._release_lock(wpid, actor, pr_number=pr_number)
         # Only a rejection returns the id to the pool. A publication keeps it: it is now a real,
         # permanent WikiPathways identifier.
         if return_wpid and self._allocator is not None:
@@ -1174,7 +1285,7 @@ class CurationService:
             self._maybe_mirror(review)
         # Terminal, so whatever the submission was holding has to come free — an update holds
         # the lock on the pathway it edits, and nothing else will release it now.
-        self._free_pathway(held, curator)
+        self._free_pathway(held, curator, pr_number=pr_number)
         return self.get(pr_number)
 
     def _publish_marker(self, pr_number: int) -> dict | None:
@@ -1331,8 +1442,7 @@ class CurationService:
         # A review with no WPID yet holds neither a lock nor a reservation, so there is nothing
         # to free — that is the whole point of assigning the id at publication.
         if wpid is not None:
-            if self._locks is not None:
-                self._locks.release(wpid, "webhook", force=True)
+            self._release_lock(wpid, "webhook", pr_number=pr_number)
             if self._allocator is not None:
                 if merged:
                     self._allocator.mark_merged(wpid, pr_number=pr_number)
@@ -1455,7 +1565,10 @@ class CurationService:
         # is where this bites: the id was really allocated, and holding it forever after a failed
         # publication inflates the allocator's floor with a pathway that does not exist.
         self._free_pathway(
-            wpid, "pipeline", return_wpid=status == ReviewStatus.PUBLISH_FAILED
+            wpid,
+            "pipeline",
+            return_wpid=status == ReviewStatus.PUBLISH_FAILED,
+            pr_number=pr_number,
         )
 
         # A review that is still failing in exactly the way it was failing last time is not news.
@@ -1776,7 +1889,7 @@ class CurationService:
             # REJECTED is terminal, so nothing downstream will ever free the pathway. Rejecting
             # by label on GitHub has to release it exactly as rejecting in the dashboard does,
             # or the pathway stays checked out until the lock TTL expires days later.
-            self._free_pathway(wpid, actor, return_wpid=True)
+            self._free_pathway(wpid, actor, return_wpid=True, pr_number=pr_number)
             return review
         if not added and label == self._label_accepted and status == ReviewStatus.APPROVED:
             # Only a *person* removing the label means the approval was withdrawn. The target

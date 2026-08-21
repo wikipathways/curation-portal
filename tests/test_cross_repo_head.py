@@ -246,3 +246,82 @@ def pipeline_service_factory():
     fake = FakeGitHubClient()
     service = SubmissionService(None, fake, repo=BASE, mode=SubmissionMode.PIPELINE)
     return service, fake
+
+
+# -- reading a pull request's file list, against real-shaped GitHub JSON --------------------
+#
+# The fake parses whatever it is handed, so it agrees with any implementation, right or wrong.
+# That is exactly how `open_pull_request` echoed its own request for weeks with 494 tests green.
+# These go through the real client and real response shapes.
+
+
+def _file(name: str, status: str = "modified") -> dict:
+    return {
+        "filename": name,
+        "status": status,
+        "additions": 1,
+        "deletions": 0,
+        "changes": 1,
+        "sha": "0" * 40,
+    }
+
+
+def test_list_pr_files_reads_filename_and_status():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == f"/repos/{BASE}/pulls/73/files"
+        return httpx.Response(
+            200, json=[_file("pathways/WP3894/WP3894.gpml"), _file("README.md", "added")]
+        )
+
+    client = HttpGitHubClient("tok", transport=httpx.MockTransport(handler))
+    files = client.list_pr_files(BASE, 73)
+
+    # `filename`, not `path` — GitHub's pulls/files uses the former and the trees API the latter,
+    # and reading the wrong one yields an empty list rather than an error.
+    assert [f.filename for f in files] == ["pathways/WP3894/WP3894.gpml", "README.md"]
+    assert [f.status for f in files] == ["modified", "added"]
+
+
+def test_list_pr_files_pages():
+    """A big pull request must not be silently truncated at 100 files.
+
+    Truncation here reads as "this pull request touches one pathway" when it touches thirty —
+    the multi-pathway gate would pass and approval would publish one of them.
+    """
+    pages: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        page = request.url.params.get("page", "1")
+        pages.append(page)
+        if page == "1":
+            batch = [_file(f"pathways/WP{i}/WP{i}.gpml") for i in range(100)]
+            return httpx.Response(200, json=batch)
+        if page == "2":
+            return httpx.Response(200, json=[_file("pathways/WP999/WP999.gpml")])
+        return httpx.Response(200, json=[])
+
+    client = HttpGitHubClient("tok", transport=httpx.MockTransport(handler))
+    files = client.list_pr_files(BASE, 73)
+
+    assert len(files) == 101
+    assert pages == ["1", "2"]
+
+
+def test_one_unreadable_pull_request_does_not_truncate_the_lock_scan():
+    """The scan's whole job is to be sure. A 404 on one pull request must not end it.
+
+    Ending early reads as "nothing touches this pathway", and the lock is then handed out over a
+    real concurrent edit — the divergence the lock exists to prevent.
+    """
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/pulls"):
+            return httpx.Response(
+                200,
+                json=[_pull(7, "their-branch", FORK), _pull(8, "other-branch", FORK)],
+            )
+        if request.url.path.endswith("/pulls/7/files"):
+            return httpx.Response(404, json={"message": "Not Found"})
+        return httpx.Response(200, json=[_file("pathways/WP1001/WP1001.gpml")])
+
+    client = HttpGitHubClient("tok", transport=httpx.MockTransport(handler))
+    assert client.find_open_pr_touching(BASE, "pathways/WP1001/") == 8

@@ -61,23 +61,21 @@ class SubmissionRateLimiter:
         if not self.enabled:
             return
         since = utcnow() - self._window
+        # Portal rows only. An *adopted* row records a pull request its author opened on GitHub,
+        # without going near this app — counting those would spend somebody's portal quota on
+        # submissions the portal did not accept, and the refusal would read as if they had done
+        # something wrong. The limiter bounds what this app will open on a person's behalf.
+        mine = (Review.submitter == submitter, Review.created_at >= since,
+                Review.origin == "portal")
         with self._session_factory() as s:
             recent = (
-                s.execute(
-                    select(func.count())
-                    .select_from(Review)
-                    .where(Review.submitter == submitter, Review.created_at >= since)
-                ).scalar()
+                s.execute(select(func.count()).select_from(Review).where(*mine)).scalar()
                 or 0
             )
             if recent < self._limit:
                 return
             # When the window frees up: the oldest submission still inside it, plus the window.
-            oldest = s.execute(
-                select(func.min(Review.created_at)).where(
-                    Review.submitter == submitter, Review.created_at >= since
-                )
-            ).scalar()
+            oldest = s.execute(select(func.min(Review.created_at)).where(*mine)).scalar()
         retry_after = int(self._window.total_seconds())
         if oldest is not None:
             freed = _aware(oldest) + self._window
