@@ -388,10 +388,10 @@ listed as the last untested write path.
 
 ### Live state after the cutover (2026-08-21)
 
-**542 tests, ruff-clean. Live at `sha256:49caa35e…`** (from `8f90249`), pointed at
-`wikipathways/sandbox-wp-db` in `pipeline` mode. Rollback target `sha256:f924cdf1…` — a plain
-digest change, no migration and no new secret, though a rollback would also want the four
-cutover variables reverted together (`cutover.sh` prints them).
+**541 tests, ruff-clean. Live at `sha256:ebfb30c8…`** (from `5eb368b`, the Curation Portal
+rename), pointed at `wikipathways/sandbox-wp-db` in `pipeline` mode. Rollback target
+`sha256:49caa35e…` — a plain digest change, no migration and no new secret, though a rollback
+would also want the four cutover variables reverted together (`cutover.sh` prints them).
 
 Four environment variables define the target and **must move together**:
 `*_CONTENT_REPO`, `*_DRAFTS_REPO`, `*_DRAFTS_SITE_BASE_URL` and `*_GITHUB_APP_INSTALLATION_ID`.
@@ -1177,9 +1177,12 @@ app; the fork already runs them.
 
 Settled 2026-08-05:
 
-- **Name: `pathway-portal`.** Applied to the packaging metadata, the page title, the FastAPI app
-  and the docs. The **env prefix is deliberately not a flag day**: `Settings` reads `PORTAL_*`
-  first and falls back to `WPSUBMIT_*`, so the live service can migrate its variables and secrets
+- **Name: `curation-portal` / "Curation Portal"** (2026-08-21, superseding `pathway-portal`,
+  which was a legacy name and read as one of the community portals). Applied to the packaging
+  metadata, the page titles, the header wordmark, the FastAPI app and the docs, and it matches
+  the repository name. The pull request comments already said "the WikiPathways curation portal".
+  The **env prefix is deliberately not a flag day**: `Settings` reads `PORTAL_*` first and falls
+  back to `WPSUBMIT_*`, so the live service can migrate its variables and secrets
   whenever, or never (`tests/test_config.py`). The **GHCR image is still
   `ghcr.io/marvinm2/wikipathways-submit`** — renaming it mints a fresh package that defaults to
   *private*, which would break the pull on TGX2 and so needs a visibility change alongside a
@@ -1194,6 +1197,18 @@ Settled 2026-08-05:
 
 Still open:
 
+- **The hostname moves to `curation.wikipathways.org`** (decided 2026-08-21, blocked on DNS).
+  Measured that day: the name already resolves — to Cloudflare (`104.21.33.100` /
+  `172.67.189.203`) — and answers a **GitHub Pages 404**, which is the wildcard trap
+  `docs/deployment.md` warns about, not a working record. It needs an **A record to
+  `81.169.246.233`, DNS-only (grey cloud)** in the WikiPathways Cloudflare zone, the same shape as
+  `sandbox.wikipathways.org`; Traefik issues over HTTP-01, so a proxied record cannot complete the
+  challenge. Add the Traefik Host rule **only after** `dig +short curation.wikipathways.org A`
+  returns the cluster IP, or the ACME challenge loops. Five things then move together: the router
+  rule, `*_APP_BASE_URL`, `*_OAUTH_REDIRECT_URI`, the OAuth App's callback URL and the GitHub
+  App's webhook URL — plus `tests/test_comment_links.py`'s `BASE` and the docs. **Keep
+  `upload.wikipathways.org` routed alongside it**: every mirror and welcome comment already posted
+  carries absolute links to that host.
 - Bot merge vs `main` branch protection interaction.
 - Whether to detach the sandbox from its parent so the testbed stops being a fork of a fork
   (a GitHub Support request; see the 2026-08-05 notes).
