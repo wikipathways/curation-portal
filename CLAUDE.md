@@ -346,6 +346,30 @@ fork slug), the ghost-pages one is not.
 > **the branch should delete nothing.** That took the diff from 300 files to 45, and dropping
 > the test content took it to 11.
 
+### Live state after the cutover (2026-08-21)
+
+**542 tests, ruff-clean. Live at `sha256:49caa35e…`** (from `8f90249`), pointed at
+`wikipathways/sandbox-wp-db` in `pipeline` mode. Rollback target `sha256:f924cdf1…` — a plain
+digest change, no migration and no new secret, though a rollback would also want the four
+cutover variables reverted together (`cutover.sh` prints them).
+
+Four environment variables define the target and **must move together**:
+`*_CONTENT_REPO`, `*_DRAFTS_REPO`, `*_DRAFTS_SITE_BASE_URL` and `*_GITHUB_APP_INSTALLATION_ID`.
+
+**CI publishes again.** `GHCR_USER` / `GHCR_TOKEN` are set on `wikipathways/curation-portal`; the
+image stays in the `marvinm2` namespace so the swarm pull is unchanged. The token is a classic
+PAT, which means it necessarily carries `repo` as well as `write:packages` — the reason this is a
+stopgap rather than the end state. **If it is given an expiry, note the date**: expiry looks
+exactly like the failure it replaced, a green build whose push silently does not happen. The
+clean fix is publishing to `ghcr.io/wikipathways/curation-portal`, where `GITHUB_TOKEN` suffices
+and no PAT exists to expire; that costs a package-visibility change and a redeploy onto a new
+digest. Deliberately not bundled into the cutover.
+
+**Deliberately reused nothing.** `ghcr-tgx-pull` (`read:packages`, no expiry) is the credential
+both swarm nodes use to *pull*. Adding `write:packages` to it would preserve its value and save
+minting a token, and it is the wrong trade: the credential sitting on the deploy targets would
+gain the ability to push to the namespace those targets pull from.
+
 ### Still to do, in order
 
 1. Someone who can push to protected `main` merges **#77**. **#2** can go in any time.
