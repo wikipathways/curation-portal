@@ -411,11 +411,17 @@ installed GitHub Apps, and 3A pushes as `GITHUB_TOKEN` — so the restriction ha
 entirely, or 3A has to be changed to push as the App. `enforce_all_for_admins` was off the whole
 time, so the protection never applied to a human; it only ever stopped the pipeline.
 
-> [!warning] **The org repo has no `published` or `publish failed` label, so 3A's labelling is a
-> silent no-op there.** The fork has both; the org has eleven labels and neither of these. 3A's
-> "Label as published" step reports **success** and adds nothing, and the only label event on
-> PR #78 is `accepted` added by the portal and removed by a failed run. Creating the two labels
-> on `wikipathways/sandbox-wp-db` fixes it, and needs a repository admin.
+> [!note] **Fixed 2026-08-21: the org repo was missing the `published` and `publish failed`
+> labels, so 3A's labelling was a silent no-op there.** The fork had both; the org had eleven
+> labels and neither, so "Label as published" reported **success** and added nothing — the only
+> label event on PR #78 was `accepted`, added by the portal and removed by a failed run. Both
+> now exist with the fork's colours and descriptions (`#0E8A16` / `#B60205`), and PR #78 carries
+> `published` to match what actually happened.
+>
+> Worth remembering as a shape: **the pipeline's label vocabulary is repository state, not code**,
+> so it does not travel with the workflows. Any new target needs `accepted`, `rejected`,
+> `resubmitted`, `published` and `publish failed` created before its first publication, and every
+> one of them fails silently if absent.
 
 > [!warning] **A publication that succeeds after the publish timeout is recorded as `closed`, and
 > `closed` is terminal, so the app never corrects itself.** Review 78 sits at `status=closed,
