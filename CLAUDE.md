@@ -346,6 +346,36 @@ fork slug), the ghost-pages one is not.
 > **the branch should delete nothing.** That took the diff from 300 files to 45, and dropping
 > the test content took it to 11.
 
+### Proven end to end on the org repo (2026-08-21)
+
+Two clean runs, both approved **at the dashboard button** and then left alone:
+
+| | new pathway (PR #79) | update (PR #80) |
+|---|---|---|
+| workflow 1 | 10/10 green, `pull_request_target` | 10/10 green, `pull_request_target` |
+| head | `marvinm2/sandbox-wp-db`, cross-repository | `marvinm2/sandbox-wp-db:update/WP5425` |
+| dispatcher → 3A | fired and published **unaided** | same |
+| 3A steps | all green incl. `Label as published` | same |
+| pull request | CLOSED unmerged, labelled `published` | CLOSED unmerged, labelled `published` |
+| app record | `published`, **wpid 5426** | `published`, **wpid 5425** |
+
+**WP5426** was created; **WP5425** went from three data nodes to four (AKT1 added, annotated and
+connected), `Version` and `Last-Modified` both advanced to `…_r20260821151230`. The before/after
+preview and the diff worked on the org repo too — three nodes before, four after, `added: 1`.
+
+That closes the three things the first run left unproven — the app settling to `published` with
+the WPID (the `[bot]` label-guard fix, which had never executed), the dispatcher→3A chain
+completing on its own, and 3A's own labelling — plus **update-in-fork**, which this file had
+listed as the last untested write path.
+
+> [!note] **The fork's own workflows are noise now and one of them loops.** Syncing
+> `marvinm2/sandbox-wp-db`'s `main` to the org rewrote GPML files, which triggered its
+> `on_gpml_change`, which committed "Update metadata files", which triggered it again.
+> `on_gpml_change` is **disabled** there as of 2026-08-21. The fork is only a branch host for
+> fork-mode submissions now — it needs no workflows at all — but the scheduled ones
+> (`Weekly caching…`, `Daily sync of GPML from classic site`) are still active and will keep
+> committing to it.
+
 ### Live state after the cutover (2026-08-21)
 
 **542 tests, ruff-clean. Live at `sha256:49caa35e…`** (from `8f90249`), pointed at
