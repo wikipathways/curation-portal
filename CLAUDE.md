@@ -377,31 +377,37 @@ account** `marvinm2`, permissions metadata read + contents/issues/pull_requests 
   at all. He is admin on 17 org repositories and on none of the four in play here. So adding a
   repository to this installation needs **admin on that repository**, not org ownership: an owner
   is one way, admin on the repo is the other, and the second is a much smaller ask.
-> [!warning] **The App has NO write access to `wikipathways/sandbox-wp-db`, and the repository's
-> own Integrations page says otherwise.** `github.com/wikipathways/sandbox-wp-db/settings/
-> installations` lists `wikipathways-submit-bot-dev` under "Installed GitHub Apps", and on the
-> strength of that this file recorded it as positively confirmed. **It is not.** Measured through
-> behaviour on 2026-08-21:
+> [!warning] **`installation_id` is configured, not resolved from the repository — so it moves
+> with `content_repo`.** The cutover changed three environment variables. There is a **fourth**:
+> `*_GITHUB_APP_INSTALLATION_ID`. It stayed at `149294202`, the **personal** installation, whose
+> repository selection is `marvinm2/*`, so every bot call against the org repo came back
+> `403 Resource not accessible by integration`. Setting it to `149425545` fixed it immediately.
 >
-> - `POST /api/reviews/78/approve` → **502**, wrapping
->   `add_labels(['accepted']) failed: 403 Resource not accessible by integration`.
-> - The App has posted **zero** comments on the org's PR #78. On the fork's PR #45 it posted two.
->   So it is not the label endpoint — the installation cannot write to that repository at all.
-> - The `accepted` label exists on the org repo, and the App *declares* `issues: write`, so
->   neither the label nor the App definition is the problem. The **installation** is: its
->   repository selection, its granted permissions or its suspension state. Reading which needs
->   `github.com/organizations/wikipathways/settings/installations/149425545`, which is owner-only.
+> An earlier version of this note blamed the App's installation on the org — its repository
+> selection, its granted permissions, its suspension state — and told Marvin to ask an owner.
+> **All of that was wrong.** The org installation was correct the whole time: one repository
+> selected (`wikipathways/sandbox-wp-db`), read and write on code, issues and pull requests. What
+> was wrong was ours, and it was in an environment variable the cutover plan never listed.
 >
-> **A page listing an app is not evidence the app can write.** Third instance in three days of a
-> read that succeeds telling you nothing about a write — after the `/protection` 404 and the
-> `secrets/public-key` 200. The instrument that answered it was making the app do the thing.
+> **It hid because every bot write except approval is best-effort.** The welcome and mirror
+> comments go through `upsert_issue_comment`, which swallows `GitHubError` and `httpx.HTTPError`
+> so a comment blip never fails an already-merged action. Here it swallowed *all* of them: the
+> App posted zero comments on PR #78 against two on a fork pull request, and nothing said so. The
+> first call that does not swallow — approve — is where an hour-old misconfiguration surfaced.
+> **A best-effort write that always fails is indistinguishable from one never attempted**; it
+> deserves a log line even when the caller does not care.
+
+> [!warning] **`wikipathways/sandbox-wp-db`'s `main` is LOCKED, so its publish workflow cannot
+> write and the repository has never published a pathway.** `lock_branch: true`, plus a push
+> restriction naming `AlexanderPico` and `ayushi-agrawal-gladstone` and **no apps**. 3A has run
+> twice in the repository's life — 2025-09-03 and 2026-08-21 — and failed both times, the second
+> at `Commit and push changes to sandbox-wp-db` with
+> `GH006: Protected branch update failed ... Cannot change this locked branch`.
 >
-> **The failure was invisible for the whole submission because it was designed to be.** The
-> welcome and mirror comments go through `upsert_issue_comment`, which is best-effort and swallows
-> `GitHubError` and `httpx.HTTPError` so a comment blip never fails an already-merged action. Here
-> that swallowed *every* write the bot attempted, and the first call that does not swallow —
-> approval — is where it surfaced. Worth a log line at minimum: a best-effort write that always
-> fails is indistinguishable from one that was never attempted.
+> The draft push to `sandbox-wp.gh.io` in the same run **succeeded**, so this is specifically the
+> content repository's own protection refusing its own pipeline. Unlocking is a repository-admin
+> change Marvin can now make, but it is a shared repository and the lock may be deliberate, so it
+> is a decision rather than a fix. Nothing in the portal is implicated.
 
 - **Do not touch the picker on `/settings/installations/149294202`.** That is the live
   installation the running service depends on; deselecting a repository there and saving would
