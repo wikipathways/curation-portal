@@ -459,6 +459,12 @@ is likewise a personal app, and it is what a submitter sees on the consent scree
 > - `sandbox-wp-assets` has **zero deploy keys**, and admin now makes creating one possible.
 > - Actions secrets on `curation-portal` were already writable at `maintain`, so the image publish
 >   only ever needed a token to exist.
+>
+> **Repository admin, not organisation ownership.** `orgs/wikipathways/members?role=admin` is
+> `AlexanderPico, egonw, khanspers, mkutmon`, and Marvin is not among them — that endpoint answers
+> on `read:org`, so it is a real reading rather than a scope artifact. Nothing on the critical path
+> needs ownership; the one thing that does is **transferring the App and the OAuth App to the
+> org**, which requires owning the target. Ask one of those four for that, not for repo access.
 
 ### What each grant would actually unblock
 
