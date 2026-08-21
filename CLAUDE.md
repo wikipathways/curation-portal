@@ -377,12 +377,21 @@ account** `marvinm2`, permissions metadata read + contents/issues/pull_requests 
   at all. He is admin on 17 org repositories and on none of the four in play here. So adding a
   repository to this installation needs **admin on that repository**, not org ownership: an owner
   is one way, admin on the repo is the other, and the second is a much smaller ask.
-- `sandbox-wp-db` **did not appear** in that picker while `sandbox-wp-assets` and `sandbox-wp.gh.io`
-  did, both as `request`. These pickers list what is *not yet* selected, so that probably means
-  `sandbox-wp-db` is already in the installation — **probably, not confirmed.** Reading the
-  selected set needs the org settings page, and the end-to-end test settles it for free either way.
-  (This one is stated as a guess on purpose: inferring from absence in a GitHub picker is exactly
-  what went wrong with the package's Add Repository dialog earlier the same day.)
+- **`sandbox-wp-db` cannot be requested, because the picker never offers it.** Searched
+  repeatedly across 08-20 and 08-21: `sandbox-wp-assets` and `sandbox-wp.gh.io` come back with
+  `request` badges, most other org repositories come back, and `sandbox-wp-db` returns nothing.
+  So the request could not be submitted — there is no row to select.
+- The likeliest reading is that it is **already in the installation**, since the equivalent page
+  for the personal installation (`/settings/installations/149294202`) lists its selected set
+  separately *below* the picker — `marvinm2/wikipathways-database` and `marvinm2/sandbox-wp-db` —
+  which is what an add-only control looks like. **Not confirmed**, deliberately: reading the org's
+  selected set needs `github.com/organizations/wikipathways/settings/installations/149425545`,
+  which 404s for a non-owner, and inferring from absence in a GitHub picker is exactly what went
+  wrong with the package's Add Repository dialog. The end-to-end test settles it for free — if the
+  bot lacks access, the first bot action fails loudly and it is one click to fix.
+- **Do not touch the picker on `/settings/installations/149294202`.** That is the live
+  installation the running service depends on; deselecting a repository there and saving would
+  take the bot's access away from production.
 
 **Whether it should be *owned* by the org is a separate question from whether it works.** As it
 stands the App dies with Marvin's account, org owners cannot manage it, and every comment and
