@@ -376,10 +376,12 @@ listed as the last untested write path.
 > submitter never touched. It never reached published content (3A copies named files and the pull
 > request closes unmerged), but it is wrong in the diff and misleads a reviewer.
 >
-> **The fork needs no workflows at all now** — it is only a branch host for fork-mode
-> submissions. `on_gpml_change`, `scheduled_gpml_sync` and `scheduled_bridge_cache` are all
-> **disabled** on `marvinm2/sandbox-wp-db`, and its `main` is back to `identical`. Re-enable them
-> only if the fork is ever made the content repo again.
+> **All eight pipeline workflows are disabled on `marvinm2/sandbox-wp-db`** (workflows 1, 2, 3A,
+> 3B, the label dispatcher, `on_gpml_change` and both scheduled jobs), and its `main` is back to
+> `identical`. The fork is only a branch host for fork-mode submissions now, and disabling
+> workflows does not affect pushing a branch or opening a pull request from it. Re-enable them
+> only if the fork is ever made the content repo again — which is also the only way the leak
+> above can recur.
 >
 > In production this does not arise the same way: a submitter's fork is fresh and carries nothing
 > of its own. It bites exactly where a fork used to *be* the target.
