@@ -397,6 +397,15 @@ account** `marvinm2`, permissions metadata read + contents/issues/pull_requests 
 > **A best-effort write that always fails is indistinguishable from one never attempted**; it
 > deserves a log line even when the caller does not care.
 
+> [!warning] **3A is not idempotent: a partial failure eats the draft and blocks its own retry.**
+> The first 3A run on PR #78 pushed to `sandbox-wp.gh.io` successfully and *then* failed pushing
+> to `sandbox-wp-db`. That first push is the step that **moves** the draft to its published
+> location, so re-dispatching 3A died at `Get WPID` with `No draft file found for PR #78` — an
+> earlier and more confusing failure than the real one. Recovery is to re-run workflow 1 first
+> (`gh workflow run 1_on_pull_request.yml -f manual-pr-number=<n>`), which regenerates the draft,
+> and only then re-dispatch 3A. Worth fixing at source: the draft move should be the last push,
+> not the first, or the step should tolerate an already-moved draft.
+
 > [!warning] **`wikipathways/sandbox-wp-db`'s `main` is LOCKED, so its publish workflow cannot
 > write and the repository has never published a pathway.** `lock_branch: true`, plus a push
 > restriction naming `AlexanderPico` and `ayushi-agrawal-gladstone` and **no apps**. 3A has run
