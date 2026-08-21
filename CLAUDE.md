@@ -468,6 +468,15 @@ renders the base against itself, reports an empty diff and passes), and the rate
 sandbox's 25 open ones would import 18 of one student's test submissions and comment on each.
 `POST /api/reviews/{n}/adopt` (curator only) recovers a single missed delivery.
 
+**Unproven against a live plugin pull request, deliberately.** `PORTAL_ADOPT_FOREIGN_PRS` is
+**unset on the live service**, so nothing is adopted yet — that is a decision, not an oversight.
+The GSoC team tests in the week of 2026-08-24, and the first adoption posts a welcome comment on
+somebody else's pull request, so turning it on is worth coordinating with `traybug23` and Martina
+rather than doing unannounced. The exit condition is the usual one: one real plugin pull request
+adopted, approved **at the dashboard button**, published by 3A. PR #73 (`Contribution: Update
+WP3894` — single pathway, cross-repository) is the one to use; #58 and #74 are the multi-pathway
+cases and prove the gate, not the happy path.
+
 **The review table was swept the same day.** 45 of its 48 rows were fork-era, and since
 `pr_number` is the primary key with no base repository recorded, they resolved against the org
 repo: rows 17 and 80 both claimed WP5425, and row 3 (`publish_failed`, non-terminal) had already
