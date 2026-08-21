@@ -368,13 +368,21 @@ the WPID (the `[bot]` label-guard fix, which had never executed), the dispatcher
 completing on its own, and 3A's own labelling — plus **update-in-fork**, which this file had
 listed as the last untested write path.
 
-> [!note] **The fork's own workflows are noise now and one of them loops.** Syncing
-> `marvinm2/sandbox-wp-db`'s `main` to the org rewrote GPML files, which triggered its
-> `on_gpml_change`, which committed "Update metadata files", which triggered it again.
-> `on_gpml_change` is **disabled** there as of 2026-08-21. The fork is only a branch host for
-> fork-mode submissions now — it needs no workflows at all — but the scheduled ones
-> (`Weekly caching…`, `Daily sync of GPML from classic site`) are still active and will keep
-> committing to it.
+> [!warning] **A diverged submitter fork leaks its own commits into every pull request it opens.**
+> A branch is cut from the **fork's** head, so anything the fork's `main` carries that the content
+> repo does not turns up in the diff. Measured 2026-08-21: syncing the fork rewrote GPML on its
+> `main`, which triggered its own `on_gpml_change`, which committed `Update metadata files`, which
+> triggered it again — and `scripts/author_list.csv` then appeared in **PR #80**, a file the
+> submitter never touched. It never reached published content (3A copies named files and the pull
+> request closes unmerged), but it is wrong in the diff and misleads a reviewer.
+>
+> **The fork needs no workflows at all now** — it is only a branch host for fork-mode
+> submissions. `on_gpml_change`, `scheduled_gpml_sync` and `scheduled_bridge_cache` are all
+> **disabled** on `marvinm2/sandbox-wp-db`, and its `main` is back to `identical`. Re-enable them
+> only if the fork is ever made the content repo again.
+>
+> In production this does not arise the same way: a submitter's fork is fresh and carries nothing
+> of its own. It bites exactly where a fork used to *be* the target.
 
 ### Live state after the cutover (2026-08-21)
 
