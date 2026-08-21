@@ -7,7 +7,7 @@
    template that extends another executes its body: importing from the queue page rendered the
    queue page's empty state on every review page, against a context that has no queue in it. #}
 {% from "_review_card.html" import review_card with context %}
-{% block title %}{{ review.wpid_str }} &middot; PR #{{ review.pr_number }} &middot; WikiPathways portal{% endblock %}
+{% block title %}{{ review.wpid_str }} &middot; PR #{{ review.pr_number }} &middot; WikiPathways Curation Portal{% endblock %}
 
 {% block content %}
 <a class="breadcrumb" href="/dashboard">

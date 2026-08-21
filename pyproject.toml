@@ -1,5 +1,5 @@
 [project]
-name = "pathway-portal"
+name = "curation-portal"
 version = "0.0.1"
 description = "Submission and curation front door for GitHub-based WikiPathways"
 license = "Apache-2.0"

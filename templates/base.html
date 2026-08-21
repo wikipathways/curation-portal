@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{% block title %}Pathway Portal{% endblock %}</title>
+  <title>{% block title %}WikiPathways Curation Portal{% endblock %}</title>
   <meta name="description" content="Submit and curate WikiPathways pathways through pull requests, without touching git.">
   <link rel="stylesheet" href="/static/app.css?v=19">
 </head>
@@ -17,7 +17,7 @@
       <a class="site-header__brand" href="/">
         <img class="site-header__logo" src="/static/wikipathways-logo.svg"
              width="132" height="40" alt="WikiPathways">
-        <span class="site-header__portal">Pathway portal</span>
+        <span class="site-header__portal">Curation portal</span>
       </a>
       <nav class="site-header__nav" aria-label="Primary">
         <a href="/"{% if request and request.url.path == '/' %} aria-current="page"{% endif %}>Submit</a>

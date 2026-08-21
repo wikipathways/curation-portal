@@ -6,11 +6,12 @@ import logging
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, EnvSettingsSource, SettingsConfigDict
 
-#: The prefix this project was born with, kept readable indefinitely. The rename to
-#: ``pathway-portal`` (2026-08-05) would otherwise have been a flag day: every environment
-#: variable on the live swarm service, plus the Docker secrets, would have had to change in the
-#: same breath as the image, and a typo in that window takes the service down for a cosmetic gain.
-#: Reading both instead means the deployment migrates whenever it likes, or never.
+#: The prefix this project was born with, kept readable indefinitely. The renames to
+#: ``pathway-portal`` (2026-08-05) and ``curation-portal`` (2026-08-21) would otherwise each have
+#: been a flag day: every environment variable on the live swarm service, plus the Docker secrets,
+#: would have had to change in the same breath as the image, and a typo in that window takes the
+#: service down for a cosmetic gain. Reading both instead means the deployment migrates whenever
+#: it likes, or never.
 _LEGACY_ENV_PREFIX = "WPSUBMIT_"
 
 

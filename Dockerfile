@@ -1,4 +1,4 @@
-# pathway-portal — production image (issue #5).
+# curation-portal — production image (issue #5).
 # Built by CI and pushed to GHCR so both swarm nodes can pull (real failover); see
 # docs/deployment.md. Runs from the copied source tree (not the installed wheel) so the
 # templates/, static/, and migrations/ dirs resolve relative to /app.

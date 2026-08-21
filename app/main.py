@@ -608,7 +608,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
                 "local preview render failed for PR #%s", pr_number, exc_info=True
             )
 
-    app = FastAPI(title="pathway-portal", version="0.0.1", lifespan=lifespan)
+    app = FastAPI(title="curation-portal", version="0.0.1", lifespan=lifespan)
     app.add_middleware(
         SessionMiddleware,
         secret_key=settings.session_secret,

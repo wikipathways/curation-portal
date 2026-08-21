@@ -1,4 +1,4 @@
-# Pathway Portal
+# Curation Portal
 
 A hosted web app that is the front door for **submitting and curating WikiPathways pathways**
 now that all content lives on GitHub. It lets anyone submit a new pathway or an update without

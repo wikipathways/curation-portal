@@ -1,10 +1,11 @@
 """Settings resolution, and specifically the two env prefixes the rename left behind.
 
-The project was `wikipathways-submit` until 2026-08-05 and is `pathway-portal` now. Renaming the
-env prefix outright would have made the rename a flag day: every variable on the live swarm
-service, plus its Docker secrets, would have to change in the same breath as the image, and a typo
-inside that window takes the service down for a purely cosmetic gain. Reading both prefixes turns
-that into something the deployment can do whenever it likes, or never.
+The project was `wikipathways-submit` until 2026-08-05, `pathway-portal` until 2026-08-21, and is
+`curation-portal` now. Renaming the env prefix outright would have made each rename a flag day:
+every variable on the live swarm service, plus its Docker secrets, would have to change in the
+same breath as the image, and a typo inside that window takes the service down for a purely
+cosmetic gain. Reading both prefixes turns that into something the deployment can do whenever it
+likes, or never.
 """
 from __future__ import annotations
 
