@@ -418,6 +418,24 @@ is likewise a personal app, and it is what a submitter sees on the consent scree
 > after the `/protection` 404 and the package picker — **on GitHub, a read that succeeds rarely
 > tells you what a write will do.**
 
+> [!warning] **The cutover ran on 2026-08-21, and one review was rebound anyway — because the
+> drain was verified with the wrong instrument.** `GET /api/reviews` **defaults to
+> `status=open`**, so asking it bare answers "how many OPEN reviews" and reads as a clean bill of
+> health for "how many NON-TERMINAL reviews". Terminal is only MERGED / CLOSED / PUBLISHED /
+> REJECTED, so **APPROVED, CHANGES_REQUESTED and PUBLISH_FAILED are all still reconciled**.
+>
+> One row survived: review **3**, `publish_failed`, one of Marvin's own July test submissions.
+> The first reconcile after the repoint logged
+> `review 3: recording head repo khanspers/sandbox-wp-db, which was never captured` — it took the
+> head repository off **khanspers's** unrelated PR #3 on the org repo. Both PR #3s are closed and
+> the row is not surfaced on the dashboard, so nothing acted on it, but the row now holds a
+> stranger's data and `PUBLISH_FAILED` is in `DECIDABLE`, so a curator's decision would still
+> apply to it.
+>
+> `cutover.sh` now checks all four non-terminal statuses by name. **The lesson is the one already
+> written twice above and committed a third time anyway: a component declared healthy is only as
+> good as what its sample contained.** An endpoint with a defaulted filter is a sample.
+
 > [!warning] **Repointing `content_repo` silently rebinds every open review to a different
 > repository's pull requests.** `Review.pr_number` is the **primary key** and there is no
 > base-repo column — `head_repo` records only the head — so the table is scoped implicitly to
