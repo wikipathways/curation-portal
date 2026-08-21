@@ -459,6 +459,38 @@ def test_unlabelling_accepted_reopens_the_review(session_factory):
     assert review.status == ReviewStatus.OPEN
 
 
+def test_the_publish_workflow_removing_accepted_does_not_unapprove(session_factory):
+    """A bot removing `accepted` is the publish pipeline doing its own housekeeping.
+
+    3A drops the label when it reports a failure, and again when it replaces it with
+    `published`. Treating that as a withdrawn approval takes the review back to OPEN mid
+    publication, and then the close is written as CLOSED — terminal — instead of being routed
+    through `_settle_publication`, so the announced WPID is lost with nothing to re-check it.
+
+    Measured on PR #78 of wikipathways/sandbox-wp-db, 2026-08-21: published as WP5425, recorded
+    by the app as `closed` with no WPID.
+    """
+    gh = _fake()
+    svc = _service(session_factory, gh)
+    pr = _register(svc, gh)
+    _complete_checklist(svc, pr)
+    svc.approve(pr, CURATOR)
+
+    assert svc.handle_label_event(pr, "accepted", added=False, actor="github-actions[bot]") is None
+    assert svc.get(pr).status == ReviewStatus.APPROVED
+
+    # Still APPROVED, so a close now settles from the marker rather than falling through.
+    gh.create_issue_comment(
+        REPO,
+        pr,
+        f'<!-- wikipathways-publish {{"pr":{pr},"wpid":5425,"status":"published"}} -->\n'
+        "Published as WP5425.",
+    )
+    review = svc.handle_pr_closed(pr, merged=False)
+    assert review.status == ReviewStatus.PUBLISHED
+    assert review.wpid == 5425
+
+
 def test_an_unrelated_label_changes_nothing(session_factory):
     gh = _fake()
     svc = _service(session_factory, gh)

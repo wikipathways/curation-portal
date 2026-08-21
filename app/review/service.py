@@ -1779,6 +1779,20 @@ class CurationService:
             self._free_pathway(wpid, actor, return_wpid=True)
             return review
         if not added and label == self._label_accepted and status == ReviewStatus.APPROVED:
+            # Only a *person* removing the label means the approval was withdrawn. The target
+            # repository's publish workflow removes `accepted` itself — when it reports a failure,
+            # and again when it replaces the label with `published` — and reading that as a
+            # curator changing their mind takes the review back to OPEN in the middle of its own
+            # publication. The pull request then closes while the row is neither APPROVED nor
+            # PUBLISH_FAILED, so ``handle_pr_closed`` stops routing it through
+            # ``_settle_publication`` and writes CLOSED, which *is* terminal: the announced WPID
+            # is lost and nothing ever re-checks it.
+            #
+            # Measured 2026-08-21 on PR #78 of wikipathways/sandbox-wp-db. The repository
+            # published it as WP5425 and said so in a marker comment; the app recorded
+            # ``status=closed, wpid=None`` and could not correct itself.
+            if actor.endswith("[bot]"):
+                return None
             return self._set_status(
                 pr_number,
                 ReviewStatus.OPEN,
