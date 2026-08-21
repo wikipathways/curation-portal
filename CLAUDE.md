@@ -389,7 +389,8 @@ listed as the last untested write path.
 ### Live state after the cutover (2026-08-21)
 
 **541 tests, ruff-clean. Live at `sha256:ebfb30c8…`** (from `5eb368b`, the Curation Portal
-rename), pointed at `wikipathways/sandbox-wp-db` in `pipeline` mode. Rollback target
+rename), served at **`https://curation.wikipathways.org`** and pointed at
+`wikipathways/sandbox-wp-db` in `pipeline` mode. Rollback target
 `sha256:49caa35e…` — a plain digest change, no migration and no new secret, though a rollback
 would also want the four cutover variables reverted together (`cutover.sh` prints them).
 
@@ -1187,6 +1188,20 @@ Settled 2026-08-05:
   `ghcr.io/marvinm2/wikipathways-submit`** — renaming it mints a fresh package that defaults to
   *private*, which would break the pull on TGX2 and so needs a visibility change alongside a
   coordinated redeploy. Worth doing, not worth doing casually.
+- **Hostname: `curation.wikipathways.org`** (2026-08-21). Egon added the A record; the Traefik
+  rule is ``Host(`upload.wikipathways.org`) || Host(`curation.wikipathways.org`)`` and one Let's
+  Encrypt certificate carries both in its SAN list, so **`upload.wikipathways.org` keeps working**
+  — every mirror and welcome comment already posted links to it absolutely. `*_APP_BASE_URL`,
+  `*_OAUTH_REDIRECT_URI` and the GitHub App's webhook URL all name the new host now; the OAuth App
+  holds **both** callbacks, which is what made the switch windowless. Proven rather than assumed:
+  a real browser login round trip landed back signed in as `@marvinm2` with the curator badge, and
+  a redelivered `pull_request` webhook returned 200 from the new URL.
+  Two traps worth keeping. The record was **proxied** at first and answered 200 *through
+  Cloudflare* — check for `server: cloudflare` / `cf-ray` before believing a reading, and probe the
+  origin with `curl --resolve curation.wikipathways.org:443:81.169.246.233`. And the workstation's
+  own resolver served the stale answer for minutes after `dig @1.1.1.1` had the new one.
+  Still legacy-named and visible to every submitter: the **OAuth App's display name is
+  "WikiPathways Portal"**, which is what the consent screen says.
 - **Licence: Apache-2.0** (`LICENSE`, `NOTICE`), matching the org's software norm. It covers the
   code only; pathway content stays CC0, which `NOTICE` says explicitly so the two are never
   conflated.
@@ -1197,22 +1212,6 @@ Settled 2026-08-05:
 
 Still open:
 
-- **The hostname move to `curation.wikipathways.org` is half done** (2026-08-21). Egon added the
-  A record and both names now serve from the cluster: the router rule is
-  ``Host(`upload.wikipathways.org`) || Host(`curation.wikipathways.org`)`` and Traefik issued one
-  Let's Encrypt certificate covering both. **`upload.wikipathways.org` stays routed** — every
-  mirror and welcome comment already posted carries absolute links to it.
-  What has *not* moved, and must move together: `*_APP_BASE_URL`, `*_OAUTH_REDIRECT_URI`, the
-  **OAuth App's callback URL** and the GitHub App's webhook URL, plus
-  `tests/test_comment_links.py`'s `BASE` and the docs. The callback is the gate: flipping
-  `*_OAUTH_REDIRECT_URI` before GitHub knows the new URL fails every login with
-  `redirect_uri is not associated with this application`. An OAuth App holds several callbacks, so
-  registering the new one beside the old makes the switch windowless.
-  Two measurement traps hit on the day: the record was **proxied** at first and answered 200
-  through Cloudflare, which HTTP-01 cannot use — check for `server: cloudflare` / `cf-ray` before
-  believing a reading; and the workstation's own resolver served the stale proxied answer for
-  minutes after `dig @1.1.1.1` had the new one, so probe the origin with
-  `curl --resolve curation.wikipathways.org:443:81.169.246.233`.
 - Bot merge vs `main` branch protection interaction.
 - Whether to detach the sandbox from its parent so the testbed stops being a fork of a fork
   (a GitHub Support request; see the 2026-08-05 notes).

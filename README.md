@@ -7,7 +7,8 @@ touching git, opens a real pull request against
 assigns the WPID, and gives curators a review dashboard with a rendered before/after preview.
 
 **Status: deployed for testing, not yet in production.** It runs at
-[upload.wikipathways.org](https://upload.wikipathways.org) against a sandbox fork, where the whole
+[curation.wikipathways.org](https://curation.wikipathways.org) (and still answers on the older
+`upload.wikipathways.org`) against the org's sandbox repository, where the whole
 lifecycle — submit, revise, update, review, approve, publish — has been driven end to end against
 live GitHub, including by third-party contributors from their own forks. It is **not** announced
 and has no production users. Before it can serve the real content repository, two pre-existing

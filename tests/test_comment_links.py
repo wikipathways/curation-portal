@@ -25,7 +25,7 @@ from app.main import build_app
 from app.models import Review, ReviewStatus
 from app.review.service import render_mirror_comment, render_welcome_comment
 
-BASE = "https://upload.wikipathways.org"
+BASE = "https://curation.wikipathways.org"
 
 #: Matches a path in a URL we wrote, e.g. ``/dashboard/42`` out of the full link.
 _URL = re.compile(re.escape(BASE) + r"(/[^\s,.)\]]*)")

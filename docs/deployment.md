@@ -6,13 +6,22 @@ authoritative cluster docs live at `/mnt/gluster/documentation/` on `tgx1` — r
 and `operations/infrastructure-guide.md` before deploying; this file is the service-specific
 recipe.
 
-> Status (2026-07-27): the **datastore is deployed and running** on the cluster; the app service
-> is not up yet. Approved hostname is `upload.wikipathways.org`. The remaining blocker is DNS —
-> see "Hostname and DNS" below.
+> Status (2026-08-21): deployed and live. The canonical hostname is
+> **`curation.wikipathways.org`**; `upload.wikipathways.org` was the original name and is still
+> routed to the same service, because every pull request comment the app has posted links to it
+> absolutely. One Let's Encrypt certificate covers both.
 
 ## Hostname and DNS
 
-The service is `upload.wikipathways.org`, not a `*.cloud.vhp4safety.nl` name. That zone is run by
+The service answers on **`curation.wikipathways.org`** (canonical, added 2026-08-21) and
+`upload.wikipathways.org` (original, kept). The router rule names both and Traefik issues a single
+certificate with both in its SAN list:
+
+```
+traefik.http.routers.wikipathways-submit.rule=Host(`upload.wikipathways.org`) || Host(`curation.wikipathways.org`)
+```
+
+Neither is a `*.cloud.vhp4safety.nl` name. That zone is run by
 WikiPathways on Cloudflare, not by Strato, which changes two things:
 
 - **There is no wildcard to rely on.** `*.wikipathways.org` is proxied through Cloudflare to
@@ -21,7 +30,11 @@ WikiPathways on Cloudflare, not by Strato, which changes two things:
   when that returns `81.169.246.233`, not Cloudflare addresses (`104.21.x.x` / `172.67.x.x`).
 - **The record must be DNS-only (grey cloud).** Traefik issues certificates over HTTP-01, so
   Let's Encrypt has to reach tgx1 directly. Proxied through Cloudflare the challenge cannot
-  complete. `sandbox.wikipathways.org` and `classic.wikipathways.org` are already DNS-only in
+  complete. `curation.wikipathways.org` was created **proxied** on 2026-08-21 and *appeared* to
+  work — Cloudflare answered 200 from the origin — so check `server:` and `cf-ray` in the response
+  headers before concluding you measured the cluster, and probe the origin directly with
+  `curl --resolve <host>:443:81.169.246.233`. A local resolver will also keep serving the old
+  answer for minutes after `dig @1.1.1.1` has the new one. `sandbox.wikipathways.org` and `classic.wikipathways.org` are already DNS-only in
   that zone and are the precedent to point at.
 
 Per the cluster's `AGENTS.md`, **add the Traefik router labels only after DNS resolves to the
@@ -132,8 +145,8 @@ docker service create \
   --env WPSUBMIT_PUBLISH_MODE=pipeline \
   --env WPSUBMIT_SUBMIT_IDENTITY=bot \
   --env WPSUBMIT_REQUIRE_PREVIEW_CHECK=false \
-  --env WPSUBMIT_APP_BASE_URL=https://upload.wikipathways.org \
-  --env WPSUBMIT_OAUTH_REDIRECT_URI=https://upload.wikipathways.org/auth/callback \
+  --env WPSUBMIT_APP_BASE_URL=https://curation.wikipathways.org \
+  --env WPSUBMIT_OAUTH_REDIRECT_URI=https://curation.wikipathways.org/auth/callback \
   --env WPSUBMIT_SESSION_HTTPS_ONLY=true \
   --env WPSUBMIT_PREVIEW_CACHE_DIR=/data/preview-cache \
   --env WPSUBMIT_GITHUB_OAUTH_CLIENT_ID=<oauth-app-client-id> \
@@ -333,7 +346,7 @@ owns it. GitHub → **Settings → Developer settings → GitHub Apps → wikipa
 | Field | Value |
 |---|---|
 | Webhook — Active | ✔ |
-| Webhook URL | `https://upload.wikipathways.org/webhooks/github` |
+| Webhook URL | `https://curation.wikipathways.org/webhooks/github` |
 | Webhook secret | the string from step 1 |
 
 Then **Permissions & events → Subscribe to events → Pull requests** ✔.
