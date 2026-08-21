@@ -397,6 +397,34 @@ account** `marvinm2`, permissions metadata read + contents/issues/pull_requests 
 > **A best-effort write that always fails is indistinguishable from one never attempted**; it
 > deserves a log line even when the caller does not care.
 
+**The org repo published: WP5425, PR #78, 2026-08-21.** Every fix from the 08-14 work holds on
+the new target — `Version="WP5425_r20260821133253"` rather than the `WP0001` placeholder,
+`Last-Modified` refreshed, `Data-Source="WikiPathways"` filled in, `info.json` saying `WP5425`,
+**zero** `WP0__PR78` occurrences in any product, and the publish commit authored by
+`marvinm2 <26296100+marvinm2@users.noreply.github.com>` rather than `GitHub Action`. Nine files
+on `main`, drafts and assets pushed, pull request closed **unmerged**. It is the first pathway
+that repository has ever published.
+
+Getting there needed both halves of the branch protection off: `lock_branch` **and** "Restrict
+who can push". The actor allowlist **cannot** be given `github-actions` — that picker only offers
+installed GitHub Apps, and 3A pushes as `GITHUB_TOKEN` — so the restriction has to come off
+entirely, or 3A has to be changed to push as the App. `enforce_all_for_admins` was off the whole
+time, so the protection never applied to a human; it only ever stopped the pipeline.
+
+> [!warning] **The org repo has no `published` or `publish failed` label, so 3A's labelling is a
+> silent no-op there.** The fork has both; the org has eleven labels and neither of these. 3A's
+> "Label as published" step reports **success** and adds nothing, and the only label event on
+> PR #78 is `accepted` added by the portal and removed by a failed run. Creating the two labels
+> on `wikipathways/sandbox-wp-db` fixes it, and needs a repository admin.
+
+> [!warning] **A publication that succeeds after the publish timeout is recorded as `closed`, and
+> `closed` is terminal, so the app never corrects itself.** Review 78 sits at `status=closed,
+> wpid=None` while the repository published it as WP5425 and said so in a marker comment. The
+> WPID is simply lost from the app's record. This run took 28 minutes against a 10-minute
+> `publish_timeout_minutes` because of the retry loop, so a normal ~60s publication would not hit
+> it — but the failure mode is silent data loss and `_settle_publication` should prefer a
+> "published" marker over the elapsed clock whenever one exists.
+
 > [!warning] **3A is not idempotent: a partial failure eats the draft and blocks its own retry.**
 > The first 3A run on PR #78 pushed to `sandbox-wp.gh.io` successfully and *then* failed pushing
 > to `sandbox-wp-db`. That first push is the step that **moves** the draft to its published
