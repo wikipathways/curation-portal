@@ -377,18 +377,16 @@ account** `marvinm2`, permissions metadata read + contents/issues/pull_requests 
   at all. He is admin on 17 org repositories and on none of the four in play here. So adding a
   repository to this installation needs **admin on that repository**, not org ownership: an owner
   is one way, admin on the repo is the other, and the second is a much smaller ask.
-- **`sandbox-wp-db` cannot be requested, because the picker never offers it.** Searched
-  repeatedly across 08-20 and 08-21: `sandbox-wp-assets` and `sandbox-wp.gh.io` come back with
-  `request` badges, most other org repositories come back, and `sandbox-wp-db` returns nothing.
-  So the request could not be submitted — there is no row to select.
-- The likeliest reading is that it is **already in the installation**, since the equivalent page
-  for the personal installation (`/settings/installations/149294202`) lists its selected set
-  separately *below* the picker — `marvinm2/wikipathways-database` and `marvinm2/sandbox-wp-db` —
-  which is what an add-only control looks like. **Not confirmed**, deliberately: reading the org's
-  selected set needs `github.com/organizations/wikipathways/settings/installations/149425545`,
-  which 404s for a non-owner, and inferring from absence in a GitHub picker is exactly what went
-  wrong with the package's Add Repository dialog. The end-to-end test settles it for free — if the
-  bot lacks access, the first bot action fails loudly and it is one click to fix.
+- **The App already covers `wikipathways/sandbox-wp-db`. Confirmed positively, 2026-08-21**, once
+  admin made the repository's own page readable: `github.com/wikipathways/sandbox-wp-db/settings/
+  installations` lists `wikipathways-submit-bot-dev` under Installed GitHub Apps. So there was
+  never a request to make, and the cutover needs nothing here.
+- The picker had said so all along by omission — it offered `sandbox-wp-assets` and
+  `sandbox-wp.gh.io` with `request` badges and never `sandbox-wp-db` — but **absence in a picker
+  was the wrong instrument** and was left as a guess for two days on purpose, after the same
+  inference had been wrong about the GHCR package dialog. The repository's own settings page is
+  the instrument that answers it; reach for the page that lists what *is*, not the control that
+  lists what can be added.
 - **Do not touch the picker on `/settings/installations/149294202`.** That is the live
   installation the running service depends on; deselecting a repository there and saving would
   take the bot's access away from production.
@@ -447,6 +445,20 @@ is likewise a personal app, and it is what a submitter sees on the consent scree
 > rebind. So "drain the open pull requests" is a **hard prerequisite**, not tidiness. A durable
 > fix would add the base repo to the row's identity; the cheap one is to cut over with no
 > non-terminal review.
+
+> [!note] **2026-08-21, later: admin granted on three of the four.**
+> `curation-portal`, `sandbox-wp-db` and `sandbox-wp-assets` are `admin=true`; `sandbox-wp.gh.io`
+> stays `maintain`, which is enough to merge #2. What that settles:
+>
+> - **#77 is mergeable by Marvin now.** The protection reads
+>   `restrictions.users = [AlexanderPico, ayushi-agrawal-gladstone]` with **`enforce_admins:
+>   false`**, so an admin bypasses the push allowlist. `mergeStateStatus` still reports `BLOCKED`
+>   — that field describes the rule, not the bypass, so do not read it as "cannot merge".
+> - No required reviews and no required status checks: `required_pull_request_reviews` and
+>   `required_status_checks` are both null. The allowlist was the whole of it.
+> - `sandbox-wp-assets` has **zero deploy keys**, and admin now makes creating one possible.
+> - Actions secrets on `curation-portal` were already writable at `maintain`, so the image publish
+>   only ever needed a token to exist.
 
 ### What each grant would actually unblock
 
