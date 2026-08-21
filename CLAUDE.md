@@ -394,6 +394,23 @@ secrets and a redeploy. The **OAuth App** (`Ov23lig1IHGpNd2Y4l7u`) is functional
 any of this — its tokens are account-wide and do not care which repository is the target — but it
 is likewise a personal app, and it is what a submitter sees on the consent screen.
 
+> [!note] **2026-08-21: `maintain` on all four, not `admin`.** What that does and does not buy,
+> each probed rather than assumed:
+>
+> | | |
+> |---|---|
+> | Write Actions secrets | **yes** — a throwaway secret set and deleted on both `curation-portal` and `sandbox-wp-db` |
+> | Merge **#77** | **no** — still `BLOCKED`. Classic branch protection, not a ruleset (`/rules/branches/main` is empty), so its terms are unreadable without admin. No review is required and no status check is enforced, which leaves a push restriction Marvin is not on. |
+> | Deploy key on `sandbox-wp-assets` | **no** — `/keys` 404s; deploy keys are admin-only |
+> | Add a repo to the **App installation** | **no** — yesterday's picker showed `request` on `sandbox-wp.gh.io`, where he already had `maintain`. Maintain is not the threshold; admin is. |
+> | Merge **#2** | yes, and was already |
+>
+> **`GET /repos/{o}/{r}/actions/secrets/public-key` is not an admin test.** It answered happily
+> while he was `push`-only, because on a **public** repository anyone with read access may fetch
+> that key. Only writing a secret discriminates. Third false positive of this kind in two days,
+> after the `/protection` 404 and the package picker — **on GitHub, a read that succeeds rarely
+> tells you what a write will do.**
+
 ### What each grant would actually unblock
 
 No single repository makes this self-serve, because the blockers are spread across three
