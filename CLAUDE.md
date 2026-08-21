@@ -1197,18 +1197,22 @@ Settled 2026-08-05:
 
 Still open:
 
-- **The hostname moves to `curation.wikipathways.org`** (decided 2026-08-21, blocked on DNS).
-  Measured that day: the name already resolves — to Cloudflare (`104.21.33.100` /
-  `172.67.189.203`) — and answers a **GitHub Pages 404**, which is the wildcard trap
-  `docs/deployment.md` warns about, not a working record. It needs an **A record to
-  `81.169.246.233`, DNS-only (grey cloud)** in the WikiPathways Cloudflare zone, the same shape as
-  `sandbox.wikipathways.org`; Traefik issues over HTTP-01, so a proxied record cannot complete the
-  challenge. Add the Traefik Host rule **only after** `dig +short curation.wikipathways.org A`
-  returns the cluster IP, or the ACME challenge loops. Five things then move together: the router
-  rule, `*_APP_BASE_URL`, `*_OAUTH_REDIRECT_URI`, the OAuth App's callback URL and the GitHub
-  App's webhook URL — plus `tests/test_comment_links.py`'s `BASE` and the docs. **Keep
-  `upload.wikipathways.org` routed alongside it**: every mirror and welcome comment already posted
-  carries absolute links to that host.
+- **The hostname move to `curation.wikipathways.org` is half done** (2026-08-21). Egon added the
+  A record and both names now serve from the cluster: the router rule is
+  ``Host(`upload.wikipathways.org`) || Host(`curation.wikipathways.org`)`` and Traefik issued one
+  Let's Encrypt certificate covering both. **`upload.wikipathways.org` stays routed** — every
+  mirror and welcome comment already posted carries absolute links to it.
+  What has *not* moved, and must move together: `*_APP_BASE_URL`, `*_OAUTH_REDIRECT_URI`, the
+  **OAuth App's callback URL** and the GitHub App's webhook URL, plus
+  `tests/test_comment_links.py`'s `BASE` and the docs. The callback is the gate: flipping
+  `*_OAUTH_REDIRECT_URI` before GitHub knows the new URL fails every login with
+  `redirect_uri is not associated with this application`. An OAuth App holds several callbacks, so
+  registering the new one beside the old makes the switch windowless.
+  Two measurement traps hit on the day: the record was **proxied** at first and answered 200
+  through Cloudflare, which HTTP-01 cannot use — check for `server: cloudflare` / `cf-ray` before
+  believing a reading; and the workstation's own resolver served the stale proxied answer for
+  minutes after `dig @1.1.1.1` had the new one, so probe the origin with
+  `curl --resolve curation.wikipathways.org:443:81.169.246.233`.
 - Bot merge vs `main` branch protection interaction.
 - Whether to detach the sandbox from its parent so the testbed stops being a fork of a fork
   (a GitHub Support request; see the 2026-08-05 notes).
