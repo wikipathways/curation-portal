@@ -377,16 +377,32 @@ account** `marvinm2`, permissions metadata read + contents/issues/pull_requests 
   at all. He is admin on 17 org repositories and on none of the four in play here. So adding a
   repository to this installation needs **admin on that repository**, not org ownership: an owner
   is one way, admin on the repo is the other, and the second is a much smaller ask.
-- **The App already covers `wikipathways/sandbox-wp-db`. Confirmed positively, 2026-08-21**, once
-  admin made the repository's own page readable: `github.com/wikipathways/sandbox-wp-db/settings/
-  installations` lists `wikipathways-submit-bot-dev` under Installed GitHub Apps. So there was
-  never a request to make, and the cutover needs nothing here.
-- The picker had said so all along by omission — it offered `sandbox-wp-assets` and
-  `sandbox-wp.gh.io` with `request` badges and never `sandbox-wp-db` — but **absence in a picker
-  was the wrong instrument** and was left as a guess for two days on purpose, after the same
-  inference had been wrong about the GHCR package dialog. The repository's own settings page is
-  the instrument that answers it; reach for the page that lists what *is*, not the control that
-  lists what can be added.
+> [!warning] **The App has NO write access to `wikipathways/sandbox-wp-db`, and the repository's
+> own Integrations page says otherwise.** `github.com/wikipathways/sandbox-wp-db/settings/
+> installations` lists `wikipathways-submit-bot-dev` under "Installed GitHub Apps", and on the
+> strength of that this file recorded it as positively confirmed. **It is not.** Measured through
+> behaviour on 2026-08-21:
+>
+> - `POST /api/reviews/78/approve` → **502**, wrapping
+>   `add_labels(['accepted']) failed: 403 Resource not accessible by integration`.
+> - The App has posted **zero** comments on the org's PR #78. On the fork's PR #45 it posted two.
+>   So it is not the label endpoint — the installation cannot write to that repository at all.
+> - The `accepted` label exists on the org repo, and the App *declares* `issues: write`, so
+>   neither the label nor the App definition is the problem. The **installation** is: its
+>   repository selection, its granted permissions or its suspension state. Reading which needs
+>   `github.com/organizations/wikipathways/settings/installations/149425545`, which is owner-only.
+>
+> **A page listing an app is not evidence the app can write.** Third instance in three days of a
+> read that succeeds telling you nothing about a write — after the `/protection` 404 and the
+> `secrets/public-key` 200. The instrument that answered it was making the app do the thing.
+>
+> **The failure was invisible for the whole submission because it was designed to be.** The
+> welcome and mirror comments go through `upsert_issue_comment`, which is best-effort and swallows
+> `GitHubError` and `httpx.HTTPError` so a comment blip never fails an already-merged action. Here
+> that swallowed *every* write the bot attempted, and the first call that does not swallow —
+> approval — is where it surfaced. Worth a log line at minimum: a best-effort write that always
+> fails is indistinguishable from one that was never attempted.
+
 - **Do not touch the picker on `/settings/installations/149294202`.** That is the live
   installation the running service depends on; deselecting a repository there and saving would
   take the bot's access away from production.
