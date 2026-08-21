@@ -411,6 +411,34 @@ is likewise a personal app, and it is what a submitter sees on the consent scree
 > after the `/protection` 404 and the package picker — **on GitHub, a read that succeeds rarely
 > tells you what a write will do.**
 
+> [!warning] **Repointing `content_repo` silently rebinds every open review to a different
+> repository's pull requests.** `Review.pr_number` is the **primary key** and there is no
+> base-repo column — `head_repo` records only the head — so the table is scoped implicitly to
+> whatever `content_repo` happens to be. Measured 2026-08-21, the fork's seven open rows against
+> the same numbers on the org repo:
+>
+> | app row (fork) | resolves to on the org repo |
+> |---|---|
+> | #38 MadhushriMSV, open | **does not exist** |
+> | #39 MadhushriMSV, open | khanspers, "Added description to WP1008", open |
+> | #40 mkutmon update WP554, open | mkutmon, "update WP1", **closed** |
+> | #41 mkutmon new, open | mkutmon, "update WP1", **closed** |
+> | #43 traybug23 new, open | mkutmon, "update WP133", open |
+> | #44 marvinm2 new, open | mkutmon, "Update README.md", **closed** |
+> | #45 marvinm2 new, open | mkutmon, "update WP133", open |
+>
+> The three closed ones would be read as terminal and written to the wrong terminal state. The
+> three open ones are worse: they stay **actionable** in the dashboard, so approving one applies
+> the `accepted` label to a stranger's unrelated pull request on the org repo and dispatches 3A
+> against it. Same shape as the `WP0001` placeholder defect — **a fixed key that is only unique
+> within one repository is not an address once the repository can change.**
+>
+> **The fix is cheap because `reconcile()` selects `status.notin_(TERMINAL)`:** close the fork's
+> pull requests first, let the webhook terminalise the rows, and the cutover has nothing left to
+> rebind. So "drain the open pull requests" is a **hard prerequisite**, not tidiness. A durable
+> fix would add the base repo to the row's identity; the cheap one is to cut over with no
+> non-terminal review.
+
 ### What each grant would actually unblock
 
 No single repository makes this self-serve, because the blockers are spread across three
