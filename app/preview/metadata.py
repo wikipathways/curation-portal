@@ -114,6 +114,27 @@ def _text(el: ET.Element | None) -> str:
     return (el.text or "").strip() if el is not None else ""
 
 
+def _dedupe_ontology_tags(tags: list[OntologyTag]) -> list[OntologyTag]:
+    """Drop empty tags, and collapse a tag declared in both supported forms.
+
+    A GPML is free to carry the same annotation as an ``<OntologyTerm>`` element and as a
+    ``<bp:openControlledVocabulary>`` block — a round trip through a converter can leave both —
+    and counting it twice would make the review panel disagree with the file. Order is the
+    document's.
+    """
+    seen: set[tuple[str, str]] = set()
+    kept: list[OntologyTag] = []
+    for tag in tags:
+        if not tag.term and not tag.identifier:
+            continue  # an empty vocabulary block annotates nothing
+        key = (tag.identifier.casefold(), tag.term.casefold())
+        if key in seen:
+            continue
+        seen.add(key)
+        kept.append(tag)
+    return kept
+
+
 def parse_curation_metadata(gpml: bytes | str) -> CurationMetadata:
     """Extract the review-panel metadata from a GPML document. Never raises on malformed input —
     returns whatever could be parsed (an empty metadata object for non-GPML)."""
@@ -160,6 +181,18 @@ def parse_curation_metadata(gpml: bytes | str) -> CurationMetadata:
                     ontology=(el.get("Ontology") or "").strip(),
                 )
             )
+        elif kind == "openControlledVocabulary":
+            # The form PathVisio actually writes. Real WikiPathways GPML carries ontology tags
+            # here, inside <Biopax>, and never as the <OntologyTerm> element above — so reading
+            # only that one reported zero tags for every genuine pathway (WP1487 declares one,
+            # WP1518 two, and both parsed as none). Children are bp:TERM / bp:ID / bp:Ontology.
+            ontology_tags.append(
+                OntologyTag(
+                    term=_text(_find_child(el, "TERM")),
+                    identifier=_text(_find_child(el, "ID")),
+                    ontology=_text(_find_child(el, "Ontology")),
+                )
+            )
         elif kind == "BiopaxRef":
             cited_ids.add((el.text or "").strip())
         elif kind == "PublicationXref":
@@ -189,6 +222,6 @@ def parse_curation_metadata(gpml: bytes | str) -> CurationMetadata:
         description=description,
         data_nodes=data_nodes,
         references=references,
-        ontology_tags=ontology_tags,
+        ontology_tags=_dedupe_ontology_tags(ontology_tags),
         cited_reference_count=sum(1 for rid in reference_ids if rid and rid in cited_ids),
     )

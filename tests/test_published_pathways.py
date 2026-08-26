@@ -101,3 +101,30 @@ def test_the_checklist_a_curator_sees_for_real_content_has_no_dead_items(path: P
 def test_the_fixtures_are_actually_present():
     """A silent empty glob would make every parametrised test above vacuously pass."""
     assert len(_PUBLISHED) >= 2
+
+
+@pytest.mark.parametrize("path", _PUBLISHED, ids=lambda p: p.stem)
+def test_every_ontology_tag_a_published_pathway_declares_is_parsed(path: Path):
+    """The review panel must count the tags the file actually carries.
+
+    PathVisio writes ontology annotations as ``<bp:openControlledVocabulary>`` blocks inside
+    ``<Biopax>``. The parser used to read only the ``<OntologyTerm>`` element, which real
+    WikiPathways content never uses — so it reported zero tags for every published pathway,
+    and the checklist's ``ontology_tags`` item resolved to ``na`` on files carrying several.
+    It never blocked anything only because that item is not required.
+
+    Counting the raw elements rather than asserting a fixed number keeps this honest if the
+    fixture set grows.
+    """
+    raw = path.read_bytes()
+    declared = raw.count(b"<bp:openControlledVocabulary") + raw.count(b"<OntologyTerm")
+
+    parsed = parse_curation_metadata(raw).ontology_tags
+
+    assert len(parsed) == declared, (
+        f"{path.name} declares {declared} ontology tag(s), parser found {len(parsed)}"
+    )
+    # A tag the panel cannot render is no better than a missing one.
+    for tag in parsed:
+        assert tag.identifier, f"{path.name}: ontology tag with no identifier: {tag}"
+        assert tag.term, f"{path.name}: ontology tag with no term: {tag}"
