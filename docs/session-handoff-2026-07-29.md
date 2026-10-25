@@ -261,7 +261,7 @@ lifecycle now have a green run.
    **disabled** on that repo, there is no `SECURITY.md` in it, in `wikipathways-database`, or in
    the org `.github`, and the org publishes no contact address. So it goes by **email**, which
    needs Marvin. Draft, ready to send:
-   `~/Documents/Services/WikiPathways/sandbox-wp-db-disclosure-DRAFT.md` (deliberately outside
+   `../sandbox-wp-db-disclosure-DRAFT.md`, next to the checkout (deliberately outside
    this repo, which is public). Worth asking an org owner to enable PVR at the same time.
 
    §6.1 of `docs/sandbox-pipeline.md` described the defect in full in this public repo from the

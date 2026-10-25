@@ -565,7 +565,7 @@ git clone git@github.com:wikipathways/sandbox-wp-db.git
 cd sandbox-wp-db
 git checkout -b fix/publish-workflow
 
-CURATOR=~/Documents/Services/WikiPathways/wikipathways-curator
+CURATOR=/path/to/curation-portal   # your local checkout of this repository
 cp "$CURATOR"/sandbox-workflows/.github/workflows/*.yml .github/workflows/
 
 git add .github/workflows
