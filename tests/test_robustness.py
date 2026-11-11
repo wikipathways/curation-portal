@@ -133,3 +133,23 @@ def test_another_pull_request_still_blocks(session_factory):
     reg = PathwayLockRegistry(session_factory, open_pr_scanner=lambda wpid: 43)
     with pytest.raises(LockUnavailable):
         reg.acquire(554, "alice", own_pr=42)
+
+
+def test_the_apps_scanner_reports_which_pull_request_it_found(tmp_path):
+    """The scanner used to answer True/False, so ``own_pr`` could never match it."""
+
+    class OnePr(FakeGitHubClient):
+        def find_open_pr_touching(self, repo, path_prefix, *, limit=40):
+            return 42
+
+    settings = Settings(
+        _env_file=None,
+        database_url=f"sqlite:///{tmp_path / 'reg.db'}",
+        preview_cache_dir=str(tmp_path / "cache"),
+    )
+    app = build_app(settings)
+    with TestClient(app):
+        app.state.bot_client_provider = lambda: OnePr()
+        with pytest.raises(LockUnavailable):
+            app.state.locks.acquire(554, "alice", own_pr=43)
+        assert app.state.locks.acquire(554, "alice", own_pr=42).held_by == "alice"

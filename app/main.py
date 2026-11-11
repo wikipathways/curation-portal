@@ -507,7 +507,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             _make_floor_provider(settings, bot_app),
             ttl=timedelta(days=settings.wpid_reservation_ttl_days),
         )
-        def open_pr_touching_pathway(wpid: int) -> bool:
+        def open_pr_touching_pathway(wpid: int) -> int | None:
             """Is there already an open pull request against this pathway, ours or anyone's?
 
             The lock's own table only knows about edits that went through this app. Someone with
@@ -522,11 +522,11 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             """
             client = app.state.bot_client_provider()
             if client is None:
-                return False
+                return None
             try:
-                return client.find_open_pr_touching(
-                    settings.content_repo, f"pathways/WP{wpid}/"
-                ) is not None
+                # The number, not a bool: acquire() needs it to tell the caller's own pull
+                # request from a stranger's.
+                return client.find_open_pr_touching(settings.content_repo, f"pathways/WP{wpid}/")
             except Exception:  # noqa: BLE001 — a blocked update costs more than a missed scan
                 logging.getLogger("wpsubmit.locks").warning(
                     "could not scan %s for open pull requests touching WP%s; allowing the "
@@ -535,7 +535,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
                     wpid,
                     exc_info=True,
                 )
-                return False
+                return None
 
         app.state.locks = PathwayLockRegistry(
             session_factory,

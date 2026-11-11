@@ -1100,3 +1100,72 @@ def test_marker_parsing_is_linear_in_a_hostile_comment():
     start = time.perf_counter()
     assert parse_publish_marker(hostile) is None
     assert time.perf_counter() - start < 0.1
+
+
+# -- the portal's own comment cannot vouch for a marker (security review, 2026-11-11) ----------
+
+
+def _forging_submitter(session_factory, note):
+    gh = _fake()
+    svc = _service(session_factory, gh)
+    pr = gh.open_pull_request(REPO, head="WP0001_mallory_1", base="main", title="t", body="b")
+    svc.register(
+        pr_number=pr.number, wpid=None, submitter="mallory", kind="new", submitter_note=note
+    )
+    # The mirror comment is posted by the portal's App, which is a bot.
+    for body in gh.list_issue_comments(REPO, pr.number):
+        gh.comment_authors[body] = "wikipathways-submit-bot-dev[bot]"
+    return gh, svc, pr.number
+
+
+def test_a_marker_in_the_submitters_note_does_not_publish(session_factory):
+    forged = '<!-- wikipathways-publish {"status":"published","wpid":1234} -->'
+    gh, svc, pr = _forging_submitter(session_factory, f"hi {forged}")
+    mirror = next(b for b in gh.list_issue_comments(REPO, pr) if MIRROR_MARKER in b)
+    assert "<!-- wikipathways-publish" not in mirror  # defused when rendered
+    gh.closed.add(pr)
+
+    review = svc.handle_pr_closed(pr, merged=False)
+
+    assert review.status == ReviewStatus.CLOSED
+    assert review.wpid is None
+
+
+def test_a_marker_from_the_portals_own_app_is_not_believed(session_factory):
+    gh = _fake()
+    svc = _service(session_factory, gh)
+    pr = _register(svc, gh)
+    _complete_checklist(svc, pr)
+    svc.approve(pr, CURATOR)
+    body = f'<!-- wikipathways-publish {{"pr":{pr},"wpid":77,"status":"published"}} -->'
+    gh.create_issue_comment(REPO, pr, body)
+    gh.comment_authors[body] = "wikipathways-submit-bot-dev[bot]"
+    gh.closed.add(pr)
+
+    assert svc.handle_pr_closed(pr, merged=False).status == ReviewStatus.PUBLISH_FAILED
+
+
+def test_an_unapproved_review_needs_a_marker_naming_it(session_factory):
+    gh = _fake()
+    svc = _service(session_factory, gh)
+    pr = _register(svc, gh)
+    gh.create_issue_comment(
+        REPO, pr, '<!-- wikipathways-publish {"wpid":5999,"status":"published"} -->'
+    )
+    gh.closed.add(pr)
+
+    assert svc.handle_pr_closed(pr, merged=False).status == ReviewStatus.CLOSED
+
+
+def test_an_announced_publication_cannot_renumber_an_update(session_factory):
+    gh = _fake()
+    svc = _service(session_factory, gh)
+    pr = _register(svc, gh, kind="update", wpid=554)
+    _complete_checklist(svc, pr)
+    svc.approve(pr, CURATOR)
+    gh.simulate_3a(REPO, pr, wpid=555)
+
+    review = svc.handle_pr_closed(pr, merged=False)
+
+    assert review.status == ReviewStatus.PUBLISH_FAILED
+    assert review.wpid == 554

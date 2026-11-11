@@ -16,9 +16,14 @@ safety) is on branch `wave1-correctness`. What changed, and the invariants it ad
   submissions too.
 - **A close always reads the publish marker** in pipeline mode, whatever the row's status; a
   WPID can be recorded on a CLOSED row when GitHub corroborates it (marker or file on `main`).
-- **Markers are believed only from a bot account** (`login` ending `[bot]`) and only when their
-  `pr` field, if present, names this pull request. `list_issue_comments_by` returns authors.
-  Marker parsing is two `str.find` calls, not a regex (comments are attacker-controlled).
+- **Markers are believed only from `TRUSTED_MARKER_AUTHORS`** (`github-actions[bot]`, the identity
+  the repository's workflows post as), never from the portal's own comments (mirror/welcome),
+  and only when their `pr` field, if present, names this pull request; for a row that was never
+  approved the `pr` field is required. Not "any bot": the portal's App is a bot and its mirror
+  quotes the submitter's note, which is why `<!--`/`-->` in the note are defused when rendered.
+  `list_issue_comments_by` returns authors. Marker parsing is two `str.find` calls, not a regex.
+  An announced WPID is held to the same limits as a hand-recorded one (>= 1, an update keeps its
+  id).
 - **`gpml.readable` (block) runs first**: the upload must be well-formed XML with no DOCTYPE or
   ENTITY, and the board and line-thickness rules walk the parsed tree. The old regexes were
   quadratic on crafted input (5 s for 78 KB on the unauthenticated `/api/validate`).

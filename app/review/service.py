@@ -228,7 +228,7 @@ def render_mirror_comment(
     if review.submitter_note:
         quoted = "\n".join(
             f"> {line}" if line.strip() else ">"
-            for line in review.submitter_note.strip().splitlines()
+            for line in _defuse_comment_syntax(review.submitter_note).strip().splitlines()
         )
         lines += ["", "**What the submitter said about this change:**", "", quoted]
     lines += [
@@ -374,10 +374,26 @@ def _marker_payload(body: str, marker: str) -> dict | None:
     return payload if isinstance(payload, dict) else None
 
 
+#: The accounts whose comments may carry a workflow's marker: the identity the target
+#: repository's Actions post as (``GITHUB_TOKEN``), measured on the sandbox's PRs #79-#84.
+#: Deliberately not "any bot". The portal's own App is a bot too, and its mirror comment quotes
+#: what the submitter typed — so "any bot" let a submitter put a publish marker in their note
+#: and have the portal's own comment vouch for it.
+TRUSTED_MARKER_AUTHORS = frozenset({"github-actions[bot]"})
+
+
 def _trusted_author(login: str) -> bool:
-    """Could this account have posted a workflow's marker? Bots only — the Actions bot that runs
-    the repository's workflows, or an App. A person can type the same comment."""
-    return login.endswith("[bot]")
+    """Could this account have posted a workflow's marker? A person can type the same comment."""
+    return login in TRUSTED_MARKER_AUTHORS
+
+
+def _defuse_comment_syntax(text: str) -> str:
+    """Make HTML-comment delimiters in user text inert, so it can never carry a hidden marker.
+
+    GitHub renders ``&lt;!--`` as the literal ``<!--``, so the reader sees exactly what was
+    typed; only its power to hide text, or to look like one of the markers the app reads, goes.
+    """
+    return text.replace("<!--", "&lt;!--").replace("-->", "--&gt;")
 
 
 def parse_publish_marker(body: str) -> dict | None:
@@ -405,7 +421,9 @@ def parse_testing_marker(body: str) -> dict | None:
     return verdicts or None
 
 
-def _marker_is_for(payload: dict, author: str, pr_number: int) -> bool:
+def _marker_is_for(
+    payload: dict, author: str, pr_number: int, *, require_pr: bool = False
+) -> bool:
     """Should a publish marker found on ``pr_number`` be believed?
 
     Posted by a bot, and — when it names a pull request — naming this one. A person can type a
@@ -417,7 +435,7 @@ def _marker_is_for(payload: dict, author: str, pr_number: int) -> bool:
         return False
     named = payload.get("pr")
     if named is None:
-        return True
+        return not require_pr
     try:
         return int(named) == pr_number
     except (TypeError, ValueError):
@@ -1434,7 +1452,7 @@ class CurationService:
         except (GitHubError, httpx.HTTPError):
             return False
 
-    def _publish_marker(self, pr_number: int) -> dict | None:
+    def _publish_marker(self, pr_number: int, *, require_pr: bool = False) -> dict | None:
         """The target repo's publish announcement for this PR, newest first, or None.
 
         Returns the whole payload rather than just the id, because a marker saying
@@ -1456,10 +1474,12 @@ class CurationService:
             return None
         newest: dict | None = None
         for author, body in reversed(comments):
+            if MIRROR_MARKER in body or WELCOME_MARKER in body:
+                continue  # the portal's own comments quote user text; never evidence
             payload = parse_publish_marker(body)
             if not payload:
                 continue
-            if not _marker_is_for(payload, author, pr_number):
+            if not _marker_is_for(payload, author, pr_number, require_pr=require_pr):
                 continue
             if payload.get("status") == "published":
                 return payload
@@ -1590,7 +1610,9 @@ class CurationService:
         # after the dispatcher had already started the publish run. Writing CLOSED here is
         # terminal, and the announced WPID would be lost for good — so ask before deciding.
         if self.is_pipeline_mode and not awaiting_publication:
-            marker = self._publish_marker(pr_number)
+            # Stricter than for an approved review: the marker must name this pull request,
+            # because nothing a curator did stands behind this row.
+            marker = self._publish_marker(pr_number, require_pr=True)
             if marker and marker.get("status") == "published":
                 logger.warning(
                     "review %s closed while not approved, but the repository announced a "
@@ -1688,6 +1710,7 @@ class CurationService:
             if review is None:
                 return None
             wpid = review.wpid
+            kind = review.kind
             was = (review.status, review.decision_note)
 
         if marker is None:
@@ -1701,6 +1724,17 @@ class CurationService:
                 # It says published but names no id. For an update that is fine — the id never
                 # changes — but a new pathway's whole identity was in that field.
                 published_wpid = wpid
+            # The same limits a curator recording an id by hand is held to.
+            renumbered = wpid is not None and kind == "update" and published_wpid != wpid
+            if published_wpid is not None and (published_wpid < 1 or renumbered):
+                logger.warning(
+                    "review %s: ignoring an announced WP%s (review is %s WP%s)",
+                    pr_number,
+                    published_wpid,
+                    kind,
+                    wpid,
+                )
+                published_wpid = None
 
         note: str | None = None
         if published_wpid is None:
@@ -1832,7 +1866,7 @@ class CurationService:
         except (GitHubError, httpx.HTTPError):
             return None
         for author, body in reversed(comments):
-            if not _trusted_author(author):
+            if not _trusted_author(author) or MIRROR_MARKER in body or WELCOME_MARKER in body:
                 continue
             verdicts = parse_testing_marker(body)
             if verdicts:

@@ -29,7 +29,7 @@ from app.models import PathwayLock, utcnow
 logger = logging.getLogger("wpsubmit.locks")
 
 #: Callable ``(wpid) -> bool``: True if an open GitHub PR already touches this pathway.
-OpenPrScanner = Callable[[int], bool]
+OpenPrScanner = Callable[[int], int | bool | None]
 
 
 class LockUnavailable(RuntimeError):
@@ -153,7 +153,10 @@ class PathwayLockRegistry:
         # writer this table cannot see, and starting a second edit on top of one is the
         # divergence the lock exists to prevent. Only worth the GitHub read on a fresh check-out.
         found = self._open_pr_scanner(wpid) if self._open_pr_scanner is not None else None
-        if found and not (own_pr is not None and found == own_pr):
+        # A scanner answering only yes/no (``True``) cannot say whose pull request it found, so
+        # it never matches ``own_pr`` — and ``True == 1`` must not count as a match either.
+        mine = own_pr is not None and not isinstance(found, bool) and found == own_pr
+        if found and not mine:
             raise LockUnavailable(
                 "an open GitHub PR already touches this pathway (opened outside the app)"
             )
