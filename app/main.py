@@ -245,19 +245,36 @@ def get_bot_optional(request: Request) -> GitHubClient | None:
     as a submitter's or curator's personal token (scaffolding-plan §3). Used where the bot is
     optional (mirror comments are best-effort); ``get_bot_client`` is the strict variant.
     """
+    client, _ = _bot_or_reason(request)
+    return client
+
+
+def _bot_or_reason(request: Request) -> tuple[GitHubClient | None, str | None]:
+    """The bot client, or None and why not.
+
+    Minting the installation token is a network call to GitHub, and it fails like one: a GitHub
+    outage, a rotated key, an installation removed from the repository. Every page that merely
+    *uses* the bot when it can — the dashboard, the review page, the webhook — used to answer 500
+    for all of those. They degrade instead, and the one thing that needs the bot says why.
+    """
     bot_app: GitHubApp | None = request.app.state.bot_app
     if bot_app is None:
-        return None
-    return HttpGitHubClient(bot_app.installation_token(), identity="bot")
+        return None, "GitHub App (bot) identity is not configured"
+    try:
+        token = bot_app.installation_token()
+    except Exception as exc:  # noqa: BLE001 — any failure here means "no bot right now"
+        logging.getLogger("wpsubmit.auth").warning(
+            "could not mint a GitHub App installation token: %s", exc, exc_info=True
+        )
+        return None, "the portal could not authenticate to GitHub as its App; try again shortly"
+    return HttpGitHubClient(token, identity="bot"), None
 
 
 def get_bot_client(request: Request) -> GitHubClient:
-    """The bot GitHub client; 503 if the GitHub App identity is not configured."""
-    client = get_bot_optional(request)
+    """The bot GitHub client; 503 if the GitHub App identity is unavailable."""
+    client, reason = _bot_or_reason(request)
     if client is None:
-        raise HTTPException(
-            status_code=503, detail="GitHub App (bot) identity is not configured"
-        )
+        raise HTTPException(status_code=503, detail=reason)
     return client
 
 
@@ -1283,6 +1300,10 @@ def build_app(settings: Settings | None = None) -> FastAPI:
     ) -> SubmitResponse:
         target = _write_target(settings, github, bot, submitter)
         writer = target.client
+        # The submitter's own open pull request on this pathway, which the lock's scan must not
+        # mistake for a stranger's once their lock has expired.
+        mine = _curation(request).find_open_review_for_pathway(wpid)
+        own_pr = mine.pr_number if mine is not None and mine.submitter == submitter else None
         service = UpdateService(
             request.app.state.locks,
             writer,
@@ -1301,6 +1322,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
                     submitter=submitter,
                     author_email=_submitter_email(settings, submitter),
                     description=description,
+                    own_pr=own_pr,
                 )
             except WriteDenied as denied:
                 # Same boundary as the submit route: create_branch is the first mutating call, so
@@ -1323,6 +1345,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
                     submitter=submitter,
                     author_email=_submitter_email(settings, submitter),
                     description=description,
+                    own_pr=own_pr,
                 )
         except InvalidGpml as exc:
             raise HTTPException(status_code=422, detail={"errors": exc.reasons}) from exc

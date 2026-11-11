@@ -114,12 +114,14 @@ class UpdateService:
         submitter: str,
         author_email: str | None = None,
         description: str | None = None,
+        own_pr: int | None = None,
     ) -> UpdateResult:
         # Validate before taking the lock — a malformed revision shouldn't check out the pathway.
         validate_gpml(gpml)
 
         # Check out the pathway (may raise LockUnavailable → surfaced as 409 upstream).
-        self._locks.acquire(wpid, submitter)
+        # ``own_pr`` is this submitter's open review on the pathway, if any: see acquire().
+        self._locks.acquire(wpid, submitter, own_pr=own_pr)
 
         try:
             wpid_str = format_wpid(wpid)

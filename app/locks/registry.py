@@ -110,12 +110,23 @@ class PathwayLockRegistry:
         return self.get(wpid) is not None
 
     def acquire(
-        self, wpid: int, held_by: str, *, pr_number: int | None = None
+        self,
+        wpid: int,
+        held_by: str,
+        *,
+        pr_number: int | None = None,
+        own_pr: int | None = None,
     ) -> PathwayLock:
         """Check out a pathway for editing.
 
         Refuses if the pathway is already checked out by someone else, or if an open GitHub PR
         already touches it. Re-acquiring one you already hold refreshes the TTL.
+
+        ``own_pr`` is the caller's own open pull request on this pathway, if it has one. The scan
+        cannot tell it from a stranger's: its "one of ours" test is a branch name on the content
+        repo, which a fork-mode branch never matches. So once a submitter's lock expired — 14
+        days in the queue is enough — their re-upload answering a change request was refused as
+        "opened outside the app", by their own pull request.
         """
         self.expire_stale()
 
@@ -141,7 +152,8 @@ class PathwayLockRegistry:
         # Nobody holds it here — but a raw pull request opened outside the app is an external
         # writer this table cannot see, and starting a second edit on top of one is the
         # divergence the lock exists to prevent. Only worth the GitHub read on a fresh check-out.
-        if self._open_pr_scanner is not None and self._open_pr_scanner(wpid):
+        found = self._open_pr_scanner(wpid) if self._open_pr_scanner is not None else None
+        if found and not (own_pr is not None and found == own_pr):
             raise LockUnavailable(
                 "an open GitHub PR already touches this pathway (opened outside the app)"
             )

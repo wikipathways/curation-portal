@@ -19,6 +19,8 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterable
 from datetime import timedelta
 
+import httpx
+
 from app.github import GitHubClient, GitHubError
 
 
@@ -68,13 +70,16 @@ class GitHubTeamCurators(CuratorRegistry):
         now = self._clock()
         if self._cache is not None and now - self._fetched_at < self._ttl:
             return set(self._cache)
-        client = self._client_provider()
+        try:
+            client = self._client_provider()
+        except Exception:  # noqa: BLE001 — minting the bot token failed; same as no bot
+            client = None
         if client is None:
             # No bot configured: can't resolve. Keep any prior cache; else nobody is a curator.
             return set(self._cache) if self._cache is not None else set()
         try:
             logins = set(client.list_team_members(self._org, self._team_slug))
-        except GitHubError:
+        except (GitHubError, httpx.HTTPError):
             # Transient failure: serve stale membership rather than lock everyone out.
             return set(self._cache) if self._cache is not None else set()
         self._cache = logins

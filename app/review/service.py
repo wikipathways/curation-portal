@@ -1250,6 +1250,7 @@ class CurationService:
             wpid = review.wpid
             submitter = review.submitter
             was_approved = review.status == ReviewStatus.APPROVED
+            before = (review.status, review.decided_by, review.decision_note)
 
         # Record the decision *before* touching GitHub. Removing the `accepted` label below
         # makes GitHub deliver an `unlabeled` event straight back to our own webhook, and
@@ -1261,7 +1262,6 @@ class CurationService:
             review.decided_by = curator
             review.decision_note = note.strip() or None
             s.commit()
-            self._free_preview(review.pr_number)
 
         # Names the submitter, not just the curator: a rejection is the message that most
         # needs to reach them, and under the bot and user identities the pull request is
@@ -1274,20 +1274,38 @@ class CurationService:
         except (GitHubError, httpx.HTTPError):
             pass
 
-        if self.is_pipeline_mode:
-            # A pull request carrying both `accepted` and `rejected` is a pull request whose
-            # next dispatcher run is a coin toss. Take the approval back before handing it to
-            # the rejection workflow.
-            if was_approved:
-                try:
-                    self._github.remove_label(self._repo, pr_number, self._label_accepted)
-                except (GitHubError, httpx.HTTPError):
-                    pass
-            self._github.add_labels(self._repo, pr_number, [self._label_rejected])
-        else:
-            # No pipeline to defer to; closing the PR is the rejection.
-            self._github.close_pull_request(self._repo, pr_number)
+        approval_withdrawn = False
+        try:
+            if self.is_pipeline_mode:
+                # A pull request carrying both `accepted` and `rejected` is a pull request whose
+                # next dispatcher run is a coin toss. Take the approval back before handing it
+                # to the rejection workflow.
+                if was_approved:
+                    try:
+                        self._github.remove_label(self._repo, pr_number, self._label_accepted)
+                        approval_withdrawn = True
+                    except (GitHubError, httpx.HTTPError):
+                        pass
+                self._github.add_labels(self._repo, pr_number, [self._label_rejected])
+            else:
+                # No pipeline to defer to; closing the PR is the rejection.
+                self._github.close_pull_request(self._repo, pr_number)
+        except (GitHubError, httpx.HTTPError):
+            # The rejection did not happen on GitHub, so it must not stand here: REJECTED is
+            # terminal, and a curator could never retry it. Put the row back — to OPEN if the
+            # approval label already came off, since an approval without its label is not one.
+            with self._session_factory() as s:
+                review = s.get(Review, pr_number)
+                status, decided_by, decision_note = before
+                if approval_withdrawn and status == ReviewStatus.APPROVED:
+                    status = ReviewStatus.OPEN
+                review.status = status
+                review.decided_by = decided_by
+                review.decision_note = decision_note
+                s.commit()
+            raise
 
+        self._free_preview(pr_number)
         self._free_pathway(wpid, curator, return_wpid=True, pr_number=pr_number)
 
         with self._session_factory() as s:

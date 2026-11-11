@@ -15,6 +15,11 @@ from pydantic_settings import BaseSettings, EnvSettingsSource, SettingsConfigDic
 _LEGACY_ENV_PREFIX = "WPSUBMIT_"
 
 
+#: The session secret used when none is configured. Only ever acceptable in local development;
+#: ``Settings._deployment_secrets`` refuses it behind TLS.
+_DEV_SESSION_SECRET = "dev-insecure-change-me"
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="PORTAL_", env_file=".env", extra="ignore")
 
@@ -242,12 +247,37 @@ class Settings(BaseSettings):
     # public_repo: push branches + open PRs on the public content repo; read:user: identity.
     oauth_scope: str = "public_repo read:user"
     # Signs the session cookie holding the user token. MUST be overridden in production.
-    session_secret: str = "dev-insecure-change-me"
+    session_secret: str = _DEV_SESSION_SECRET
     # Set True behind TLS so the session cookie is only sent over HTTPS (issue #4).
     session_https_only: bool = False
     # Encrypts the OAuth token at rest inside the session (issue #4). A Fernet key; if unset a
     # key is derived from session_secret. Set/rotate independently in production.
     token_encryption_key: str | None = None
+
+    @model_validator(mode="after")
+    def _deployment_secrets(self) -> Settings:
+        """Refuse to start a TLS deployment on the development defaults.
+
+        ``session_https_only`` is what a real deployment sets and what local development does
+        not, so it is the signal. Behind it, two defaults are dangerous rather than merely wrong:
+        the session secret is a constant printed in this file, so anyone could sign a session
+        cookie; and the database URL falls back to a SQLite file inside the container, so every
+        review would vanish at the next restart. Both happen silently when a Docker secret is
+        missing (the entrypoint loads them only if the file exists), so they fail loudly here.
+        """
+        if not self.session_https_only:
+            return self
+        if self.session_secret == _DEV_SESSION_SECRET:
+            raise ValueError(
+                "session_https_only is set but session_secret is the development default; "
+                "provide WPSUBMIT_SESSION_SECRET (the wpsubmit_session_secret Docker secret)"
+            )
+        if self.database_url.startswith("sqlite"):
+            raise ValueError(
+                "session_https_only is set but database_url is SQLite; provide "
+                "WPSUBMIT_DATABASE_URL (the wpsubmit_database_url Docker secret)"
+            )
+        return self
 
     @model_validator(mode="after")
     def _pipeline_defaults(self) -> Settings:
