@@ -2,6 +2,37 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Current state (2026-11-11) — read this before the history below
+
+A review of the whole portal (2026-11-11) produced a refinement plan; Wave 1 (correctness and
+safety) is on branch `wave1-correctness`. What changed, and the invariants it adds:
+
+- **An approval is bound to a commit.** Every write path records the commit the app made
+  (`put_file` returns it → `Review.head_sha`). `approve()` refuses (`ReviewStale`, 409) when the
+  pull request's head has moved, and a direct-mode merge passes `sha=`. A `synchronize` on a
+  tracked portal row runs `handle_head_moved`, which withdraws an approval and removes `accepted`.
+  Adopted rows are refreshed on `synchronize` even with auto-adoption off.
+- **The webhook ignores every repository but `content_repo`.** `base_repo` is written for portal
+  submissions too.
+- **A close always reads the publish marker** in pipeline mode, whatever the row's status; a
+  WPID can be recorded on a CLOSED row when GitHub corroborates it (marker or file on `main`).
+- **Markers are believed only from a bot account** (`login` ending `[bot]`) and only when their
+  `pr` field, if present, names this pull request. `list_issue_comments_by` returns authors.
+  Marker parsing is two `str.find` calls, not a regex (comments are attacker-controlled).
+- **`gpml.readable` (block) runs first**: the upload must be well-formed XML with no DOCTYPE or
+  ENTITY, and the board and line-thickness rules walk the parsed tree. The old regexes were
+  quadratic on crafted input (5 s for 78 KB on the unauthenticated `/api/validate`).
+- **Nothing blocking runs on the event loop.** Upload routes read the body asynchronously and
+  hand the rest to `run_in_threadpool`; the webhook's GitHub work runs there too.
+- **Behind TLS** (`session_https_only`), the dev session secret and a SQLite URL refuse to start.
+- **The database is backed up nightly** (`cronjobs_wikipathways-submit-backup`, cluster doc §
+  Backups). Before 2026-11-11 it had no backup.
+- `docs/production-readiness.md` lists what stands between this portal and
+  `wikipathways-database`; the sandbox remains the working target.
+
+FakeGitHubClient now advances a branch's head on every `put_file` (`branch_bases` records where a
+branch was cut), looks a fork PR's head up in the head repo, and honours `merge(sha=)`.
+
 ## Project status
 
 **MVP-2 in progress — the transactional core is built and tested.** Read `docs/design-proposal.md`
