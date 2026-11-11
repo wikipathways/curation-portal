@@ -1652,6 +1652,10 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except NotACurator as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except ReviewNotActionable as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         return _detail(r)
 
     @app.post("/api/pathways/{wpid}/release")

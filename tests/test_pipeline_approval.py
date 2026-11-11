@@ -981,3 +981,77 @@ def test_direct_mode_never_warns_against_merging(session_factory):
 
     body = gh.comments[(REPO, pr)][MIRROR_MARKER]
     assert "Do not merge" not in body
+
+
+# -- a publication the row never saw approved (2026-11 review, live row #78) -----------------
+
+
+def test_a_publication_that_closes_an_unapproved_review_is_still_recorded(session_factory):
+    """The `accepted` delivery was lost, 3A published anyway, and the close used to write CLOSED.
+
+    CLOSED is terminal, so the announced WPID was gone for good — live review #78 is WP5425 on
+    GitHub and `closed, wpid=None` in the portal.
+    """
+    gh = _fake()
+    svc = _service(session_factory, gh)
+    pr = _register(svc, gh)
+
+    gh.simulate_3a(REPO, pr, wpid=5999)
+    review = svc.handle_pr_closed(pr, merged=False)
+
+    assert review.status == ReviewStatus.PUBLISHED
+    assert review.wpid == 5999
+
+
+def test_a_change_request_racing_the_publish_run_does_not_lose_the_wpid(session_factory):
+    gh = _fake()
+    svc = _service(session_factory, gh)
+    pr = _register(svc, gh)
+    _complete_checklist(svc, pr)
+    svc.approve(pr, CURATOR)
+    # The dispatcher has already started 3A when the curator takes the approval back.
+    svc.request_changes(pr, CURATOR, "wait")
+    gh.simulate_3a(REPO, pr, wpid=6000)
+
+    review = svc.handle_pr_closed(pr, merged=False)
+
+    assert review.status == ReviewStatus.PUBLISHED
+    assert review.wpid == 6000
+
+
+def test_a_closed_review_can_take_a_corroborated_wpid(session_factory):
+    gh = _fake()
+    svc = _service(session_factory, gh)
+    pr = _register(svc, gh)
+    svc.handle_pr_closed(pr, merged=False)  # closed, no marker: CLOSED
+    assert svc.get(pr).status == ReviewStatus.CLOSED
+
+    # Not corroborated by anything on GitHub: refused, not a 500.
+    with pytest.raises(ReviewNotActionable):
+        svc.record_published_wpid(pr, 5425, CURATOR)
+
+    gh.existing_files[(REPO, "pathways/WP5425/WP5425.gpml")] = "sha-wp5425"
+    review = svc.record_published_wpid(pr, 5425, CURATOR)
+    assert review.status == ReviewStatus.PUBLISHED
+    assert review.wpid == 5425
+
+
+@pytest.mark.parametrize("bad", [0, -3])
+def test_a_wpid_that_is_not_one_is_refused(session_factory, bad):
+    gh = _fake()
+    svc = _service(session_factory, gh)
+    pr = _register(svc, gh)
+    _complete_checklist(svc, pr)
+    svc.approve(pr, CURATOR)
+    with pytest.raises(ValueError):
+        svc.record_published_wpid(pr, bad, CURATOR)
+
+
+def test_an_update_cannot_be_recorded_under_another_id(session_factory):
+    gh = _fake()
+    svc = _service(session_factory, gh)
+    pr = _register(svc, gh, kind="update", wpid=554)
+    _complete_checklist(svc, pr)
+    svc.approve(pr, CURATOR)
+    with pytest.raises(ValueError):
+        svc.record_published_wpid(pr, 555, CURATOR)

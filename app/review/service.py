@@ -1319,14 +1319,40 @@ class CurationService:
             review = s.get(Review, pr_number)
             if review is None:
                 raise ReviewNotFound(f"no review for PR #{pr_number}")
-            # PUBLISHED is terminal, so this cannot be undone by any later reconcile. Recording
-            # an id on a rejected or still-open review would overwrite its decision note and
-            # freeze the mistake.
-            if review.status not in _AWAITING_WPID:
+            if wpid < 1:
+                raise ValueError(f"WP{wpid} is not a WikiPathways identifier")
+            if review.kind == "update" and review.wpid is not None and review.wpid != wpid:
+                raise ValueError(
+                    f"PR #{pr_number} updates WP{review.wpid}; an update keeps its identifier"
+                )
+            status = review.status
+            other = s.execute(
+                select(Review.pr_number).where(
+                    Review.wpid == wpid,
+                    Review.status == ReviewStatus.PUBLISHED,
+                    Review.pr_number != pr_number,
+                    Review.kind == "new",
+                )
+            ).first()
+            if other is not None and review.kind == "new":
+                raise ValueError(f"WP{wpid} is already recorded as published by PR #{other[0]}")
+
+        # PUBLISHED is terminal, so this cannot be undone by any later reconcile. Recording an id
+        # on a rejected or still-open review would overwrite its decision note and freeze the
+        # mistake. CLOSED is the one terminal state it may correct, because a publication that
+        # closed while the row was not approved used to land there — but only when GitHub itself
+        # corroborates the id, since nothing else would ever notice a wrong one.
+        if status not in _AWAITING_WPID:
+            if status != ReviewStatus.CLOSED or not self._publication_corroborated(
+                pr_number, wpid
+            ):
                 raise ReviewNotActionable(
-                    f"PR #{pr_number} is {_plain(review.status)}; there is no publication "
+                    f"PR #{pr_number} is {_plain(status)}; there is no publication "
                     "waiting to be recorded on it"
                 )
+
+        with self._session_factory() as s:
+            review = s.get(Review, pr_number)
             held = review.wpid
             review.wpid = wpid
             review.status = ReviewStatus.PUBLISHED
@@ -1339,6 +1365,22 @@ class CurationService:
         # the lock on the pathway it edits, and nothing else will release it now.
         self._free_pathway(held, curator, pr_number=pr_number)
         return self.get(pr_number)
+
+    def _publication_corroborated(self, pr_number: int, wpid: int) -> bool:
+        """Does GitHub say ``pr_number`` was published as ``wpid``? The marker, or the file."""
+        marker = self._publish_marker(pr_number)
+        if marker and marker.get("status") == "published":
+            try:
+                return int(marker.get("wpid")) == wpid
+            except (TypeError, ValueError):
+                return False
+        if self._github is None:
+            return False
+        path = f"pathways/WP{wpid}/WP{wpid}.gpml"
+        try:
+            return self._github.get_file_sha(self._repo, self._default_branch, path) is not None
+        except (GitHubError, httpx.HTTPError):
+            return False
 
     def _publish_marker(self, pr_number: int) -> dict | None:
         """The target repo's publish announcement for this PR, newest first, or None.
@@ -1489,6 +1531,20 @@ class CurationService:
         if awaiting_publication and not merged:
             return self._settle_publication(pr_number)
 
+        # The repository may have published a pull request this row never saw approved: the
+        # `accepted` label went on while its delivery was lost, or a curator requested changes
+        # after the dispatcher had already started the publish run. Writing CLOSED here is
+        # terminal, and the announced WPID would be lost for good — so ask before deciding.
+        if self.is_pipeline_mode and not awaiting_publication:
+            marker = self._publish_marker(pr_number)
+            if marker and marker.get("status") == "published":
+                logger.warning(
+                    "review %s closed while not approved, but the repository announced a "
+                    "publication; recording it",
+                    pr_number,
+                )
+                return self._settle_publication(pr_number, marker=marker)
+
         # Lock always frees; the reservation is promoted (merged) or returned to the pool (closed).
         # release() no-ops on a MERGED/absent reservation, so this is safe for update PRs too.
         # A review with no WPID yet holds neither a lock nor a reservation, so there is nothing
@@ -1563,7 +1619,7 @@ class CurationService:
         )
         return True
 
-    def _settle_publication(self, pr_number: int) -> Review | None:
+    def _settle_publication(self, pr_number: int, *, marker: dict | None = None) -> Review | None:
         """Decide what an approved-then-closed PR actually means, and record it.
 
         The target repo's publish workflow announces what it did in a marker comment. That
@@ -1580,7 +1636,8 @@ class CurationService:
             wpid = review.wpid
             was = (review.status, review.decision_note)
 
-        marker = self._publish_marker(pr_number)
+        if marker is None:
+            marker = self._publish_marker(pr_number)
         announced = (marker or {}).get("status")
         published_wpid: int | None = None
         if announced == "published":
