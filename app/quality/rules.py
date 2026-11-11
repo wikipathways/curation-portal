@@ -41,6 +41,7 @@ checklist item, give it a ``ChecklistBinding`` rather than writing a second impl
 from __future__ import annotations
 
 import re
+import xml.etree.ElementTree as ET
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
@@ -61,31 +62,43 @@ _BLOCK_ORGANISM = "root <Pathway> has no Organism (required for metadata + rende
 #: is what both share.
 _GPML_NAMESPACE = "http://pathvisio.org/GPML"
 
+#: Why a file that is not readable XML is refused. Unlike the four above these are new, so they
+#: are written for the person reading them in the upload form: no parser vocabulary, and the
+#: one thing they can do about it. ``{where}`` is filled in from the parser's position.
+_BLOCK_UNREADABLE = (
+    "This file is not valid XML, so it cannot be read as a GPML pathway. The first problem is "
+    "{where}. This usually means a tag that is opened but never closed, or a stray “<” or “&” "
+    "character. Saving the pathway again from PathVisio writes a valid file."
+)
+_BLOCK_DOCTYPE = (
+    "This file contains a document type declaration (<!DOCTYPE …> or <!ENTITY …>). GPML never "
+    "uses one and the portal does not accept files that do. Remove it and upload the file again."
+)
+
+#: Markup that only a document type declaration can carry. Refused before parsing rather than
+#: handed to the parser, because entity definitions are how a few hundred bytes of XML expand to
+#: gigabytes, and nothing a pathway needs is expressed with them. A plain substring test, so it is
+#: linear whatever the input looks like.
+_DTD_MARKERS = ("<!DOCTYPE", "<!ENTITY")
+
 #: An empty Biopax citation id. ``meta-data-action`` refuses a Citation with neither a valid xref
 #: nor a url, so one of these kills the ``metadata`` job — and that job is where most of the target
 #: repository's failed runs die, taking the submitter's tables and draft page with them. The
 #: pipeline rewrites them to ``NA`` before running, so this is a warning about the source file.
 #: Same pattern as ``mvp1/validate_pathway.py``'s, which mirrors the ``sed`` in the repo's own
-#: ``on-gpml-change_local.sh``.
-_EMPTY_BP_ID_RE = re.compile(r"<bp:ID\b[^>]*/>|<bp:ID\b[^>]*>\s*</bp:ID>")
-
-#: The root ``<Graphics BoardWidth= BoardHeight= />`` that gives a pathway its canvas. Every GPML
-#: PathVisio writes has one, and a hand-made file easily does not — the app's own renderer copes,
-#: so nothing used to notice.
+#: ``on-gpml-change_local.sh`` — kept as text matching for that parity, the ``sed`` is text too.
 #:
-#: Matched on ``BoardWidth`` rather than by walking to the root's ``<Graphics>`` child, because a
-#: ``BoardWidth`` attribute appears nowhere else in the schema, and the cheap test is exact here.
-_BOARD_RE = re.compile(r"<Graphics\b[^>]*\bBoardWidth=")
+#: ``[^<>]*`` rather than ``[^>]*``: the two agree inside any real tag, since an attribute value
+#: may not contain ``<``, but ``[^>]*`` let every unterminated ``<bp:ID`` (inside a comment, say)
+#: scan on to the next ``>`` however far away, which made a crafted file quadratic. Stopping at
+#: the next ``<`` bounds each attempt by the distance to the next tag.
+_EMPTY_BP_ID_RE = re.compile(r"<bp:ID\b[^<>]*/>|<bp:ID\b[^<>]*>\s*</bp:ID>")
 
-#: The line elements whose ``<Graphics>`` ``GPML2013aReader.readLineStyleProperty`` reads, and the
-#: opening ``<Graphics>`` tag inside one. ``readLineElement`` is shared by both element types, so
-#: both are checked — ``<Interaction>`` is the one measured (issue #26), ``<GraphicalLine>`` goes
-#: through the identical call and is included rather than waiting for someone to hit it.
-_LINE_ELEMENT_RE = re.compile(
-    r"<(Interaction|GraphicalLine)\b([^>]*)>(.*?)</\1\s*>", re.DOTALL
-)
-_LINE_GRAPHICS_RE = re.compile(r"<Graphics\b([^>]*)>")
-_GRAPH_ID_RE = re.compile(r'\bGraphId\s*=\s*"([^"]*)"')
+#: The line elements whose ``<Graphics>`` ``GPML2013aReader.readLineStyleProperty`` reads.
+#: ``readLineElement`` is shared by both element types, so both are checked — ``<Interaction>`` is
+#: the one measured (issue #26), ``<GraphicalLine>`` goes through the identical call and is
+#: included rather than waiting for someone to hit it.
+_LINE_ELEMENTS = frozenset({"Interaction", "GraphicalLine"})
 
 # ---- the target repository's thresholds ----------------------------------------------------
 #
@@ -146,6 +159,12 @@ class Subject:
     #: Whether the app's renderer could draw this file. None means nobody asked — see
     #: ``_check_drawable`` for why that is not the same as False.
     drawable: bool | None = None
+    #: The parsed document's root element, when ``text`` is readable XML. The rules that look at
+    #: the document's structure walk this rather than pattern-matching the text.
+    tree: ET.Element | None = None
+    #: Why ``text`` could not be read as XML, in words for the submitter, or None if it could (or
+    #: there is no text). See ``_read_tree``.
+    unreadable: str | None = None
 
 
 @dataclass(frozen=True)
@@ -217,7 +236,59 @@ def _words(text: str | None) -> int:
     return len((text or "").split())
 
 
+def _localname(tag: object) -> str:
+    """``{namespace}Name`` → ``Name``. GPML elements live in a default namespace that differs
+    between 2013a and 2021, so every structural test here matches on the local name."""
+    if not isinstance(tag, str):
+        return ""  # comments and processing instructions carry a callable here
+    return tag.rsplit("}", 1)[-1]
+
+
+def _read_tree(text: str) -> tuple[ET.Element | None, str | None]:
+    """Parse ``text`` once, returning ``(root, None)`` or ``(None, why it could not be read)``.
+
+    This is the gate every structural rule sits behind. Before it, nothing checked that an upload
+    was XML at all, and the rules that read structure did it with patterns that, on a file full of
+    unclosed tags, rescanned the rest of the document from every one of them: 80 KB of
+    ``<Interaction>`` took five seconds to grade, holding the interpreter the whole time, and was
+    then reported as valid. A parser reads any input in one pass.
+
+    Leading whitespace is skipped before parsing. Strictly an XML declaration must come first,
+    but ``assign_wpid_str`` already strips that whitespace when it rewrites the declaration, so
+    the committed file is valid — refusing the upload for it would refuse something the portal
+    repairs anyway.
+    """
+    body = text.lstrip()
+    if any(marker in body for marker in _DTD_MARKERS):
+        return None, _BLOCK_DOCTYPE
+    try:
+        return ET.fromstring(body), None
+    except ET.ParseError as exc:
+        line, column = getattr(exc, "position", (0, 0))
+        # The parser counts lines in what it was given; add back any stripped above so the
+        # number matches what the submitter sees in their editor. Columns are 0-based.
+        line += text[: len(text) - len(body)].count("\n")
+        where = f"near line {line}, column {column + 1}" if line else "at the start of the file"
+        return None, _BLOCK_UNREADABLE.format(where=where)
+
+
 # ---- rule bodies ----------------------------------------------------------------------------
+
+
+def _check_readable(s: Subject) -> tuple[str, str] | None:
+    """The file must be readable XML before anything else is asked of it.
+
+    ``block``, and first in the table, so ``evaluate`` stops here on an unreadable file and no
+    other rule runs against text that has no structure to report on. Says nothing when the file
+    is fine: it is a precondition rather than a grade, and every row after it already implies it
+    passed. Emitting a ``pass`` would add a row to every report and mirror comment that tells a
+    curator nothing.
+
+    An empty upload is left to ``gpml.root``, which has always been what refuses it.
+    """
+    if s.unreadable:
+        return (Severity.BLOCK.value, s.unreadable)
+    return None
 
 
 def _check_root(s: Subject) -> tuple[str, str] | None:
@@ -297,8 +368,20 @@ def _check_board(s: Subject) -> tuple[str, str] | None:
     bibliography and their draft page, and the only trace is a Java stack trace several clicks into
     the Actions tab. The portal's own renderer draws the file quite happily, which is exactly why
     nothing caught this before.
+
+    Read off the parsed tree: any ``<Graphics>`` carrying a ``BoardWidth`` attribute counts, rather
+    than walking to the root's own ``<Graphics>`` child, because ``BoardWidth`` appears nowhere else
+    in the schema. It was a text pattern until the pattern turned out to rescan the rest of the
+    file from every unterminated ``<Graphics``.
     """
-    if not _BOARD_RE.search(s.text):
+    if s.tree is None:
+        return None  # an unreadable file is refused by ``gpml.readable`` before this runs
+    has_board = any(
+        _localname(el.tag) == "Graphics"
+        and any(_localname(name) == "BoardWidth" for name in el.attrib)
+        for el in s.tree.iter()
+    )
+    if not has_board:
         return (
             Severity.FAIL.value,
             "The <Pathway> element has no <Graphics> board (BoardWidth / BoardHeight). The "
@@ -327,19 +410,32 @@ def _check_line_thickness(s: Subject) -> tuple[str, str] | None:
 
     A line element with no ``<Graphics>`` child at all is counted too. The reader reaches the same
     property either way, and a file in that shape is broken for a superset of these reasons.
+
+    Walks the parsed tree, looking at each line element's own ``<Graphics>`` child — the one
+    ``readLineElement`` reads. It used to pair each opening tag with the next closing one by
+    pattern, which rescanned to the end of the file from every line element that had no closing
+    tag (a self-closing ``<Interaction/>`` included), so a large file took seconds to grade.
     """
+    if s.tree is None:
+        return None  # an unreadable file is refused by ``gpml.readable`` before this runs
     offenders: list[str] = []
-    for position, match in enumerate(_LINE_ELEMENT_RE.finditer(s.text), start=1):
-        tag, attrs, body = match.group(1), match.group(2), match.group(3)
-        graphics = _LINE_GRAPHICS_RE.search(body)
-        if graphics is not None and "LineThickness" in graphics.group(1):
+    position = 0
+    for el in s.tree.iter():
+        tag = _localname(el.tag)
+        if tag not in _LINE_ELEMENTS:
+            continue
+        position += 1
+        graphics = next((c for c in el if _localname(c.tag) == "Graphics"), None)
+        if graphics is not None and any(
+            _localname(name) == "LineThickness" for name in graphics.attrib
+        ):
             continue
         # Interactions carry no TextLabel, so a GraphId is the only name one can have — and a
         # hand-built GPML, which is the kind that has this defect, often sets neither. Falling
         # back to the position in document order beats repeating "an unnamed Interaction" once
         # per offender, which is what it said first and told nobody which ones to fix.
-        found = _GRAPH_ID_RE.search(attrs)
-        offenders.append(f"{tag} {found.group(1)}" if found else f"{tag} #{position}")
+        graph_id = el.get("GraphId")
+        offenders.append(f"{tag} {graph_id}" if graph_id else f"{tag} #{position}")
     if offenders:
         n = len(offenders)
         return (
@@ -555,6 +651,7 @@ def _check_ontology(s: Subject) -> tuple[str, str] | None:
 # diff summary follows.
 
 RULES: tuple[Rule, ...] = (
+    Rule("gpml.readable", "Readable XML", _check_readable),
     Rule("gpml.root", "GPML root element", _check_root),
     Rule("gpml.namespace", "GPML namespace", _check_namespace),
     Rule("gpml.name", "Title", _check_name),
@@ -622,6 +719,10 @@ RULES: tuple[Rule, ...] = (
     ),
 )
 
+#: The refusals after which nothing else is worth saying: the file is not XML, or it is XML but
+#: not a pathway.
+_STOP_ON_BLOCK = frozenset({"gpml.readable", "gpml.root"})
+
 _BY_CHECKLIST_KEY: dict[str, Rule] = {
     r.checklist.key: r for r in RULES if r.checklist is not None
 }
@@ -646,6 +747,23 @@ def build_subject(
 
     name = organism = author = None
     has_root = False
+    tree: ET.Element | None = None
+    unreadable: str | None = None
+    if text.strip():
+        tree, unreadable = _read_tree(text)
+    if unreadable:
+        # Nothing else is derived from a file that is not XML. ``evaluate`` stops at
+        # ``gpml.readable``, and the root-tag pattern below is exactly the kind that rescans an
+        # unterminated document from every opening tag — it is only cheap on readable XML, where
+        # every ``<`` is eventually followed by a ``>``.
+        return Subject(
+            text=text,
+            metadata=metadata,
+            before=before,
+            kind=kind,
+            drawable=drawable,
+            unreadable=unreadable,
+        )
     if text:
         from app.submit.gpml import InvalidGpml, parse_pathway_meta
 
@@ -677,14 +795,17 @@ def build_subject(
         before=before,
         kind=kind,
         drawable=drawable,
+        tree=tree,
     )
 
 
 def evaluate(subject: Subject, *, text_available: bool = True) -> QualityReport:
     """Run every applicable rule over ``subject``.
 
-    Two things are skipped rather than answered wrongly:
+    Three things are skipped rather than answered wrongly:
 
+    - A file that is not readable XML gets only that finding. There is no structure to report on,
+      and the other text rules would be pattern-matching a document that has no shape.
     - With no ``<Pathway>`` root, only that finding is emitted. Everything downstream would be
       reporting on a document that is not a pathway, and today ``validate_gpml`` raises from the
       root parse before it ever tests the namespace — so listing four reasons for a file of HTML
@@ -711,7 +832,7 @@ def evaluate(subject: Subject, *, text_available: bool = True) -> QualityReport:
                 predicts_repo=rule.predicts_repo,
             )
         )
-        if rule.id == "gpml.root" and severity == Severity.BLOCK.value:
+        if rule.id in _STOP_ON_BLOCK and severity == Severity.BLOCK.value:
             break
     return QualityReport(findings=tuple(findings))
 
