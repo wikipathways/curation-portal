@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 from collections.abc import Iterable
 from datetime import UTC, timedelta
 
@@ -55,7 +54,6 @@ WELCOME_MARKER = "<!-- wikipathways-submit:welcome -->"
 #: A comment, not the PR description, because that repo's own pipeline rewrites the description
 #: wholesale and would erase anything written there.
 PUBLISH_MARKER = "<!-- wikipathways-publish "
-_PUBLISH_MARKER_RE = re.compile(re.escape(PUBLISH_MARKER) + r"(\{.*?\})\s*-->", re.DOTALL)
 
 #: The same device for the repository's `testing` job, which checks the title length, the
 #: description length and whether any data nodes changed. Those verdicts have always existed and
@@ -68,8 +66,6 @@ _PUBLISH_MARKER_RE = re.compile(re.escape(PUBLISH_MARKER) + r"(\{.*?\})\s*-->", 
 #: side by side is deliberate: a disagreement means the ported thresholds have fallen behind, and
 #: this is the only way that becomes visible instead of silently wrong.
 TESTING_MARKER = "<!-- wikipathways-testing "
-_TESTING_MARKER_RE = re.compile(re.escape(TESTING_MARKER) + r"(\{.*?\})\s*-->", re.DOTALL)
-
 #: What the repository's three tests are called, and the order they are reported in. The keys are
 #: the marker's; the values are what a curator reads.
 TESTING_CHECKS = {
@@ -352,20 +348,45 @@ def _aware(value):
     return value.replace(tzinfo=UTC)
 
 
+def _marker_payload(body: str, marker: str) -> dict | None:
+    """The JSON object between ``marker`` and the next ``-->`` in ``body``, or None.
+
+    Two ``str.find`` calls rather than a pattern: these bodies are pull request comments, which
+    anyone can post, and the lazy DOTALL pattern this replaces rescanned the rest of the comment
+    from every occurrence of the marker it could not close — quadratic in a comment of repeated
+    markers. This is linear whatever the comment holds.
+    """
+    body = body or ""
+    start = body.find(marker)
+    if start < 0:
+        return None
+    start += len(marker)
+    end = body.find("-->", start)
+    if end < 0:
+        return None
+    text = body[start:end].strip()
+    if not (text.startswith("{") and text.endswith("}")):
+        return None
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _trusted_author(login: str) -> bool:
+    """Could this account have posted a workflow's marker? Bots only — the Actions bot that runs
+    the repository's workflows, or an App. A person can type the same comment."""
+    return login.endswith("[bot]")
+
+
 def parse_publish_marker(body: str) -> dict | None:
     """Extract the target repo's publish announcement from one comment body, if present.
 
     Structured rather than prose because the alternative — grepping for a sentence — breaks the
     moment anyone rewords it, and the repo's own pipeline rewrites text fields freely.
     """
-    match = _PUBLISH_MARKER_RE.search(body or "")
-    if match is None:
-        return None
-    try:
-        payload = json.loads(match.group(1))
-    except json.JSONDecodeError:
-        return None
-    return payload if isinstance(payload, dict) else None
+    return _marker_payload(body, PUBLISH_MARKER)
 
 
 def parse_testing_marker(body: str) -> dict | None:
@@ -375,19 +396,32 @@ def parse_testing_marker(body: str) -> dict | None:
     markdown table that the repository is free to reword, and that repository rewrites text fields
     freely. Only the three known keys are kept, so an added field cannot reach a template.
     """
-    match = _TESTING_MARKER_RE.search(body or "")
-    if match is None:
-        return None
-    try:
-        payload = json.loads(match.group(1))
-    except json.JSONDecodeError:
-        return None
-    if not isinstance(payload, dict):
+    payload = _marker_payload(body, TESTING_MARKER)
+    if payload is None:
         return None
     verdicts = {
         key: str(payload[key]) for key in TESTING_CHECKS if isinstance(payload.get(key), str)
     }
     return verdicts or None
+
+
+def _marker_is_for(payload: dict, author: str, pr_number: int) -> bool:
+    """Should a publish marker found on ``pr_number`` be believed?
+
+    Posted by a bot, and — when it names a pull request — naming this one. A person can type a
+    marker into any comment, and a marker copied across from another pull request carries that
+    one's number; either would otherwise publish, fail, or renumber this review.
+    """
+    if not _trusted_author(author):
+        logger.warning("ignoring a publish marker on #%s posted by %s", pr_number, author or "?")
+        return False
+    named = payload.get("pr")
+    if named is None:
+        return True
+    try:
+        return int(named) == pr_number
+    except (TypeError, ValueError):
+        return False
 
 
 class CurationService:
@@ -1399,13 +1433,15 @@ class CurationService:
         if self._github is None:
             return None
         try:
-            bodies = self._github.list_issue_comments(self._repo, pr_number)
+            comments = self._github.list_issue_comments_by(self._repo, pr_number)
         except (GitHubError, httpx.HTTPError):
             return None
         newest: dict | None = None
-        for body in reversed(bodies):
+        for author, body in reversed(comments):
             payload = parse_publish_marker(body)
             if not payload:
+                continue
+            if not _marker_is_for(payload, author, pr_number):
                 continue
             if payload.get("status") == "published":
                 return payload
@@ -1774,10 +1810,12 @@ class CurationService:
         if not self.is_pipeline_mode or self._github is None:
             return None
         try:
-            bodies = self._github.list_issue_comments(self._repo, pr_number)
+            comments = self._github.list_issue_comments_by(self._repo, pr_number)
         except (GitHubError, httpx.HTTPError):
             return None
-        for body in reversed(bodies):
+        for author, body in reversed(comments):
+            if not _trusted_author(author):
+                continue
             verdicts = parse_testing_marker(body)
             if verdicts:
                 return verdicts

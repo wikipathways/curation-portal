@@ -1055,3 +1055,48 @@ def test_an_update_cannot_be_recorded_under_another_id(session_factory):
     svc.approve(pr, CURATOR)
     with pytest.raises(ValueError):
         svc.record_published_wpid(pr, 555, CURATOR)
+
+
+# -- who may announce a publication (2026-11 review) -------------------------------------------
+
+
+def test_a_marker_typed_by_a_person_is_not_believed(session_factory):
+    gh = _fake()
+    svc = _service(session_factory, gh)
+    pr = _register(svc, gh)
+    _complete_checklist(svc, pr)
+    svc.approve(pr, CURATOR)
+    forged = f'<!-- wikipathways-publish {{"pr":{pr},"wpid":1,"status":"published"}} -->'
+    gh.create_issue_comment(REPO, pr, forged)
+    gh.comment_authors[forged] = "somebody"
+    gh.closed.add(pr)
+
+    review = svc.handle_pr_closed(pr, merged=False)
+
+    assert review.status == ReviewStatus.PUBLISH_FAILED
+    assert review.wpid is None
+
+
+def test_a_marker_naming_another_pull_request_is_not_believed(session_factory):
+    gh = _fake()
+    svc = _service(session_factory, gh)
+    pr = _register(svc, gh)
+    _complete_checklist(svc, pr)
+    svc.approve(pr, CURATOR)
+    gh.create_issue_comment(
+        REPO, pr, '<!-- wikipathways-publish {"pr":9999,"wpid":4242,"status":"published"} -->'
+    )
+    gh.closed.add(pr)
+
+    review = svc.handle_pr_closed(pr, merged=False)
+
+    assert review.status == ReviewStatus.PUBLISH_FAILED
+
+
+def test_marker_parsing_is_linear_in_a_hostile_comment():
+    import time
+
+    hostile = "<!-- wikipathways-publish {" * 20000  # never closed
+    start = time.perf_counter()
+    assert parse_publish_marker(hostile) is None
+    assert time.perf_counter() - start < 0.1

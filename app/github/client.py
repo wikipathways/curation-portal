@@ -371,6 +371,14 @@ class GitHubClient(ABC):
         """
 
     @abstractmethod
+    def list_issue_comments_by(self, repo: str, issue_number: int) -> list[tuple[str, str]]:
+        """Return ``(author login, body)`` for each comment on an issue/PR, oldest first.
+
+        What the marker readers use: a marker is a claim about what a workflow did, and anyone
+        who can comment on a pull request can type one. Only a bot account's is believed.
+        """
+
+    @abstractmethod
     def close_pull_request(self, repo: str, pr_number: int) -> None:
         """Close a PR without merging."""
 
@@ -442,6 +450,9 @@ class FakeGitHubClient(GitHubClient):
         # {(repo, branch): sha}
         self.branches: dict[tuple[str, str], str] = {}
         self._commit_counter = 0
+        #: Comment body -> author login, for comments a test wants posted by someone other than
+        #: a bot (see ``list_issue_comments_by``).
+        self.comment_authors: dict[str, str] = {}
         #: Where each branch was cut from. ``branches`` moves with every commit, so this is the
         #: only record of the base a test can assert on.
         self.branch_bases: dict[tuple[str, str], str] = {}
@@ -826,6 +837,13 @@ class FakeGitHubClient(GitHubClient):
         plain = self.issue_comments.get((repo, issue_number), [])
         upserted = list(self.comments.get((repo, issue_number), {}).values())
         return [*plain, *upserted]
+
+    def list_issue_comments_by(self, repo: str, issue_number: int) -> list[tuple[str, str]]:
+        # Every comment the fake holds was posted by the app's bot or a simulated workflow, so
+        # that is the default author. ``comment_authors`` overrides one body's author, which is
+        # how a test plays a human typing a marker into a comment.
+        bodies = self.list_issue_comments(repo, issue_number)
+        return [(self.comment_authors.get(b, "github-actions[bot]"), b) for b in bodies]
 
     def close_pull_request(self, repo: str, pr_number: int) -> None:
         self._maybe_fail("close_pull_request")
@@ -1406,6 +1424,23 @@ class HttpGitHubClient(GitHubClient):
             bodies.extend(c.get("body") or "" for c in batch)
             if len(batch) < 100:
                 return bodies
+            page += 1
+
+    def list_issue_comments_by(self, repo: str, issue_number: int) -> list[tuple[str, str]]:
+        out: list[tuple[str, str]] = []
+        page = 1
+        while True:
+            resp = self._client.get(
+                f"/repos/{repo}/issues/{issue_number}/comments",
+                params={"per_page": 100, "page": page},
+            )
+            self._raise_for(resp, f"list_issue_comments_by({issue_number})")
+            batch = resp.json()
+            out.extend(
+                (((c.get("user") or {}).get("login") or ""), c.get("body") or "") for c in batch
+            )
+            if len(batch) < 100:
+                return out
             page += 1
 
     def close_pull_request(self, repo: str, pr_number: int) -> None:
