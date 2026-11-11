@@ -44,7 +44,7 @@ def test_update_happy_path(locks, session_factory):
     assert result.pr_number == 1
 
     # Branch cut off the base; file updated (with the old blob sha) and WPID re-stamped fresh.
-    assert gh.branches[(REPO, "update/WP5636")] == "basesha"
+    assert gh.branch_bases[(REPO, "update/WP5636")] == "basesha"
     content, message, _sha = gh.files[(REPO, "update/WP5636", PATH)]
     assert message == "Update WP5636"
     assert 'Version="WP5636_r' in content

@@ -218,11 +218,14 @@ class GitHubClient(ABC):
         sha: str | None = None,
         author_name: str | None = None,
         author_email: str | None = None,
-    ) -> None:
-        """Create or update a text file on ``branch``.
+    ) -> str | None:
+        """Create or update a text file on ``branch``; return the SHA of the commit it made.
 
         ``sha`` is the current blob SHA of the file and is **required to update** an existing
         file (GitHub rejects an update without it); omit it to create a new file.
+
+        The returned commit is what a review is bound to: approval refuses a pull request whose
+        head has moved past it, because the curator reviewed this commit and no other.
         """
 
     @abstractmethod
@@ -302,8 +305,13 @@ class GitHubClient(ABC):
         Used to reconcile review rows against PRs closed/merged outside the app (issue #1)."""
 
     @abstractmethod
-    def merge_pull_request(self, repo: str, pr_number: int, *, method: str = "squash") -> None:
-        """Merge a PR. Raises GitHubError if the merge is not allowed."""
+    def merge_pull_request(
+        self, repo: str, pr_number: int, *, method: str = "squash", sha: str | None = None
+    ) -> None:
+        """Merge a PR. Raises GitHubError if the merge is not allowed.
+
+        ``sha``, when given, is the head commit the merge must still be at; GitHub refuses with
+        409 if the branch has moved, so nothing the curator did not see can be merged."""
 
     @abstractmethod
     def upsert_issue_comment(
@@ -433,6 +441,10 @@ class FakeGitHubClient(GitHubClient):
         self.forks_created: list[tuple[str, str]] = []
         # {(repo, branch): sha}
         self.branches: dict[tuple[str, str], str] = {}
+        self._commit_counter = 0
+        #: Where each branch was cut from. ``branches`` moves with every commit, so this is the
+        #: only record of the base a test can assert on.
+        self.branch_bases: dict[tuple[str, str], str] = {}
         for key, sha in (default_branches or {}).items():
             repo, branch = key.split("#", 1)
             self.branches[(repo, branch)] = sha
@@ -556,6 +568,7 @@ class FakeGitHubClient(GitHubClient):
                 f"target; cut from the branch repo's own head (WriteTarget.base_repo)."
             )
         self.branches[(repo, new_branch)] = from_sha
+        self.branch_bases[(repo, new_branch)] = from_sha
 
     def get_file_sha(self, repo: str, ref: str, path: str) -> str | None:
         self._maybe_fail("get_file_sha")
@@ -637,7 +650,7 @@ class FakeGitHubClient(GitHubClient):
         sha: str | None = None,
         author_name: str | None = None,
         author_email: str | None = None,
-    ) -> None:
+    ) -> str | None:
         self._maybe_fail("put_file")
         # GitHub answers 422 ("sha" wasn't supplied) when the contents API is asked to *create*
         # a file that is already there. Modelling that here is what stops a caller from
@@ -648,6 +661,12 @@ class FakeGitHubClient(GitHubClient):
         # A new blob sha after the write (deterministic, for assertions).
         new_sha = f"sha-{branch}-{path}-{len(content)}"
         self.files[(repo, branch, path)] = (content, message, new_sha)
+        # And a new commit at the head of the branch, as the real contents API makes. Tracking it
+        # is what lets a test tell "the commit the curator reviewed" from "a later push".
+        self._commit_counter += 1
+        commit = f"commit-{self._commit_counter}-{branch}"
+        self.branches[(repo, branch)] = commit
+        return commit
 
     def delete_file(self, repo: str, branch: str, path: str, message: str, *, sha: str) -> None:
         """Drops the file from both the branch map and the base — the app only ever deletes on
@@ -734,8 +753,16 @@ class FakeGitHubClient(GitHubClient):
             return "open"
         return None
 
-    def merge_pull_request(self, repo: str, pr_number: int, *, method: str = "squash") -> None:
+    def merge_pull_request(
+        self, repo: str, pr_number: int, *, method: str = "squash", sha: str | None = None
+    ) -> None:
         self._maybe_fail("merge_pull_request")
+        if sha is not None:
+            detail = self.get_pull_request(repo, pr_number)
+            if detail is not None and detail.head_sha != sha:
+                raise GitHubError(
+                    f"merge_pull_request({pr_number}) failed: 409 Head branch was modified"
+                )
         self.merged.add(pr_number)
 
     def upsert_issue_comment(
@@ -784,7 +811,7 @@ class FakeGitHubClient(GitHubClient):
             # A seeded head sha wins over the branch table: a pull request opened from a fork has
             # its branch in the *fork*, so looking it up here answers for the wrong repository.
             head_sha=meta.get("head_sha")
-            or self.branches.get((repo, pr.head_branch), f"sha-{pr.head_branch}"),
+            or self.branches.get((pr.head_repo or repo, pr.head_branch), f"sha-{pr.head_branch}"),
             state="closed" if merged or pr_number in self.closed else "open",
             merged=merged,
             title=meta.get("title", ""),
@@ -1185,7 +1212,7 @@ class HttpGitHubClient(GitHubClient):
         sha: str | None = None,
         author_name: str | None = None,
         author_email: str | None = None,
-    ) -> None:
+    ) -> str | None:
         payload: dict[str, object] = {
             "message": message,
             "content": base64.b64encode(content.encode("utf-8")).decode("ascii"),
@@ -1197,6 +1224,10 @@ class HttpGitHubClient(GitHubClient):
             payload["author"] = {"name": author_name, "email": author_email}
         resp = self._client.put(f"/repos/{repo}/contents/{path}", json=payload)
         self._raise_for(resp, f"put_file({path})")
+        try:
+            return ((resp.json() or {}).get("commit") or {}).get("sha")
+        except ValueError:
+            return None
 
     def delete_file(self, repo: str, branch: str, path: str, message: str, *, sha: str) -> None:
         resp = self._client.request(
@@ -1425,10 +1456,13 @@ class HttpGitHubClient(GitHubClient):
         self._raise_for(resp, "recent_workflow_runs")
         return [_workflow_run(run) for run in resp.json().get("workflow_runs", [])]
 
-    def merge_pull_request(self, repo: str, pr_number: int, *, method: str = "squash") -> None:
-        resp = self._client.put(
-            f"/repos/{repo}/pulls/{pr_number}/merge", json={"merge_method": method}
-        )
+    def merge_pull_request(
+        self, repo: str, pr_number: int, *, method: str = "squash", sha: str | None = None
+    ) -> None:
+        payload: dict[str, str] = {"merge_method": method}
+        if sha is not None:
+            payload["sha"] = sha
+        resp = self._client.put(f"/repos/{repo}/pulls/{pr_number}/merge", json=payload)
         self._raise_for(resp, f"merge_pull_request({pr_number})")
 
     def upsert_issue_comment(

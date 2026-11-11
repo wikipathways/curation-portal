@@ -328,6 +328,14 @@ class ReviewNotActionable(RuntimeError):
     """
 
 
+class ReviewStale(ReviewNotActionable):
+    """The pull request's head moved past the commit the review describes.
+
+    The curator checked one commit; approving would publish another. A subclass of
+    ``ReviewNotActionable`` so every route that already answers that with 409 answers this too.
+    """
+
+
 class PreviewNotReady(RuntimeError):
     """Approval attempted before the PR-preview CI workflow has completed successfully."""
 
@@ -632,8 +640,18 @@ class CurationService:
                     review.pathway_paths = list(pathway_paths) if pathway_paths else None
                     s.commit()
                     self._maybe_welcome(review)
+                # A new head on an approved review withdraws the approval: it was given for a
+                # commit that is no longer what would be published (see handle_head_moved).
+                withdrawn = (
+                    head_sha is not None
+                    and review.head_sha not in (None, head_sha)
+                    and review.status == ReviewStatus.APPROVED
+                )
                 if head_sha is not None:
                     review.head_sha = head_sha
+                if withdrawn:
+                    review.status = ReviewStatus.OPEN
+                    review.approved_at = None
                 if base_repo is not None and review.base_repo is None:
                     review.base_repo = base_repo
                 # A re-upload onto an existing pull request. The update flow reuses the branch
@@ -660,6 +678,16 @@ class CurationService:
                     # A re-upload after changes were requested puts it back in the queue.
                     review.status = ReviewStatus.OPEN
                 s.commit()
+                if withdrawn and self.is_pipeline_mode and self._github is not None:
+                    try:
+                        self._github.remove_label(self._repo, pr_number, self._label_accepted)
+                    except (GitHubError, httpx.HTTPError):
+                        logger.warning(
+                            "review %s: could not remove %r after a new head",
+                            pr_number,
+                            self._label_accepted,
+                            exc_info=True,
+                        )
             self._maybe_mirror(review)
             return review
 
@@ -772,7 +800,13 @@ class CurationService:
                 .order_by(Review.updated_at.desc())
             ).scalars().first()
 
-    def revise(self, pr_number: int, metadata=None, submitter_note: str | None = None) -> Review:
+    def revise(
+        self,
+        pr_number: int,
+        metadata=None,
+        submitter_note: str | None = None,
+        head_sha: str | None = None,
+    ) -> Review:
         """A revision landed on a review's PR: re-open it and rebuild the checklist from the new
         metadata, so the curator re-reviews the changed content from a fresh auto-derived baseline.
 
@@ -784,6 +818,8 @@ class CurationService:
                 raise ReviewNotFound(f"no review for PR #{pr_number}")
             if (submitter_note or "").strip():
                 review.submitter_note = submitter_note.strip()  # type: ignore[union-attr]
+            if head_sha is not None:
+                review.head_sha = head_sha
             review.status = ReviewStatus.OPEN
             review.checklist = build_checklist(
                 metadata=metadata, kind=review.kind, pipeline_mode=self.is_pipeline_mode
@@ -1055,6 +1091,21 @@ class CurationService:
                     f"PR #{pr_number}: required checklist items are not all passed"
                 )
             wpid = review.wpid
+            reviewed_head = review.head_sha
+
+        # Bind the decision to the commit the curator saw. Without this a push to the branch
+        # between review and approval — the submitter's own fork, in fork mode — would be
+        # published unreviewed. Rows written before head_sha was recorded have nothing to compare
+        # against and keep the old behaviour.
+        if reviewed_head is not None:
+            detail = self._github.get_pull_request(self._repo, pr_number)
+            if detail is not None and detail.head_sha and detail.head_sha != reviewed_head:
+                self.handle_head_moved(pr_number, detail.head_sha)
+                raise ReviewStale(
+                    f"PR #{pr_number} changed after it was reviewed (now at "
+                    f"{detail.head_sha[:7]}, reviewed {reviewed_head[:7]}). Check the new "
+                    "version before approving."
+                )
 
         # Never publish a pathway whose render/validation hasn't run green (design problem #1).
         # Off by default in pipeline mode: the target repo has no pr-preview.yml, and its own
@@ -1075,8 +1126,9 @@ class CurationService:
         if self.is_pipeline_mode:
             return self._approve_by_label(pr_number, curator)
 
-        # Merge first; only mutate our state if GitHub accepts the merge.
-        self._github.merge_pull_request(self._repo, pr_number)
+        # Merge first; only mutate our state if GitHub accepts the merge. The sha guard closes
+        # the window between the head check above and the merge itself.
+        self._github.merge_pull_request(self._repo, pr_number, sha=reviewed_head)
 
         # Complete the lifecycle: WPID becomes permanent, pathway lock frees. Both are keyed by
         # WPID, so both are skipped when there is none yet (pipeline mode never reaches here).
@@ -1847,6 +1899,55 @@ class CurationService:
 
     #: Older name, kept so existing callers keep working.
     reconcile_open_reviews = reconcile
+
+    def handle_head_moved(self, pr_number: int, head_sha: str) -> Review | None:
+        """The pull request's head is now ``head_sha``: forget any approval of an older commit.
+
+        Called for a ``synchronize`` event on a row the portal tracks, and by ``approve`` when it
+        finds the head moved. A commit the app made itself has already been recorded by
+        ``register``/``revise`` by the time this runs, or arrives with the same sha, so it is a
+        no-op for the portal's own writes. Curator answers are kept, as ``_merge_checklist`` keeps
+        them on a re-upload; what is withdrawn is the approval, because that is the decision that
+        publishes.
+        """
+        with self._session_factory() as s:
+            review = s.get(Review, pr_number)
+            if review is None or review.status in self._TERMINAL:
+                return None
+            if review.head_sha == head_sha:
+                return review
+            previous = review.head_sha
+            review.head_sha = head_sha
+            was_approved = review.status == ReviewStatus.APPROVED
+            if was_approved:
+                review.status = ReviewStatus.OPEN
+                review.approved_at = None
+                review.decision_note = (
+                    f"The pull request changed after it was approved (now at {head_sha[:7]}). "
+                    "The approval was withdrawn; check the new version and approve again."
+                )
+            s.commit()
+            logger.info(
+                "review %s: head moved %s -> %s%s",
+                pr_number,
+                (previous or "?")[:7],
+                head_sha[:7],
+                " (approval withdrawn)" if was_approved else "",
+            )
+            if was_approved and self.is_pipeline_mode and self._github is not None:
+                # While `accepted` is on the pull request the repository may publish it.
+                try:
+                    self._github.remove_label(self._repo, pr_number, self._label_accepted)
+                except (GitHubError, httpx.HTTPError):
+                    logger.warning(
+                        "review %s: could not remove %r after the head moved",
+                        pr_number,
+                        self._label_accepted,
+                        exc_info=True,
+                    )
+            if was_approved:
+                self._maybe_mirror(review)
+            return review
 
     def handle_label_event(
         self, pr_number: int, label: str, *, added: bool, actor: str

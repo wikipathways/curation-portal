@@ -1202,6 +1202,8 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             metadata=after_meta,  # pre-fills the checklist with auto-derived states
             head_branch=result.branch,
             head_repo=result.head_repo,
+            head_sha=result.head_sha,
+            base_repo=settings.content_repo,
             submitter_note=description,
         )
         _label_submission(settings, bot, result.pr_number, kind="new")
@@ -1323,6 +1325,8 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             before_metadata=before_meta,
             head_branch=result.branch,
             head_repo=result.head_repo,
+            head_sha=result.head_sha,
+            base_repo=settings.content_repo,
             submitter_note=description,
         )
         _label_submission(settings, bot, result.pr_number, kind="update")
@@ -1428,6 +1432,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             result.pr_number,
             metadata=parse_curation_metadata(content),
             submitter_note=description,
+            head_sha=result.head_sha,
         )
         return SubmitResponse(
             wpid=result.wpid_str,
@@ -1703,6 +1708,19 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             payload = json.loads(raw)
         except json.JSONDecodeError as exc:
             raise HTTPException(status_code=400, detail="invalid JSON") from exc
+        # A review is addressed by its pull request number, and a number is unique only within
+        # one repository. The App has one webhook URL for every installation, so a delivery from
+        # any other repository it is installed on would otherwise act on the review that happens
+        # to share the number.
+        repo_name = str((payload.get("repository") or {}).get("full_name") or "")
+        if repo_name.lower() != settings.content_repo.lower():
+            logging.getLogger("wpsubmit.webhook").info(
+                "ignoring a delivery for %s; the content repo is %s",
+                repo_name or "(no repository)",
+                settings.content_repo,
+            )
+            return {"ok": True, "ignored": f"repository:{repo_name or 'missing'}"}
+
         action = payload.get("action")
         if action not in ("closed", "labeled", "unlabeled", "opened", "reopened", "synchronize"):
             return {"ok": True, "ignored": f"action:{action}"}
@@ -1714,6 +1732,23 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         curation = _curation(request, bot)
 
         if action in ("opened", "reopened", "synchronize"):
+            try:
+                tracked = curation.get(int(pr_number))
+            except ReviewNotFound:
+                tracked = None
+            if tracked is not None:
+                if tracked.adopted and bot is not None:
+                    # A review that already exists was adopted on purpose — by hand or by the
+                    # flag — so it is kept current whatever the flag says now. The flag governs
+                    # taking on pull requests nobody chose, not following ones somebody did.
+                    background.add_task(_adopt_in_background, request, bot, int(pr_number))
+                    return {"ok": True, "pr_number": int(pr_number), "queued": True}
+                head_sha = str((pr.get("head") or {}).get("sha") or "")
+                if head_sha:
+                    # A push the portal did not make withdraws an approval of the older commit.
+                    background.add_task(curation.handle_head_moved, int(pr_number), head_sha)
+                return {"ok": True, "pr_number": int(pr_number), "head": head_sha[:7] or None}
+
             # A pull request the app did not open — the PathVisio plugin, or anyone with push
             # access. These events have always been delivered and always been dropped; adopting
             # them is what puts such a submission in front of a curator at all.

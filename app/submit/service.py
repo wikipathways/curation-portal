@@ -66,6 +66,8 @@ class SubmissionResult:
     #: request GitHub returned rather than assumed, so the day the app opens a cross-repository
     #: pull request the review row records where the branch really is (issue #22).
     head_repo: str | None = None
+    #: The commit the app made on the branch — what the review is bound to at approval.
+    head_sha: str | None = None
 
 
 def _utcnow() -> datetime:
@@ -175,7 +177,7 @@ class SubmissionService:
 
             try:
                 # 5. Commit the file, 6. open the PR.
-                self._github.put_file(
+                head_sha = self._github.put_file(
                     self._branch_repo,
                     branch,
                     path,
@@ -210,6 +212,7 @@ class SubmissionService:
             pr_number=pr.number,
             pr_url=pr.html_url,
             head_repo=pr.head_repo,
+            head_sha=head_sha,
         )
 
     def _pipeline_branch(self, submitter: str, *, suffix: int = 1) -> str:
@@ -270,7 +273,7 @@ class SubmissionService:
         # a create-only write 422s for everyone. Overwriting is the right resolution: the
         # placeholder is a slot, not a pathway, and the repo still reads "new" off the basename.
         existing_sha = self._github.get_file_sha(self._branch_repo, branch, path)
-        self._github.put_file(
+        head_sha = self._github.put_file(
             self._branch_repo,
             branch,
             path,
@@ -295,6 +298,7 @@ class SubmissionService:
             pr_number=pr.number,
             pr_url=pr.html_url,
             head_repo=pr.head_repo,
+            head_sha=head_sha,
         )
 
     def revise_new_pathway(
@@ -354,7 +358,7 @@ class SubmissionService:
         # Keep whatever id the submission already carries; a revise can't renumber.
         gpml_out = assign_wpid_str(gpml, wpid_str, author=submitter)
         branch_file_sha = self._github.get_file_sha(branch_repo, branch, path)
-        self._github.put_file(
+        head_sha = self._github.put_file(
             branch_repo,
             branch,
             path,
@@ -372,6 +376,7 @@ class SubmissionService:
             pr_number=pr.number,
             pr_url=pr.html_url,
             head_repo=pr.head_repo,
+            head_sha=head_sha,
         )
 
 

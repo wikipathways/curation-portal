@@ -44,7 +44,7 @@ def test_submit_new_pathway_happy_path(allocator, session_factory):
     assert result.pr_url.endswith("/pull/1")
 
     # Branch created off the base SHA.
-    assert gh.branches[(REPO, "submit/WP5637")] == "basesha123"
+    assert gh.branch_bases[(REPO, "submit/WP5637")] == "basesha123"
     # File committed at the canonical path with the WPID stamped into Version.
     content, message, _sha = gh.files[(REPO, "submit/WP5637", "pathways/WP5637/WP5637.gpml")]
     assert 'Version="WP5637_r' in content

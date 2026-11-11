@@ -42,6 +42,8 @@ class UpdateResult:
     #: ``owner/name`` the branch lives on, None meaning the content repo — see
     #: ``SubmissionResult.head_repo``.
     head_repo: str | None = None
+    #: The commit the app made on the branch — see ``SubmissionResult.head_sha``.
+    head_sha: str | None = None
 
 
 class UpdateService:
@@ -155,7 +157,7 @@ class UpdateService:
 
             # SHA of the file as it currently is on the update branch (falls back to base).
             branch_file_sha = self._github.get_file_sha(self._branch_repo, branch, path)
-            self._github.put_file(
+            head_sha = self._github.put_file(
                 self._branch_repo,
                 branch,
                 path,
@@ -192,6 +194,7 @@ class UpdateService:
             pr_number=pr.number,
             pr_url=pr.html_url,
             head_repo=pr.head_repo,
+            head_sha=head_sha,
         )
 
 

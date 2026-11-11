@@ -134,7 +134,7 @@ def test_the_branch_is_cut_from_the_forks_own_head():
 
     result = _service(user, target).submit_new_pathway(gpml=GOOD_GPML, submitter="alice")
 
-    assert user.branches[(FORK, result.branch)] == "stale-fork-head"
+    assert user.branch_bases[(FORK, result.branch)] == "stale-fork-head"
     # Still opened against the content repo's base branch, so GitHub does the three-way work.
     assert user.pull_meta[result.pr_number]["base"] == "main"
 
@@ -161,7 +161,7 @@ def test_a_fork_that_could_not_be_synced_still_submits_as_the_submitter():
 
     result = _service(user, target).submit_new_pathway(gpml=GOOD_GPML, submitter="alice")
 
-    assert user.branches[(FORK, result.branch)] == "stale-fork-head"
+    assert user.branch_bases[(FORK, result.branch)] == "stale-fork-head"
     assert result.head_repo == FORK, "must stay the submitter's own PR, not fall back to the bot"
 
 
@@ -190,7 +190,7 @@ def test_a_same_repo_submission_still_cuts_from_the_content_repo():
 
     result = _service(user, target).submit_new_pathway(gpml=GOOD_GPML, submitter="alice")
 
-    assert user.branches[(REPO, result.branch)] == "upstream-head"
+    assert user.branch_bases[(REPO, result.branch)] == "upstream-head"
 
 
 def test_the_fork_is_ensured_once_and_reused():

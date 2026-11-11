@@ -418,7 +418,10 @@ import hmac  # noqa: E402
 import json  # noqa: E402
 
 
-def _signed(secret: str, payload: dict):
+def _signed(secret: str, payload: dict, *, repo: str = "wikipathways/wikipathways-database"):
+    # GitHub names the repository on every pull_request delivery, and the app ignores one that
+    # is not its content repo — so a payload without it would test nothing.
+    payload.setdefault("repository", {"full_name": repo})
     body = json.dumps(payload).encode()
     sig = "sha256=" + hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
     return body, sig
