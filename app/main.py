@@ -1099,6 +1099,11 @@ def build_app(settings: Settings | None = None) -> FastAPI:
     @app.post("/api/validate", response_model=ValidateResponse)
     async def validate(file: UploadFile) -> ValidateResponse:
         content = await _read_upload(file, settings.max_upload_bytes)
+        # Parsing and grading are CPU work; on the event loop they would stall every other
+        # request in this single-process app for as long as they take.
+        return await run_in_threadpool(_validate_upload, content)
+
+    def _validate_upload(content: bytes) -> ValidateResponse:
         try:
             meta = validate_gpml(content)
         except InvalidGpml as exc:
@@ -1133,8 +1138,23 @@ def build_app(settings: Settings | None = None) -> FastAPI:
     ) -> SubmitResponse:
         # Before the upload is read, let alone parsed or rendered: a refusal should cost this
         # process as little as it costs the content repo.
-        _check_rate_limit(request, submitter)
+        await run_in_threadpool(_check_rate_limit, request, submitter)
         content = await _read_upload(file, settings.max_upload_bytes)
+        # Everything after the upload is blocking: GitHub calls (forking can wait up to fifteen
+        # seconds for GitHub to create the fork), the database, the render. Only the read of the
+        # request body is genuinely asynchronous, so only it stays on the event loop.
+        return await run_in_threadpool(
+            _submit_after_upload, request, content, description, submitter, github, bot
+        )
+
+    def _submit_after_upload(
+        request: Request,
+        content: bytes,
+        description: str,
+        submitter: str,
+        github: GitHubClient,
+        bot: GitHubClient | None,
+    ) -> SubmitResponse:
         target = _write_target(settings, github, bot, submitter)
         service = SubmissionService(
             request.app.state.allocator,
@@ -1225,6 +1245,14 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         bot: GitHubClient | None = Depends(get_bot_optional),
     ) -> SubmitResponse:
         wpid = parse_wpid(wpid)
+        await run_in_threadpool(_update_precheck, request, wpid, submitter)
+        content = await _read_upload(file, settings.max_upload_bytes)
+        # Off the event loop, for the same reason as submit: everything from here blocks.
+        return await run_in_threadpool(
+            _update_after_upload, request, wpid, content, description, submitter, github, bot
+        )
+
+    def _update_precheck(request: Request, wpid: int, submitter: str) -> None:
         # The same gate the revise route has. Without it a submitter can push a new commit onto
         # an approved pull request that still carries the `accepted` label, so the repository
         # may publish a GPML no curator has looked at — while the review still reads "approved"
@@ -1243,7 +1271,16 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             # Only when this would open one. With a pull request already on the pathway the
             # update re-uploads onto it, which is the answer-a-change-request path.
             _check_rate_limit(request, submitter)
-        content = await _read_upload(file, settings.max_upload_bytes)
+
+    def _update_after_upload(
+        request: Request,
+        wpid: int,
+        content: bytes,
+        description: str,
+        submitter: str,
+        github: GitHubClient,
+        bot: GitHubClient | None,
+    ) -> SubmitResponse:
         target = _write_target(settings, github, bot, submitter)
         writer = target.client
         service = UpdateService(
@@ -1254,12 +1291,11 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             target=target,
         )
         try:
-            # Off the event loop. Checking out a pathway scans the target repo's open pull
-            # requests for a foreign writer, which on a busy repo is dozens of sequential
-            # requests — long enough to stall every other request in the process if it ran here.
+            # Checking out a pathway scans the target repo's open pull requests for a foreign
+            # writer, which on a busy repo is dozens of sequential requests — the reason this
+            # whole function runs in the threadpool rather than on the event loop.
             try:
-                result = await run_in_threadpool(
-                    service.update_pathway,
+                result = service.update_pathway(
                     wpid=wpid,
                     gpml=content,
                     submitter=submitter,
@@ -1275,14 +1311,13 @@ def build_app(settings: Settings | None = None) -> FastAPI:
                 )
                 if retry is None or not target.is_cross_repo:
                     raise
-                result = await run_in_threadpool(
-                    UpdateService(
-                        request.app.state.locks,
-                        retry.client,
-                        repo=settings.content_repo,
-                        base_branch=settings.default_branch,
-                        target=retry,
-                    ).update_pathway,
+                result = UpdateService(
+                    request.app.state.locks,
+                    retry.client,
+                    repo=settings.content_repo,
+                    base_branch=settings.default_branch,
+                    target=retry,
+                ).update_pathway(
                     wpid=wpid,
                     gpml=content,
                     submitter=submitter,
@@ -1353,6 +1388,19 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         the target repo publishes it, so there is nothing to look it up by until then.
         """
         content = await _read_upload(file, settings.max_upload_bytes)
+        return await run_in_threadpool(
+            _revise_after_upload, request, pr_number, content, description, submitter, github, bot
+        )
+
+    def _revise_after_upload(
+        request: Request,
+        pr_number: int,
+        content: bytes,
+        description: str,
+        submitter: str,
+        github: GitHubClient,
+        bot: GitHubClient | None,
+    ) -> SubmitResponse:
         curation = _curation(request, bot)
         try:
             review = curation.get(pr_number)
@@ -1659,7 +1707,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         return _detail(r)
 
     @app.post("/api/pathways/{wpid}/release")
-    async def force_release(
+    def force_release(
         request: Request, wpid: str, curator: str = Depends(get_current_user)
     ) -> dict[str, bool]:
         # Curator override (design §4.3): restricted to the curator whitelist.
@@ -1737,7 +1785,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
 
         if action in ("opened", "reopened", "synchronize"):
             try:
-                tracked = curation.get(int(pr_number))
+                tracked = await run_in_threadpool(curation.get, int(pr_number))
             except ReviewNotFound:
                 tracked = None
             if tracked is not None:
@@ -1776,8 +1824,14 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             # two venues from diverging.
             label = ((payload.get("label") or {}).get("name")) or ""
             actor = (payload.get("sender") or {}).get("login") or "github"
-            review = curation.handle_label_event(
-                int(pr_number), label, added=(action == "labeled"), actor=actor
+            # In the threadpool: settling a label can read comments, files and edit the mirror,
+            # all blocking, and this handler is async.
+            review = await run_in_threadpool(
+                curation.handle_label_event,
+                int(pr_number),
+                label,
+                added=(action == "labeled"),
+                actor=actor,
             )
             return {
                 "ok": True,
@@ -1787,7 +1841,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             }
 
         merged = bool(pr.get("merged"))
-        review = curation.handle_pr_closed(int(pr_number), merged=merged)
+        review = await run_in_threadpool(curation.handle_pr_closed, int(pr_number), merged=merged)
         return {
             "ok": True,
             "pr_number": int(pr_number),
