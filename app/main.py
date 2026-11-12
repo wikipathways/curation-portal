@@ -828,6 +828,9 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             "sentence": ", ".join(parts) if parts else "No data nodes were added, removed or "
             "re-annotated.",
             "changed": bool(parts),
+            # Title, description, references, ontology tags (app.preview.diff.diff_metadata).
+            # Absent on a cache written before Wave 3.
+            "meta": diff.get("meta") if isinstance(diff.get("meta"), dict) else None,
         }
 
     def _review_view(request: Request, r) -> dict:
@@ -1241,13 +1244,17 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         return {"ok": True}
 
     @app.post("/api/validate", response_model=ValidateResponse)
-    async def validate(file: UploadFile) -> ValidateResponse:
+    async def validate(file: UploadFile, wpid: str = Form("")) -> ValidateResponse:
         content = await _read_upload(file, settings.max_upload_bytes)
+        # The pathway an update targets, when the form knows it: the file is then checked for
+        # declaring a different one. Anything that is not a plain positive number is ignored.
+        digits = wpid.strip().upper().removeprefix("WP")
+        target = int(digits) if digits.isdigit() and not digits.startswith("0") else None
         # Parsing and grading are CPU work; on the event loop they would stall every other
         # request in this single-process app for as long as they take.
-        return await run_in_threadpool(_validate_upload, content)
+        return await run_in_threadpool(_validate_upload, content, target)
 
-    def _validate_upload(content: bytes) -> ValidateResponse:
+    def _validate_upload(content: bytes, target: int | None = None) -> ValidateResponse:
         try:
             meta = validate_gpml(content)
         except InvalidGpml as exc:
@@ -1258,7 +1265,9 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         from app.quality import inspect_gpml
 
         return ValidateResponse(
-            quality=inspect_gpml(content).as_dict(),
+            quality=inspect_gpml(
+                content, kind="update" if target else "new", target_wpid=target
+            ).as_dict(),
             name=meta.name,
             organism=meta.organism,
             embedded_wpid=meta.wpid,

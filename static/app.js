@@ -132,8 +132,8 @@
     return el;
   }
 
-  function renderPreflight(findings) {
-    var host = document.getElementById('preflight');
+  function renderPreflight(findings, hostId) {
+    var host = document.getElementById(hostId || 'preflight');
     if (!host) { return; }
     host.innerHTML = '';
     var loud = (findings || []).filter(function (f) {
@@ -360,6 +360,34 @@
     return state === 'pending_new' ? 'Submit revision' : 'Submit update';
   }
 
+  // ---------- update pre-flight: the same checks, plus "is this the file for that WPID" ----------
+  var updateFile = document.getElementById('update-file');
+  var updateFormEl = document.getElementById('update-form');
+  function runUpdatePreflight() {
+    var host = document.getElementById('update-preflight');
+    var file = updateFile && updateFile.files[0];
+    var num = wpidNumber(wpidInput ? wpidInput.value : '');
+    if (host) { host.hidden = true; host.innerHTML = ''; }
+    if (updateFormEl) { delete updateFormEl.dataset.embedded; delete updateFormEl.dataset.confirmed; }
+    if (!file) { return; }
+    var fd = new FormData();
+    fd.append('file', file);
+    if (num && !isPadded(num)) { fd.append('wpid', num); }
+    fetch('/api/validate', { method: 'POST', body: fd })
+      .then(function (r) {
+        return r.json().catch(function () { return {}; })
+          .then(function (j) { return { ok: r.ok, status: r.status, body: j }; });
+      })
+      .then(function (res) {
+        if (!res.ok) { showError('update-result', describeError(res.status, res.body)); return; }
+        if (updateFormEl && res.body.embedded_wpid) { updateFormEl.dataset.embedded = res.body.embedded_wpid; }
+        renderPreflight((res.body.quality || {}).findings, 'update-preflight');
+      })
+      .catch(function () { /* a courtesy check; the upload reports its own failure */ });
+  }
+  if (updateFile) { updateFile.addEventListener('change', runUpdatePreflight); }
+  if (wpidInput) { wpidInput.addEventListener('change', runUpdatePreflight); }
+
   // Bound to the form's submit, not the button's click: with a single text field the browser
   // implicitly submits on Enter, which used to reload the page and discard the whole form.
   var updateForm = document.getElementById('update-form');
@@ -371,6 +399,18 @@
       if (!/^\d+$/.test(wpid)) { showError('update-result', 'Enter a numeric WPID, like 554.'); return; }
       if (isPadded(wpid)) { showError('update-result', paddedMessage(wpid)); return; }
       if (!file) { showError('update-result', 'Choose a .gpml file first.'); return; }
+      // The file names a different pathway than the WPID field. Most often the wrong file was
+      // picked; uploading would renumber it and replace WP<field> with another pathway's
+      // content. Asked once, inline: pressing Submit again goes ahead.
+      var embedded = (updateForm.dataset.embedded || '').replace(/^WP/i, '');
+      if (embedded && !/^0/.test(embedded) && embedded !== wpid &&
+          updateForm.dataset.confirmed !== embedded + '>' + wpid) {
+        updateForm.dataset.confirmed = embedded + '>' + wpid;
+        showError('update-result', 'This file says it is WP' + embedded + ', not WP' + wpid +
+          '. If it really is your edit of WP' + wpid + ', press Submit again and it will be ' +
+          'renumbered. Otherwise choose the right file.');
+        return;
+      }
       // Compose the "what changed" note from the ticked options + the free-text details.
       var updateDesc = document.getElementById('update-description');
       var detail = updateDesc ? (updateDesc.value || '').trim() : '';

@@ -385,3 +385,100 @@ def test_the_version_rule_predicts_what_the_repository_will_publish():
     assert _severity(pathvisio, "gpml.version") == Severity.WARN.value
     assert "WP<id>_1" in pathvisio.by_id("gpml.version").detail
     assert pathvisio.by_id("gpml.version").predicts_repo is True
+
+
+# ---- grading an update on what it changed (Wave 3) --------------------------------------------
+
+
+def _pathway(*nodes: tuple[str, str], refs: int = 0, version: str = "") -> str:
+    v = f' Version="{version}"' if version else ""
+    body = "".join(
+        f'<DataNode TextLabel="{label}" Type="GeneProduct" GraphId="n{i}">'
+        f'<Graphics CenterX="10" CenterY="10" Width="5" Height="5"/>'
+        f'<Xref Database="{"Ensembl" if ident else ""}" ID="{ident}"/></DataNode>'
+        for i, (label, ident) in enumerate(nodes)
+    )
+    cites = "".join(f'<BiopaxRef>r{i}</BiopaxRef>' for i in range(refs))
+    biopax = "".join(
+        f'<bp:PublicationXref xmlns:bp="http://www.biopax.org/release/biopax-level3.owl#" '
+        f'xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" rdf:id="r{i}">'
+        f'<bp:ID>{1000 + i}</bp:ID><bp:DB>PubMed</bp:DB></bp:PublicationXref>'
+        for i in range(refs)
+    )
+    return (
+        f'<Pathway xmlns="http://pathvisio.org/GPML/2013a" Name="Glycolysis" '
+        f'Organism="Homo sapiens" Author="a"{v}>{cites}'
+        f'<Graphics BoardWidth="100" BoardHeight="100"/>{body}'
+        f"<Biopax>{biopax}</Biopax></Pathway>"
+    )
+
+
+def _as_update(before: str, after: str, **kw):
+    return inspect_gpml(
+        after, before=parse_curation_metadata(before), kind="update", **kw
+    )
+
+
+def test_an_update_is_not_failed_for_unannotated_nodes_it_inherited():
+    base = _pathway(("INSR", ""), ("AKT1", ""), ("PTEN", "ENSG1"))
+    same = _pathway(("INSR", ""), ("AKT1", ""), ("PTEN", "ENSG1"), ("MTOR", "ENSG2"))
+    finding = _as_update(base, same).by_id("content.datanode_annotation")
+    assert finding.severity == Severity.WARN.value
+    assert "already unannotated" in finding.detail
+
+    better = _pathway(("INSR", "ENSG3"), ("AKT1", ""), ("PTEN", "ENSG1"))
+    assert "annotates 1" in _as_update(base, better).by_id("content.datanode_annotation").detail
+
+
+def test_an_update_that_adds_unannotated_nodes_fails_and_names_them():
+    base = _pathway(("INSR", ""), ("PTEN", "ENSG1"))
+    worse = _pathway(("INSR", ""), ("PTEN", "ENSG1"), ("MTOR", ""))
+    finding = _as_update(base, worse).by_id("content.datanode_annotation")
+    assert finding.severity == Severity.FAIL.value
+    assert "MTOR" in finding.detail and "1 more than before" in finding.detail
+
+
+def test_an_update_that_drops_cited_references_fails():
+    base = _pathway(("PTEN", "ENSG1"), refs=2)
+    assert parse_curation_metadata(base).cited_reference_count == 2
+    fewer = _pathway(("PTEN", "ENSG1"), refs=1)
+    finding = _as_update(base, fewer).by_id("content.references")
+    assert finding.severity == Severity.FAIL.value and "drops 1 of the 2" in finding.detail
+    none_before = _pathway(("PTEN", "ENSG1"))
+    assert "had none either" in _as_update(none_before, none_before).by_id(
+        "content.references"
+    ).detail
+
+
+def test_the_file_is_checked_for_declaring_another_pathway():
+    wp554 = _pathway(("PTEN", "ENSG1"), version="WP554_r123")
+    as_other = inspect_gpml(wp554, kind="update", target_wpid=123).by_id("gpml.embedded_wpid")
+    assert as_other.severity == Severity.WARN.value and "WP554" in as_other.detail
+    as_itself = inspect_gpml(wp554, kind="update", target_wpid=554).by_id("gpml.embedded_wpid")
+    assert as_itself.severity == Severity.PASS.value
+    as_new = inspect_gpml(wp554).by_id("gpml.embedded_wpid")
+    assert as_new.severity == Severity.WARN.value and "Update existing" in as_new.detail
+    placeholder = _pathway(("PTEN", "ENSG1"), version="WP0001_r1")
+    assert inspect_gpml(placeholder).by_id("gpml.embedded_wpid") is None
+
+
+def test_the_metadata_diff_names_what_moved():
+    from app.preview.diff import diff_metadata
+
+    before = parse_curation_metadata(_pathway(("PTEN", "ENSG1"), refs=2))
+    after_text = _pathway(("PTEN", "ENSG1"), refs=1).replace('Name="Glycolysis"', 'Name="Gluco"')
+    out = diff_metadata(before, parse_curation_metadata(after_text))
+    assert out["title"] == {"from": "Glycolysis", "to": "Gluco"}
+    assert len(out["references"]["removed"]) == 1 and out["references"]["added"] == []
+    assert diff_metadata(before, before) == {}
+
+
+def test_a_missing_description_is_failed_only_on_the_edit_that_removes_it():
+    bare = _pathway(("PTEN", "ENSG1"))
+    assert _as_update(bare, bare).by_id("content.description").severity == Severity.WARN.value
+    described = bare.replace(
+        "<Graphics", "<Comment Source=\"WikiPathways-description\">A pathway.</Comment><Graphics", 1
+    )
+    assert parse_curation_metadata(described).description
+    removed = _as_update(described, bare).by_id("content.description")
+    assert removed.severity == Severity.FAIL.value and "removes" in removed.detail

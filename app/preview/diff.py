@@ -173,3 +173,46 @@ def diff_nodes(before: list[dict], after: list[dict]) -> PathwayDiff:
         summary[e["change"]] += 1
     summary["removed"] = sum(1 for e in b_out if e["change"] == "removed")
     return PathwayDiff(before=b_out, after=a_out, summary=summary)
+
+
+def diff_metadata(before, after) -> dict:
+    """What an update changed besides the data nodes: title, description, references, tags.
+
+    ``before``/``after`` are ``CurationMetadata`` (duck-typed). Only what changed is returned, so
+    an empty dict means none of these moved. References are keyed by database and identifier, tags
+    by identifier; each entry carries a label for display.
+    """
+    out: dict = {}
+    if (getattr(before, "name", None) or "") != (getattr(after, "name", None) or ""):
+        out["title"] = {"from": getattr(before, "name", None), "to": getattr(after, "name", None)}
+    b_desc = (getattr(before, "description", None) or "").strip()
+    a_desc = (getattr(after, "description", None) or "").strip()
+    if b_desc != a_desc:
+        out["description"] = {"from_words": len(b_desc.split()), "to_words": len(a_desc.split())}
+
+    def refs(meta) -> dict[tuple[str, str], str]:
+        return {
+            (
+                (getattr(r, "database", "") or "").casefold(),
+                (getattr(r, "identifier", "") or "").strip(),
+            ): (getattr(r, "title", "") or getattr(r, "identifier", "") or "")
+            for r in (getattr(meta, "references", None) or [])
+            if getattr(r, "identifier", "")
+        }
+
+    def tags(meta) -> dict[str, str]:
+        return {
+            (getattr(t, "identifier", "") or "").strip(): (
+                getattr(t, "term", "") or getattr(t, "identifier", "")
+            )
+            for t in (getattr(meta, "ontology_tags", None) or [])
+            if getattr(t, "identifier", "")
+        }
+
+    for key, read in (("references", refs), ("ontology_tags", tags)):
+        b, a = read(before), read(after)
+        added = [a[k] for k in a.keys() - b.keys()]
+        removed = [b[k] for k in b.keys() - a.keys()]
+        if added or removed:
+            out[key] = {"added": sorted(added), "removed": sorted(removed)}
+    return out

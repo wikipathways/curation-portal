@@ -47,7 +47,9 @@ class AutoResult:
 
 # Metadata is duck-typed (``app.preview.metadata.CurationMetadata``) to avoid an import cycle with
 # the models, which import ``default_checklist`` from here.
-MetaFn = Callable[[object], AutoResult]
+#: ``(metadata, before=None, kind="new") -> AutoResult``. ``before`` is the base version's
+#: metadata for an update, so a check can judge the change rather than the whole pathway.
+MetaFn = Callable[..., AutoResult]
 RelevanceFn = Callable[[object, object], bool]
 
 
@@ -79,10 +81,10 @@ def _auto_from(key: str) -> MetaFn:
     ``app.quality`` would be reached from ``app.models`` and close a cycle through ``app.submit``.
     """
 
-    def auto_check(m) -> AutoResult:
+    def auto_check(m, before=None, kind: str = "new") -> AutoResult:
         from app.quality import checklist_result
 
-        result = checklist_result(key, m)
+        result = checklist_result(key, m, before=before, kind=kind)
         if result is None:
             return AutoResult(ChecklistState.PENDING.value, "")
         return AutoResult(*result)
@@ -99,7 +101,7 @@ _auto_ontology = _auto_from("ontology_tags")
 _auto_description = _auto_from("description_ok")
 
 
-def _auto_naming(m) -> AutoResult:
+def _auto_naming(m, before=None, kind: str = "new") -> AutoResult:
     return AutoResult(ChecklistState.PASS.value, "WPID and file layout are assigned by the app.")
 
 
@@ -316,7 +318,7 @@ def build_checklist(
         elif d.key == "naming_ok" and pipeline_mode:
             state, note, auto = _PIPELINE_NAMING.state, _PIPELINE_NAMING.note, True
         elif metadata is not None and d.auto_check is not None:
-            res = d.auto_check(metadata)
+            res = d.auto_check(metadata, before=before, kind=kind)
             state, note, auto = res.state, res.note, True
         items.append(
             {

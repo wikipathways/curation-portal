@@ -280,6 +280,21 @@
   <div class="diff-summary{% if not r.preview.diff.changed %} diff-summary--quiet{% endif %}"
        data-diff-pr="{{ r.pr_number }}">
     <p class="diff-summary__line"><strong>Data nodes:</strong> {{ r.preview.diff.sentence }}</p>
+    {% set meta = r.preview.diff.meta %}
+    {% if meta is not none %}
+      {% if meta.title %}<p class="diff-summary__line"><strong>Title:</strong> &ldquo;{{ meta.title['from'] or '(none)' }}&rdquo; &rarr; &ldquo;{{ meta.title['to'] or '(none)' }}&rdquo;</p>{% endif %}
+      {% if meta.description %}<p class="diff-summary__line"><strong>Description:</strong> rewritten ({{ meta.description.from_words }} &rarr; {{ meta.description.to_words }} words).</p>{% endif %}
+      {% for key, word in [('references', 'References'), ('ontology_tags', 'Ontology tags')] %}
+        {% if meta[key] %}
+        <p class="diff-summary__line"><strong>{{ word }}:</strong>
+          {% if meta[key].added %}added {{ meta[key].added | join('; ') }}{% endif %}{% if meta[key].added and meta[key].removed %}; {% endif %}{% if meta[key].removed %}removed {{ meta[key].removed | join('; ') }}{% endif %}.
+        </p>
+        {% endif %}
+      {% endfor %}
+      {% if not (meta.title or meta.description or meta.references or meta.ontology_tags) %}
+      <p class="diff-summary__line"><strong>Title, description, references, tags:</strong> unchanged.</p>
+      {% endif %}
+    {% endif %}
     {% if r.preview.diff.changed %}
     <ul class="diff-legend">
       {% for key, word in [('added', 'added'), ('removed', 'removed'), ('reannotated', 're-annotated'), ('relabelled', 'relabelled'), ('moved', 'moved')] %}

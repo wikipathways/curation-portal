@@ -24,6 +24,20 @@ from app.review.checklist import build_checklist
 _DIR = Path(__file__).parent / "fixtures" / "published"
 _PUBLISHED = sorted(_DIR.glob("*.gpml"))
 
+def _as_resubmitted(path: Path):
+    """Grade a published pathway the way it arrives in practice: an update of itself.
+
+    Graded as a brand-new upload it now draws ``gpml.embedded_wpid`` (the file says it is WP1487
+    and a new submission would get a fresh id), which is correct and pinned separately below.
+    The regression guard is the update case: an unchanged published file must not fail.
+    """
+    text = path.read_text(encoding="utf-8")
+    meta = parse_curation_metadata(text)
+    return inspect_gpml(
+        text, metadata=meta, before=meta, kind="update", target_wpid=int(path.stem[2:])
+    )
+
+
 #: The warnings a real pathway may legitimately raise, and why each is left standing rather than
 #: softened to fit. None of them is a prediction that the pipeline breaks.
 #:
@@ -55,7 +69,7 @@ def test_no_rule_fails_a_published_pathway(path: Path):
     clean as rules are added. `gpml.line_thickness` (issue #26) fired on none of the thirty, which
     is the evidence that real PathVisio output always writes the attribute.
     """
-    report = inspect_gpml(path.read_text(encoding="utf-8"))
+    report = _as_resubmitted(path)
     broken = [f for f in report.findings if f.severity in (Severity.FAIL, Severity.BLOCK)]
     assert broken == [], [(f.id, f.detail) for f in broken]
     assert report.status == Severity.PASS.value
@@ -74,7 +88,7 @@ def test_a_published_pathway_raises_only_warnings_we_have_reasoned_about(path: P
     Widening `_ALLOWED_WARNINGS` should mean writing down why that warning is acceptable on a file
     the project already published.
     """
-    report = inspect_gpml(path.read_text(encoding="utf-8"))
+    report = _as_resubmitted(path)
     surprising = [
         f.id
         for f in report.findings
@@ -128,3 +142,14 @@ def test_every_ontology_tag_a_published_pathway_declares_is_parsed(path: Path):
     for tag in parsed:
         assert tag.identifier, f"{path.name}: ontology tag with no identifier: {tag}"
         assert tag.term, f"{path.name}: ontology tag with no term: {tag}"
+
+
+@pytest.mark.parametrize("path", _PUBLISHED, ids=lambda p: p.stem)
+def test_a_published_pathway_uploaded_as_new_is_flagged_as_a_copy(path: Path):
+    """Starting a "new" pathway from a published file keeps that file's identity in Version."""
+    report = inspect_gpml(path.read_text(encoding="utf-8"))
+    finding = report.by_id("gpml.embedded_wpid")
+    assert finding is not None and finding.severity == Severity.WARN
+    assert path.stem in finding.detail
+    broken = [f for f in report.findings if f.severity in (Severity.FAIL, Severity.BLOCK)]
+    assert broken == []

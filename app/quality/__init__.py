@@ -35,10 +35,17 @@ def inspect_gpml(
     kind: str = "new",
     drawable: bool | None = None,
     origin: str = "portal",
+    target_wpid: int | None = None,
 ) -> QualityReport:
     """Every rule, over an uploaded GPML. ``metadata`` is parsed from it when not supplied."""
     subject = build_subject(
-        gpml, metadata=metadata, before=before, kind=kind, drawable=drawable, origin=origin
+        gpml,
+        metadata=metadata,
+        before=before,
+        kind=kind,
+        drawable=drawable,
+        origin=origin,
+        target_wpid=target_wpid,
     )
     return evaluate(subject, text_available=True)
 

@@ -210,3 +210,22 @@ def test_the_update_tab_offers_the_current_version(tmp_path):
         info = c.get("/api/pathways/5636").json()
         assert info["state"] == "on_main"
         assert info["gpml_url"] == f"https://raw.githubusercontent.com/{repo}/main/{PATH}"
+
+
+def test_validate_checks_the_file_against_the_wpid_being_updated(tmp_path):
+    app, _current, _fake, _repo = _app(tmp_path)
+    with TestClient(app) as c:
+        # REV_GPML declares WP5636.
+        def finding(wpid):
+            r = c.post(
+                "/api/validate",
+                files={"file": ("rev.gpml", io.BytesIO(REV_GPML), "application/xml")},
+                data={"wpid": wpid},
+            )
+            assert r.status_code == 200, r.text
+            return next(
+                f for f in r.json()["quality"]["findings"] if f["id"] == "gpml.embedded_wpid"
+            )
+
+        assert finding("WP123")["severity"] == "warn"
+        assert finding("5636")["severity"] == "pass"

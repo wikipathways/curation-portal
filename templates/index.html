@@ -115,6 +115,9 @@
     </div>
   </div>
   <p class="wpid-status" id="update-wpid-status" role="status" hidden></p>
+  {# The same pre-flight the new-pathway form runs, plus whether the file says it is the pathway
+     named above. Filled once both a WPID and a file are in. #}
+  <div class="preflight" id="update-preflight" role="status" aria-live="polite" hidden></div>
   <fieldset class="change-set">
     <legend>What changed? <span class="muted">(optional, helps the reviewer)</span></legend>
     <div class="change-set__grid">

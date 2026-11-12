@@ -171,6 +171,9 @@ class Subject:
     origin: str = "portal"
     #: The root element's ``Version`` attribute, as written.
     version: str | None = None
+    #: The WPID this file is being submitted as, when known: the pathway an update targets, or
+    #: the id an adopted pull request's directory names. None for a new upload.
+    target_wpid: int | None = None
 
 
 @dataclass(frozen=True)
@@ -355,6 +358,43 @@ def _check_author(s: Subject) -> tuple[str, str] | None:
 
 
 _VERSION_RE = re.compile(r"^WP\d+_r\d+$")
+_EMBEDDED_WPID_RE = re.compile(r"^WP([0-9]+)")
+
+
+def _check_embedded_wpid(s: Subject) -> tuple[str, str] | None:
+    """Does the file say it is the pathway it is being submitted as?
+
+    A GPML carries its own identity in ``Version`` (``WP554_r…``). A contributor who picks the
+    wrong file from a folder of downloads, or starts a new pathway from a copy of an old one, gets
+    no warning otherwise: the portal renumbers an update to the target id and files a new one
+    under a fresh id, either way silently.
+    """
+    match = _EMBEDDED_WPID_RE.match(s.version or "")
+    if s.tree is None or not match or match.group(1).startswith("0"):
+        # No identity in the file, or the WP0001 placeholder a submission carries before it has
+        # an id. Nothing to compare.
+        return None
+    embedded = int(match.group(1))
+    if s.target_wpid:
+        if embedded == s.target_wpid:
+            return (Severity.PASS.value, f"The file says it is WP{embedded}, as expected.")
+        return (
+            Severity.WARN.value,
+            f"The file says it is WP{embedded} (Version {s.version}), but it is being submitted "
+            f"as WP{s.target_wpid}. If it is the right file it is renumbered to WP"
+            f"{s.target_wpid}; if not, choose the WP{s.target_wpid} file.",
+        )
+    if s.kind == "new":
+        return (
+            Severity.WARN.value,
+            f"The file says it is WP{embedded} (Version {s.version}). Submitting it as a new "
+            f"pathway gives it a new identifier. If you meant to change WP{embedded}, use "
+            "Update existing instead.",
+        )
+    return None
+
+
+
 
 
 def _check_version(s: Subject) -> tuple[str, str] | None:
@@ -540,6 +580,8 @@ def _check_datanode_annotation(s: Subject) -> tuple[str, str] | None:
     ]
     if not unmapped:
         return (Severity.PASS.value, f"All {len(nodes)} data nodes carry an identifier.")
+    if s.kind == "update" and s.before is not None:
+        return _relative_annotation(s, nodes, unmapped)
     # Any unmapped node fails, which is stricter than ``mvp1/validate_pathway.py`` — it warns
     # unless *nothing* resolved. The app's answer is kept because the app is in a position to be
     # strict: this runs before the submission exists, where an unannotated node is still cheap to
@@ -547,6 +589,41 @@ def _check_datanode_annotation(s: Subject) -> tuple[str, str] | None:
     return (
         Severity.FAIL.value,
         f"{len(unmapped)} of {len(nodes)} data nodes have no identifier: {_named(unmapped)}",
+    )
+
+
+def _relative_annotation(s: Subject, nodes: list, unmapped: list[str]) -> tuple[str, str]:
+    """An update is graded on what it changed, not on the pathway it inherited.
+
+    1175 of 2218 published pathways have at least one data node with no identifier (measured
+    2026-11-11). Failing every edit of those on the old debt told a contributor who improved a
+    pathway that they had broken it. So: fail only when this edit leaves *more* unmapped nodes
+    than the base had, naming the new ones; otherwise say the rest were there before.
+    """
+    before_unmapped = [
+        getattr(n, "label", "") or "(unlabeled)"
+        for n in _nodes(Subject(text="", metadata=s.before))
+        if not getattr(n, "identifier", "")
+    ]
+    if len(unmapped) > len(before_unmapped):
+        remaining = list(before_unmapped)
+        new = []
+        for label in unmapped:
+            if label in remaining:
+                remaining.remove(label)
+            else:
+                new.append(label)
+        return (
+            Severity.FAIL.value,
+            f"This edit leaves {len(unmapped)} of {len(nodes)} data nodes without an identifier, "
+            f"{len(unmapped) - len(before_unmapped)} more than before: {_named(new or unmapped)}",
+        )
+    fixed = len(before_unmapped) - len(unmapped)
+    better = f" This edit annotates {fixed} that had none." if fixed else ""
+    return (
+        Severity.WARN.value,
+        f"{len(unmapped)} of {len(nodes)} data nodes have no identifier, all of them already "
+        f"unannotated before this edit: {_named(unmapped)}.{better}",
     )
 
 
@@ -601,6 +678,19 @@ def _check_description(s: Subject) -> tuple[str, str] | None:
     because on an edit an unexplained rewrite of the description is the thing worth looking at.
     """
     description = getattr(s.metadata, "description", None)
+    if not description and s.kind == "update" and s.before is not None:
+        if not getattr(s.before, "description", None):
+            # Inherited, like unannotated nodes: 28 published pathways have none (2026-11-12).
+            return (
+                Severity.WARN.value,
+                "The pathway has no description, and the version this edit replaces had none "
+                "either. The repository asks for a two to three sentence overview; worth adding.",
+            )
+        return (
+            Severity.FAIL.value,
+            "This edit removes the pathway's description. The repository asks for a two to "
+            "three sentence overview of the processes it describes.",
+        )
     if not description:
         return (
             Severity.FAIL.value,
@@ -658,6 +748,23 @@ def _check_references(s: Subject) -> tuple[str, str] | None:
     # misunderstanding it contains.
     cited = getattr(s.metadata, "cited_reference_count", None)
     n = cited if isinstance(cited, int) else len(declared)
+    if s.kind == "update" and s.before is not None:
+        before_cited = getattr(s.before, "cited_reference_count", None)
+        if not isinstance(before_cited, int):
+            before_cited = len(list(getattr(s.before, "references", []) or []))
+        if n < before_cited:
+            return (
+                Severity.FAIL.value,
+                f"This edit drops {before_cited - n} of the {before_cited} cited literature "
+                f"reference{'' if before_cited == 1 else 's'} the pathway had. If that was "
+                "deliberate, a curator can mark this item; otherwise restore the citations.",
+            )
+        if not n:
+            return (
+                Severity.WARN.value,
+                "No literature references, and the version this edit replaces had none either. "
+                "The repository asks for at least one; worth adding, not caused by this edit.",
+            )
     if not n:
         uncited = (
             f" The file declares {len(declared)} but no <BiopaxRef> cites "
@@ -703,6 +810,7 @@ RULES: tuple[Rule, ...] = (
     Rule("gpml.line_thickness", "Interaction line thickness", _check_line_thickness),
     Rule("gpml.author", "Authors", _check_author),
     Rule("gpml.version", "Version", _check_version, predicts_repo=True),
+    Rule("gpml.embedded_wpid", "Pathway identifier", _check_embedded_wpid),
     Rule("gpml.citation_ids", "Empty citation IDs", _check_citation_ids),
     Rule("gpml.datanodes", "DataNodes in GPML", _check_datanodes_present, needs_text=False),
     Rule(
@@ -779,6 +887,7 @@ def build_subject(
     kind: str = "new",
     drawable: bool | None = None,
     origin: str = "portal",
+    target_wpid: int | None = None,
 ) -> Subject:
     """Parse once, into the struct every rule reads.
 
@@ -843,6 +952,7 @@ def build_subject(
         tree=tree,
         origin=origin,
         version=tree.get("Version") if tree is not None else None,
+        target_wpid=target_wpid,
     )
 
 

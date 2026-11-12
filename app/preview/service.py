@@ -21,7 +21,7 @@ from collections.abc import Container, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
-from app.preview.diff import diff_nodes
+from app.preview.diff import diff_metadata, diff_nodes
 from app.preview.metadata import parse_curation_metadata
 from app.preview.render import RenderError, render_gpml_with_nodes
 
@@ -82,6 +82,8 @@ class PreviewService:
         """
         out = self._cache_dir / str(pr_number)
         out.mkdir(parents=True, exist_ok=True)
+        # 0 means "no id yet": a new pathway in pipeline mode.
+        target_wpid = wpid or None
         rendered: dict[str, bool] = {"before": False, "after": False}
         drawn_nodes: dict[str, list[dict]] = {}
         for side, gpml in (("before", before_gpml), ("after", after_gpml)):
@@ -102,14 +104,19 @@ class PreviewService:
             except OSError:
                 pass  # the overlay is an enhancement; never fail a render on it
             rendered[side] = True
-        self._write_diff(out, drawn_nodes)
+        self._write_diff(out, drawn_nodes, before_gpml=before_gpml, after_gpml=after_gpml)
         self._write_metadata(out, after_gpml, submitter_note)
         drawn = rendered["before"] or rendered["after"]
         # The one moment the renderer's verdict is in hand for free. ``app.quality`` will not run
         # the renderer itself — that would break the offline-and-cheap rule its rules work under —
         # so this is the only caller that can answer the "is it drawable" rule at all.
         self._write_quality(
-            out, after_gpml, before_gpml=before_gpml, drawable=drawn, origin=origin
+            out,
+            after_gpml,
+            before_gpml=before_gpml,
+            drawable=drawn,
+            origin=origin,
+            target_wpid=target_wpid,
         )
         # Record the outcome so a re-upload that now renders clears a previous failure, and a
         # GPML we cannot draw reads as 'failed' rather than 'pending' forever.
@@ -130,7 +137,13 @@ class PreviewService:
 
     # -- before/after diff sidecar (issue #24) ---------------------------------------------
     @staticmethod
-    def _write_diff(out: Path, drawn: dict[str, list[dict]]) -> None:
+    def _write_diff(
+        out: Path,
+        drawn: dict[str, list[dict]],
+        *,
+        before_gpml: bytes | None = None,
+        after_gpml: bytes | None = None,
+    ) -> None:
         """Cache what changed between the two sides, or clear a stale one (best-effort).
 
         Only an update has two sides. A new pathway has nothing to compare against, and a
@@ -143,6 +156,12 @@ class PreviewService:
             return
         try:
             data = diff_nodes(drawn["before"], drawn["after"]).as_dict()
+            if before_gpml and after_gpml:
+                # Title, description, references and tags: what a curator reads in the panels
+                # below, and could not tell had changed without comparing them by eye.
+                data["meta"] = diff_metadata(
+                    parse_curation_metadata(before_gpml), parse_curation_metadata(after_gpml)
+                )
             path.write_text(json.dumps(data), encoding="utf-8")
         except OSError:
             pass  # the summary is an enhancement; never fail a render on it
@@ -190,6 +209,7 @@ class PreviewService:
         before_gpml: bytes | None,
         drawable: bool,
         origin: str = "portal",
+        target_wpid: int | None = None,
     ) -> None:
         """Cache the graded quality report next to the render (best-effort).
 
@@ -213,6 +233,7 @@ class PreviewService:
                 kind="update" if before_gpml else "new",
                 drawable=drawable,
                 origin=origin,
+                target_wpid=target_wpid,
             )
             (out / "quality.json").write_text(json.dumps(report.as_dict()), encoding="utf-8")
         except (OSError, ValueError):
