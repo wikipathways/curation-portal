@@ -573,7 +573,11 @@
       // Nothing is merged where the repository publishes through its own Actions. Saying
       // "Merging…" there sends the curator to GitHub to look for a merge that never happens.
       approveBtn.textContent = PIPELINE_MODE ? 'Handing it over…' : 'Merging…';
-      fetch('/api/reviews/' + pr2 + '/approve', { method: 'POST' })
+      // The commit this page showed: approving binds to it, and a push since then is refused
+      // with a reload message rather than approved unseen.
+      var seen = new FormData();
+      seen.append('head_sha', card2.getAttribute('data-head') || '');
+      fetch('/api/reviews/' + pr2 + '/approve', { method: 'POST', body: seen })
         .then(function (r) { return r.json().catch(function () { return {}; }).then(function (j) { return { ok: r.ok, status: r.status, body: j }; }); })
         .then(function (res) {
           if (!res.ok) {

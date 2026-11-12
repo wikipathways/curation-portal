@@ -864,6 +864,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             "title": getattr(r, "title", None) or (metadata or {}).get("name"),
             "organism": getattr(r, "organism", None) or (metadata or {}).get("organism"),
             "created_at": r.created_at,
+            "head_sha": r.head_sha,
             "wpid_str": r.wpid_str,
             "pr_url": pr_url,
             # Everything the templates need to talk about this state in words rather than in
@@ -1866,6 +1867,9 @@ def build_app(settings: Settings | None = None) -> FastAPI:
     def approve_review(
         request: Request,
         pr_number: int,
+        # The head commit the curator's page showed; optional so an API caller without it keeps
+        # the server-side check alone.
+        head_sha: str = Form(""),
         curator: str = Depends(get_current_user),
         bot: GitHubClient = Depends(get_bot_client),
     ):
@@ -1873,7 +1877,9 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         # (scaffolding-plan §3) — merging that way satisfies branch protection, and labelling
         # that way works even for a curator without write access to the target repo.
         try:
-            r = _curation(request, bot).approve(pr_number, curator)
+            r = _curation(request, bot).approve(
+                pr_number, curator, seen_head=head_sha.strip() or None
+            )
         except ReviewNotFound as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except NotACurator as exc:
@@ -1949,7 +1955,9 @@ def build_app(settings: Settings | None = None) -> FastAPI:
 
     # -- GitHub webhook (issue #8): release the lock when a PR is closed/merged outside the app --
 
-    def _adopt_in_background(request: Request, bot: GitHubClient, pr_number: int) -> None:
+    def _adopt_in_background(
+        request: Request, bot: GitHubClient, pr_number: int, head_sha: str | None = None
+    ) -> None:
         """Adopt one pull request off a webhook, swallowing everything.
 
         A background task that raises is invisible to GitHub — the delivery already answered 200
@@ -1960,7 +1968,12 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         acts as the same identity the handler authenticated with.
         """
         try:
-            _adoption(request, bot).adopt(pr_number)
+            outcome = _adoption(request, bot).adopt(pr_number)
+            if head_sha and not outcome.adopted:
+                # The refresh did not happen (an unreadable file, a render that failed), so the
+                # review still describes the old commit. Whatever it says, an approval of that
+                # commit must not stand.
+                _curation(request, bot).handle_head_moved(pr_number, head_sha)
         except Exception:  # noqa: BLE001 — nothing upstream can act on this
             logging.getLogger("wpsubmit.adopt").warning(
                 "adopting PR #%s failed", pr_number, exc_info=True
@@ -2076,13 +2089,15 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             except ReviewNotFound:
                 tracked = None
             if tracked is not None:
+                head_sha = str((pr.get("head") or {}).get("sha") or "")
                 if tracked.adopted and bot is not None:
                     # A review that already exists was adopted on purpose — by hand or by the
                     # flag — so it is kept current whatever the flag says now. The flag governs
                     # taking on pull requests nobody chose, not following ones somebody did.
-                    background.add_task(_adopt_in_background, request, bot, int(pr_number))
+                    background.add_task(
+                        _adopt_in_background, request, bot, int(pr_number), head_sha or None
+                    )
                     return {"ok": True, "pr_number": int(pr_number), "queued": True}
-                head_sha = str((pr.get("head") or {}).get("sha") or "")
                 if head_sha:
                     # A push the portal did not make withdraws an approval of the older commit.
                     background.add_task(curation.handle_head_moved, int(pr_number), head_sha)

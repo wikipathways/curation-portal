@@ -246,3 +246,107 @@ _GPML = (
     b'  <Graphics BoardWidth="200" BoardHeight="200"/>\n'
     b"</Pathway>\n"
 )
+
+
+# -- the three gaps the 2026-11-11 security review left (closed in Wave 2) ---------------------
+
+
+def test_approval_is_refused_when_the_page_showed_an_older_commit(session_factory):
+    """A push to an unapproved review moves its head silently. The curator's page still shows
+    the old commit, and approving from it must not approve the new one unseen."""
+    gh = _fake()
+    svc = _service(session_factory, gh)
+    pr, branch = _submit(svc, gh)
+    seen = svc.get(pr).head_sha
+    new = gh.put_file(
+        REPO, branch, "pathways/WP0001/WP0001.gpml", "<Pathway x='1'/>", "Push", sha="s"
+    )
+    svc.handle_head_moved(pr, new)  # the synchronize webhook, before anyone approved
+
+    with pytest.raises(ReviewStale):
+        svc.approve(pr, CURATOR, seen_head=seen)
+    assert svc.approve(pr, CURATOR, seen_head=new).status == ReviewStatus.APPROVED
+
+
+def test_a_label_that_could_not_be_removed_is_removed_by_the_next_reconcile(session_factory):
+    from datetime import timedelta
+
+    gh = _fake()
+    svc = _service(session_factory, gh)
+    pr, branch = _submit(svc, gh)
+    svc.approve(pr, CURATOR)
+    assert "accepted" in gh.list_labels(REPO, pr)
+
+    # The bot is unavailable when the push arrives: the approval is withdrawn here, and the
+    # label stays on GitHub where the repository could still publish it.
+    offline = CurationService(
+        session_factory, None, repo=REPO, curators=ConfigCurators([CURATOR]),
+        publish_mode="pipeline",
+    )
+    new = gh.put_file(
+        REPO, branch, "pathways/WP0001/WP0001.gpml", "<Pathway x='1'/>", "Push", sha="s"
+    )
+    offline.handle_head_moved(pr, new)
+    assert svc.get(pr).status == ReviewStatus.OPEN
+    assert "accepted" in gh.list_labels(REPO, pr)
+
+    later = CurationService(
+        session_factory, gh, repo=REPO, curators=ConfigCurators([CURATOR]),
+        publish_mode="pipeline", reconcile_min_interval=timedelta(seconds=0),
+    )
+    later.reconcile()
+    assert "accepted" not in gh.list_labels(REPO, pr)
+    assert not (svc.get(pr).pipeline_run or {}).get("unlabel")
+
+
+def test_an_adopted_review_whose_refresh_fails_loses_its_approval(tmp_path):
+    settings = Settings(
+        _env_file=None,
+        database_url=f"sqlite:///{tmp_path / 'reg.db'}",
+        content_repo=REPO,
+        publish_mode="pipeline",
+        curators=[CURATOR],
+        github_webhook_secret="whsec",
+        preview_cache_dir=str(tmp_path / "cache"),
+    )
+    app = build_app(settings)
+    gh = _fake()
+    for dep in (get_github_client, get_bot_optional, get_bot_client):
+        app.dependency_overrides[dep] = lambda: gh
+    app.dependency_overrides[get_current_user] = lambda: CURATOR
+    gpml = (
+        '<Pathway xmlns="http://pathvisio.org/GPML/2013a" Name="Glycolysis" '
+        'Organism="Homo sapiens" Author="egonw"><Graphics BoardWidth="9" BoardHeight="9"/>'
+        "</Pathway>"
+    )
+    gh.seed_foreign_pr(
+        REPO, 85, author="egonw", title="Plugin", head_branch="plugin", head_sha="old",
+        files=[("pathways/WP554/WP554.gpml", "modified", gpml)],
+    )
+    with TestClient(app) as c:
+        assert c.post("/api/reviews/85/adopt").json()["adopted"] is True
+        svc = app.state.worker._make_curation(gh)
+        for item in svc.get(85).checklist:
+            if item.get("required"):
+                svc.set_checklist_item(85, item["key"], ChecklistState.PASS.value)
+        svc.approve(85, CURATOR)
+
+        # A new commit whose file cannot be read: the refresh is skipped.
+        gh.pull_meta[85]["head_sha"] = "new"
+        payload = {
+            "action": "synchronize",
+            "number": 85,
+            "pull_request": {"number": 85, "head": {"sha": "new"}},
+            "repository": {"full_name": REPO},
+        }
+        body = json.dumps(payload).encode()
+        sig = "sha256=" + hmac.new(b"whsec", body, hashlib.sha256).hexdigest()
+        c.post(
+            "/webhooks/github",
+            content=body,
+            headers={"X-GitHub-Event": "pull_request", "X-Hub-Signature-256": sig},
+        )
+        review = svc.get(85)
+        assert review.status == ReviewStatus.OPEN
+        assert review.head_sha == "new"
+        assert "accepted" not in gh.list_labels(REPO, 85)

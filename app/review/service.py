@@ -744,16 +744,8 @@ class CurationService:
                     # A re-upload after changes were requested puts it back in the queue.
                     review.status = ReviewStatus.OPEN
                 s.commit()
-                if withdrawn and self.is_pipeline_mode and self._github is not None:
-                    try:
-                        self._github.remove_label(self._repo, pr_number, self._label_accepted)
-                    except (GitHubError, httpx.HTTPError):
-                        logger.warning(
-                            "review %s: could not remove %r after a new head",
-                            pr_number,
-                            self._label_accepted,
-                            exc_info=True,
-                        )
+                if withdrawn:
+                    self._take_back_accepted(pr_number)
             self._maybe_mirror(review)
             return review
 
@@ -942,14 +934,11 @@ class CurationService:
                 f"@{curator}: {note.strip()}" if note.strip() else f"@{curator} asked for changes."
             )
             s.commit()
-            if was_approved and self.is_pipeline_mode and self._github is not None:
+            if was_approved:
                 # Taking the approval back means taking the label back: while `accepted` is on
                 # the pull request the repository may publish it at any moment, whatever the
                 # dashboard now says.
-                try:
-                    self._github.remove_label(self._repo, pr_number, self._label_accepted)
-                except (GitHubError, httpx.HTTPError):
-                    pass
+                self._take_back_accepted(pr_number)
             if self._github is not None and post_comment:
                 body = (
                     f"@{review.submitter} — @{curator} asked for changes before this can "
@@ -1190,7 +1179,7 @@ class CurationService:
     )
 
     @as_actor("curator")
-    def approve(self, pr_number: int, curator: str) -> Review:
+    def approve(self, pr_number: int, curator: str, *, seen_head: str | None = None) -> Review:
         """Approve a submission. What that *does* depends on who owns publication.
 
         In direct mode it merges the PR. In pipeline mode it applies the target repo's
@@ -1217,6 +1206,16 @@ class CurationService:
                 )
             wpid = review.wpid
             reviewed_head = review.head_sha
+
+        # The commit the curator's page showed. A push the webhook already recorded moves
+        # ``reviewed_head`` on without withdrawing anything (the review was not approved yet), so
+        # without this a curator approving from a page loaded before that push would approve a
+        # commit they never saw.
+        if seen_head and reviewed_head and seen_head != reviewed_head:
+            raise ReviewStale(
+                f"PR #{pr_number} has a new commit ({reviewed_head[:7]}) since this page was "
+                f"loaded ({seen_head[:7]}). Reload and check the new version before approving."
+            )
 
         # Bind the decision to the commit the curator saw. Without this a push to the branch
         # between review and approval — the submitter's own fork, in fork mode — would be
@@ -2034,6 +2033,8 @@ class CurationService:
             return True
 
         if status != ReviewStatus.APPROVED:
+            if (known or {}).get("unlabel"):
+                self._retry_unlabel(pr_number, list(detail.labels))
             return False
 
         # Still approved and still open: either somebody took the label back off, or the target
@@ -2067,6 +2068,51 @@ class CurationService:
             s.commit()
             self._maybe_mirror(review)
         return True
+
+    def _take_back_accepted(self, pr_number: int) -> None:
+        """Remove ``accepted`` after an approval was withdrawn, or remember to.
+
+        While the label is on the pull request the repository may publish it, whatever the
+        dashboard says. When GitHub refuses or no bot is available, the row carries a reminder
+        (``pipeline_run["unlabel"]``) and the reconcile pass tries again until the label is gone.
+        """
+        if not self.is_pipeline_mode:
+            return
+        if self._github is not None:
+            try:
+                self._github.remove_label(self._repo, pr_number, self._label_accepted)
+                return
+            except (GitHubError, httpx.HTTPError):
+                logger.warning(
+                    "review %s: could not remove %r; will retry",
+                    pr_number,
+                    self._label_accepted,
+                    exc_info=True,
+                )
+        with self._session_factory() as s:
+            review = s.get(Review, pr_number)
+            if review is not None:
+                review.pipeline_run = {**(review.pipeline_run or {}), "unlabel": True}
+                s.commit()
+
+    def _retry_unlabel(self, pr_number: int, labels: list[str]) -> None:
+        """The reconcile half of ``_take_back_accepted``."""
+        if self._label_accepted in labels and self._github is not None:
+            try:
+                self._github.remove_label(self._repo, pr_number, self._label_accepted)
+            except (GitHubError, httpx.HTTPError):
+                return
+        with self._session_factory() as s:
+            review = s.get(Review, pr_number)
+            if review is not None and (review.pipeline_run or {}).get("unlabel"):
+                run = dict(review.pipeline_run)
+                run.pop("unlabel", None)
+                review.pipeline_run = run or None
+                if self._label_accepted in (review.github_labels or []):
+                    review.github_labels = [
+                        x for x in review.github_labels if x != self._label_accepted
+                    ]
+                s.commit()
 
     def reconcile_review(self, pr_number: int) -> bool:
         """Bring a single review in line with GitHub, honouring the same throttle.
@@ -2225,17 +2271,9 @@ class CurationService:
                 head_sha[:7],
                 " (approval withdrawn)" if was_approved else "",
             )
-            if was_approved and self.is_pipeline_mode and self._github is not None:
+            if was_approved:
                 # While `accepted` is on the pull request the repository may publish it.
-                try:
-                    self._github.remove_label(self._repo, pr_number, self._label_accepted)
-                except (GitHubError, httpx.HTTPError):
-                    logger.warning(
-                        "review %s: could not remove %r after the head moved",
-                        pr_number,
-                        self._label_accepted,
-                        exc_info=True,
-                    )
+                self._take_back_accepted(pr_number)
             if was_approved:
                 self._maybe_mirror(review)
             return review
