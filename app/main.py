@@ -1267,7 +1267,12 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         # The pathway an update targets, when the form knows it: the file is then checked for
         # declaring a different one. Anything that is not a plain positive number is ignored.
         digits = wpid.strip().upper().removeprefix("WP")
-        target = int(digits) if digits.isdigit() and not digits.startswith("0") else None
+        # isascii(): str.isdigit() also accepts "²", which int() then refuses with a 500.
+        target = (
+            int(digits)
+            if digits.isascii() and digits.isdigit() and not digits.startswith("0")
+            else None
+        )
         # Parsing and grading are CPU work; on the event loop they would stall every other
         # request in this single-process app for as long as they take.
         return await run_in_threadpool(_validate_upload, content, target)
@@ -2037,6 +2042,8 @@ def build_app(settings: Settings | None = None) -> FastAPI:
                 return {"ok": True, "ignored": "ref"}
             touched: set[int] = set()
             for commit in payload.get("commits") or []:
+                if not isinstance(commit, dict):
+                    continue
                 for key in ("added", "modified", "removed"):
                     for path in commit.get(key) or []:
                         m = _PATHWAY_DIR_RE.match(str(path))

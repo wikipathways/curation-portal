@@ -248,3 +248,14 @@ def test_the_forms_say_what_submitting_licenses_and_the_revise_panel_checks_firs
         ).json()["pr_number"]
         review = c.get(f"/dashboard/{pr}").text
         assert f'data-preflight="revise-preflight-{pr}"' in review
+
+
+def test_a_non_ascii_digit_wpid_is_ignored_not_a_500(tmp_path):
+    app, _current, _fake, _repo = _app(tmp_path)
+    with TestClient(app) as c:
+        r = c.post(
+            "/api/validate",
+            files={"file": ("rev.gpml", io.BytesIO(REV_GPML), "application/xml")},
+            data={"wpid": "WP²"},
+        )
+        assert r.status_code == 200
