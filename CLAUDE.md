@@ -2,10 +2,43 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Current state (2026-11-11) — read this before the history below
+## Current state (2026-11-12) — read this before the history below
 
-A review of the whole portal (2026-11-11) produced a refinement plan; Wave 1 (correctness and
-safety) is on branch `wave1-correctness`. What changed, and the invariants it adds:
+A review of the whole portal (2026-11-11) produced a refinement plan in waves. Wave 1
+(correctness and safety) is deployed; Wave 2 (seeing real traffic) is below it.
+
+### Wave 2 (2026-11-12): the portal sees real traffic
+
+- **Pages do not talk to GitHub on load.** `app/background.py` runs one loop
+  (`BACKGROUND_INTERVAL_SECONDS`, default 60; started only when the App is configured) that
+  reconciles, refreshes pipeline checklist items and lists untracked pull requests. `/dashboard`
+  renders from the database; a review page refreshes on demand only for a curator. Each review is
+  **claimed** with a conditional UPDATE of `last_checked_at` (`CurationService._claim`) before a
+  re-check, so loop, curator and a second replica never re-check one review at once. Tests drive
+  `app.state.worker.tick(github=fake)` instead of loading the dashboard.
+- **Webhook events beyond `pull_request`**: `issue_comment`, `pull_request_review`,
+  `pull_request_review_comment` and `workflow_run` only `mark_due` the review and `poke` the
+  loop. The App must be subscribed to them on GitHub; without that, polling still covers it.
+  A curator's GitHub `changes_requested` review moves the row like the portal button
+  (`handle_github_review`); a GitHub approval does not.
+- **Untracked pull requests**: `app/review/untracked.py` lists open PRs touching `pathways/` with
+  no row, classified by `adopt.derive`; curators see them on the dashboard with an Adopt button.
+  `PORTAL_ADOPT_FOREIGN_PRS` stays off.
+- **Conversation**: `GET /api/reviews/{n}/conversation` (signed-in, 60 s cache invalidated by the
+  webhook) and `POST /api/reviews/{n}/comments` (curators and the submitter, posted with their own
+  token). Bodies are rendered as text only.
+- **Audit trail**: `review_event`, written by a `before_flush` listener (`app/review/audit.py`)
+  from the session's change tracking. Actors come from `@as_actor` / `acting_as`; GitHub-driven
+  handlers default to `github`. Derived checklist answers are not recorded.
+- **Queue cards** carry `Review.title` / `Review.organism` (migration `b2d9f1a0c3e4`), the age, and
+  curators get `?assigned=1`. Assigning "Unassigned" works (was a 422).
+- **Grading knows the origin**: no Author is a FAIL for an adopted PR (nothing repairs it);
+  `gpml.version` predicts the published Version.
+- **Approve carries the page's head** (`head_sha` form field → `seen_head`); a withdrawn approval
+  whose label could not be removed is retried by reconcile (`pipeline_run["unlabel"]`); an
+  adopted refresh that fails withdraws the approval.
+
+### Wave 1 (2026-11-11): correctness and safety
 
 - **An approval is bound to a commit.** Every write path records the commit the app made
   (`put_file` returns it → `Review.head_sha`). `approve()` refuses (`ReviewStale`, 409) when the
