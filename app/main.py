@@ -337,6 +337,7 @@ def _write_target(
             bot_client=bot,
             content_repo=settings.content_repo,
             submitter=submitter,
+            base_branch=settings.default_branch,
         )
     except BotIdentityUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
@@ -865,6 +866,8 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             "organism": getattr(r, "organism", None) or (metadata or {}).get("organism"),
             "created_at": r.created_at,
             "head_sha": r.head_sha,
+            # Set by the background check; see CurationService._check_guards.
+            "guards": (r.pipeline_run or {}).get("guards") or None,
             "wpid_str": r.wpid_str,
             "pr_url": pr_url,
             # Everything the templates need to talk about this state in words rather than in
@@ -1366,6 +1369,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             head_sha=result.head_sha,
             base_repo=settings.content_repo,
             submitter_note=description,
+            pathway_paths=[result.path],
         )
         _label_submission(settings, bot, result.pr_number, kind="new")
         return SubmitResponse(
@@ -1510,6 +1514,8 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             head_sha=result.head_sha,
             base_repo=settings.content_repo,
             submitter_note=description,
+            pathway_paths=[result.path],
+            base_blob=result.base_blob,
         )
         _label_submission(settings, bot, result.pr_number, kind="update")
         return SubmitResponse(
@@ -1663,6 +1669,12 @@ def build_app(settings: Settings | None = None) -> FastAPI:
                 state="on_main",
                 wpid=wpid_str,
                 name=parse_curation_metadata(content).name,
+                # The version an update must be made against. An edit of an older copy is
+                # refused at approval (BaseMoved), so the form offers the current one.
+                gpml_url=(
+                    f"https://raw.githubusercontent.com/{settings.content_repo}/"
+                    f"{settings.default_branch}/pathways/{wpid_str}/{wpid_str}.gpml"
+                ),
             )
         # Not on main — is there still an open new-submission PR to revise? Ask our own registry
         # first. It answers in both publish modes and costs no GitHub call, where the branch scan
@@ -1991,7 +2003,22 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         curation = _curation(request, bot)
         worker = request.app.state.worker
         action = payload.get("action")
-        if event == "workflow_run":
+        if event == "push":
+            # A commit on the default branch that touches a pathway with an open update makes
+            # that update stale (``BaseMoved``). Marked now so the card says so within seconds.
+            if payload.get("ref") != f"refs/heads/{settings.default_branch}":
+                return {"ok": True, "ignored": "ref"}
+            touched: set[int] = set()
+            for commit in payload.get("commits") or []:
+                for key in ("added", "modified", "removed"):
+                    for path in commit.get(key) or []:
+                        m = _PATHWAY_DIR_RE.match(str(path))
+                        if m:
+                            touched.add(int(m.group(1)))
+            marked = (
+                await run_in_threadpool(curation.mark_due, update_wpids=touched) if touched else 0
+            )
+        elif event == "workflow_run":
             if action != "completed":
                 return {"ok": True, "ignored": f"action:{action}"}
             run = payload.get("workflow_run") or {}
@@ -2175,8 +2202,11 @@ _WEBHOOK_EVENTS = frozenset(
         "pull_request_review",
         "pull_request_review_comment",
         "workflow_run",
+        "push",
     }
 )
+
+_PATHWAY_DIR_RE = re.compile(r"^pathways/WP([1-9][0-9]*)/")
 
 
 class ValidateResponse(BaseModel):
@@ -2202,6 +2232,8 @@ class PathwayInfo(BaseModel):
     name: str | None = None
     state: str = "absent"  # "on_main" | "pending_new" | "absent"
     pr_number: int | None = None  # the open new-submission PR, when state == pending_new
+    #: Where to download the current GPML, when state == on_main.
+    gpml_url: str | None = None
 
 
 class ReviewSummary(BaseModel):

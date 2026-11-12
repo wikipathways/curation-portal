@@ -144,6 +144,11 @@ class Review(Base):
     #: The pathway's title and organism, as the submitted GPML declares them. Stored so the queue
     #: can name a submission without opening the render cache, which is deleted at every terminal
     #: transition — and so a new pathway, which has no WPID, is not a row of "WP0001"s.
+    #: For an update: the blob sha of the pathway's GPML on the default branch when the edit was
+    #: uploaded (or adopted), or ``absent`` when it was not there. If the default branch has moved
+    #: on since — somebody committed to the pathway directly — approving would overwrite their
+    #: change, so approval is refused until the submitter re-bases (``BaseMoved``).
+    base_blob: Mapped[str | None] = mapped_column(String(64), nullable=True)
     title: Mapped[str | None] = mapped_column(String(512), nullable=True)
     organism: Mapped[str | None] = mapped_column(String(255), nullable=True)
     #: What the submitter said they changed, and why — the checkbox selections and free text from

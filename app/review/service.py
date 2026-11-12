@@ -333,6 +333,26 @@ class ReviewNotActionable(RuntimeError):
     """
 
 
+class BaseMoved(ReviewNotActionable):
+    """The pathway changed on the default branch after this update was made against it.
+
+    An update replaces the GPML wholesale, so approving would silently undo the other change.
+    Most curation of the production database is direct commits, which is why this is checked.
+    """
+
+
+class UnexpectedFiles(ReviewNotActionable):
+    """The pull request changes files other than the pathway it is a review of.
+
+    Seen on production #120: a contributor's fork had diverged from upstream, the branch was cut
+    from the fork's own head, and the pull request carried the fork's unrelated commits along.
+    """
+
+
+#: ``Review.base_blob`` for an update whose file was not on the default branch when it was made.
+ABSENT_BLOB = "absent"
+
+
 class ReviewStale(ReviewNotActionable):
     """The pull request's head moved past the commit the review describes.
 
@@ -624,6 +644,7 @@ class CurationService:
         pathway_paths: list[str] | None = None,
         base_repo: str | None = None,
         announce: bool = True,
+        base_blob: str | None = None,
     ) -> Review:
         """Create the review row for a freshly opened submission PR (idempotent by PR number).
 
@@ -665,6 +686,7 @@ class CurationService:
                     pathway_paths=list(pathway_paths) if pathway_paths else None,
                     base_repo=base_repo,
                     submitter_note=(submitter_note or "").strip() or None,
+                    base_blob=base_blob,
                     title=_meta_text(metadata, "name", 512),
                     organism=_meta_text(metadata, "organism", 255),
                     checklist=build_checklist(
@@ -718,6 +740,11 @@ class CurationService:
                     review.approved_at = None
                 if base_repo is not None and review.base_repo is None:
                     review.base_repo = base_repo
+                if base_blob is not None:
+                    # A re-upload is made against the base branch as it is now.
+                    review.base_blob = base_blob
+                if pathway_paths and not review.pathway_paths:
+                    review.pathway_paths = list(pathway_paths)
                 # A re-upload onto an existing pull request. The update flow reuses the branch
                 # and the PR, so this is the only place a revised *update* is seen — and without
                 # rebuilding, the curator reads a checklist derived from the file the submitter
@@ -1230,6 +1257,12 @@ class CurationService:
                     f"{detail.head_sha[:7]}, reviewed {reviewed_head[:7]}). Check the new "
                     "version before approving."
                 )
+
+        # What the curator cannot see from the review page: a direct commit to the pathway since
+        # the update was made, or files in the pull request besides the pathway.
+        refusal = self._guard_refusal(pr_number, self._check_guards(pr_number))
+        if refusal is not None:
+            raise refusal
 
         # Never publish a pathway whose render/validation hasn't run green (design problem #1).
         # Off by default in pipeline mode: the target repo has no pr-preview.yml, and its own
@@ -2032,6 +2065,9 @@ class CurationService:
             self.handle_pr_closed(pr_number, merged=detail.merged)
             return True
 
+        if self._record_guards(pr_number, detail.head_sha, known, status):
+            return True
+
         if status != ReviewStatus.APPROVED:
             if (known or {}).get("unlabel"):
                 self._retry_unlabel(pr_number, list(detail.labels))
@@ -2068,6 +2104,102 @@ class CurationService:
             s.commit()
             self._maybe_mirror(review)
         return True
+
+    @staticmethod
+    def _expected_paths(review: Review) -> set[str]:
+        """The files this review's pull request may change: its pathway's GPML, nothing else."""
+        if review.pathway_paths:
+            return set(review.pathway_paths)
+        if review.wpid is not None:
+            return {f"pathways/WP{review.wpid}/WP{review.wpid}.gpml"}
+        return {PLACEHOLDER_GPML_PATH}
+
+    def _check_guards(self, pr_number: int, *, files: bool = True) -> dict:
+        """Ask GitHub whether approving this review would do something nobody reviewed.
+
+        Two questions, both answered from GitHub rather than from the row: has the pathway
+        changed on the default branch since the update was made (``base_moved``, the sha it is
+        now), and does the pull request change any file besides the pathway
+        (``unexpected_files``). An empty dict means neither. Raises what the reads raise.
+        """
+        with self._session_factory() as s:
+            review = s.get(Review, pr_number)
+            if review is None:
+                return {}
+            kind, base_blob, head = review.kind, review.base_blob, review.head_sha
+            expected = self._expected_paths(review)
+        out: dict = {"head": head}
+        if kind == "update" and base_blob:
+            path = sorted(expected)[0]
+            now = self._github.get_file_sha(self._repo, self._default_branch, path)
+            now = now or ABSENT_BLOB
+            if now != base_blob:
+                out["base_moved"] = now
+        if files:
+            changed = self._github.list_pr_files(self._repo, pr_number)
+            touched = {f.filename for f in changed}
+            # A rename touches the old path too.
+            touched |= {f.previous_filename for f in changed if f.previous_filename}
+            unexpected = sorted(touched - expected)
+            if unexpected:
+                out["unexpected_files"] = unexpected
+        return out
+
+    def _guard_refusal(self, pr_number: int, guards: dict) -> ReviewNotActionable | None:
+        """The refusal ``guards`` call for, worded for the curator, or None."""
+        unexpected = guards.get("unexpected_files")
+        if unexpected:
+            shown = ", ".join(f"`{p}`" for p in unexpected[:5])
+            more = f" and {len(unexpected) - 5} more" if len(unexpected) > 5 else ""
+            return UnexpectedFiles(
+                f"PR #{pr_number} also changes {shown}{more}. A pathway pull request should "
+                "change only its GPML; the author has to remove the other changes (often a fork "
+                "that has drifted from the main repository) before this can be approved."
+            )
+        if "base_moved" in guards:
+            return BaseMoved(
+                f"PR #{pr_number}: the pathway changed on {self._default_branch} after this "
+                "update was made, and approving would overwrite that change. The submitter should "
+                "download the current version, redo their edit on it and upload again."
+            )
+        return None
+
+    def _record_guards(
+        self, pr_number: int, head_sha: str, known: dict | None, status: ReviewStatus
+    ) -> bool:
+        """Keep the guard answers on the row for the card, and withdraw an approval they refuse.
+
+        The file list is re-read only when the head moved; the base blob, for updates, on every
+        pass, since a direct commit to the pathway does not touch the pull request at all.
+        Returns True when it changed the review's status.
+        """
+        previous = (known or {}).get("guards") or {}
+        try:
+            guards = self._check_guards(
+                pr_number, files=previous.get("head") != head_sha or "head" not in previous
+            )
+        except (GitHubError, httpx.HTTPError):
+            return False
+        if previous.get("head") == head_sha and "unexpected_files" in previous:
+            guards.setdefault("unexpected_files", previous["unexpected_files"])
+        guards["head"] = head_sha
+        refusal = self._guard_refusal(pr_number, guards)
+        withdraw = refusal is not None and status == ReviewStatus.APPROVED
+        with self._session_factory() as s:
+            review = s.get(Review, pr_number)
+            if review is None:
+                return False
+            if (review.pipeline_run or {}).get("guards") != guards:
+                review.pipeline_run = {**(review.pipeline_run or {}), "guards": guards}
+            if withdraw:
+                review.status = ReviewStatus.OPEN
+                review.approved_at = None
+                review.decision_note = f"Approval withdrawn. {refusal}"
+            s.commit()
+        if withdraw:
+            self._take_back_accepted(pr_number)
+            self._maybe_mirror(self.get(pr_number))
+        return withdraw
 
     def _take_back_accepted(self, pr_number: int) -> None:
         """Remove ``accepted`` after an approval was withdrawn, or remember to.
@@ -2163,6 +2295,7 @@ class CurationService:
         *,
         head_sha: str | None = None,
         include_awaiting: bool = False,
+        update_wpids: Iterable[int] | None = None,
     ) -> int:
         """Make reviews due for a re-check on the next pass, without doing any GitHub work.
 
@@ -2181,6 +2314,10 @@ class CurationService:
             which.append(t.c.head_sha == head_sha)
         if include_awaiting:
             which.append(t.c.status.in_(list(_AWAITING_WPID)))
+        wpids = sorted(set(update_wpids or ()))
+        if wpids:
+            # A direct commit to these pathways: their open updates may now be stale.
+            which.append((t.c.kind == "update") & t.c.wpid.in_(wpids))
         if not which:
             return 0
         conds.append(or_(*which))

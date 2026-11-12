@@ -302,7 +302,17 @@
           wpidInput.dataset.state = info.state;
           if (info.state === 'on_main') {
             wpidStatus.className = 'wpid-status wpid-status--ok';
-            wpidStatus.textContent = 'Found ' + info.wpid + (info.name ? ': ' + info.name : '') + '. Uploading opens an update.';
+            wpidStatus.textContent = 'Found ' + info.wpid + (info.name ? ': ' + info.name : '') + '. Uploading opens an update. ';
+            // Edit the current version: an update made against an older copy is refused at
+            // approval, because publishing it would undo whatever changed since.
+            if (info.gpml_url) {
+              var dl = document.createElement('a');
+              dl.href = info.gpml_url;
+              dl.setAttribute('download', info.wpid + '.gpml');
+              dl.textContent = 'Download the current ' + info.wpid + '.gpml';
+              wpidStatus.appendChild(dl);
+              wpidStatus.appendChild(document.createTextNode(' and make your edit on that copy.'));
+            }
             setUpdateLabel('Submit update');
           } else if (info.state === 'pending_new') {
             wpidStatus.className = 'wpid-status wpid-status--pending';

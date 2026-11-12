@@ -98,7 +98,26 @@ class AdoptionService:
             else None
         )
 
-        return self._record(plan, after=after, before=before, announce=announce, refresh=existing)
+        # The version this edit replaces, for the stale-base guard: ``absent`` when the pathway is
+        # not on the base branch yet (a contributor choosing their own WPID for a new pathway).
+        base_blob = None
+        if plan.kind == "update":
+            try:
+                base_blob = (
+                    self._github.get_file_sha(self._repo, self._default_branch, plan.primary_path)
+                    or "absent"
+                )
+            except Exception:  # noqa: BLE001 — unguarded rather than unadopted
+                logger.warning("could not read the base of %s", plan.primary_path, exc_info=True)
+
+        return self._record(
+            plan,
+            after=after,
+            before=before,
+            announce=announce,
+            refresh=existing,
+            base_blob=base_blob,
+        )
 
     # -- internals -------------------------------------------------------------------------
 
@@ -127,6 +146,7 @@ class AdoptionService:
         before: bytes | None,
         announce: bool,
         refresh,
+        base_blob: str | None = None,
     ) -> AdoptionOutcome:
         from app.preview.metadata import parse_curation_metadata
 
@@ -161,6 +181,7 @@ class AdoptionService:
             pathway_paths=plan.paths,
             base_repo=self._repo,
             announce=announce,
+            base_blob=base_blob,
         )
         self._take_lock(plan)
         if plan.note:

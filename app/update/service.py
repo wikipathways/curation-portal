@@ -44,6 +44,8 @@ class UpdateResult:
     head_repo: str | None = None
     #: The commit the app made on the branch — see ``SubmissionResult.head_sha``.
     head_sha: str | None = None
+    #: The GPML's blob sha on the base branch when this edit was made — the version it replaces.
+    base_blob: str | None = None
 
 
 class UpdateService:
@@ -127,8 +129,11 @@ class UpdateService:
             wpid_str = format_wpid(wpid)
             path = layout_paths(wpid)["gpml"]
 
-            # The pathway must already exist; otherwise this is a submission, not an update.
-            if self._github.get_file_sha(self._repo, self._base_branch, path) is None:
+            # The pathway must already exist; otherwise this is a submission, not an update. The
+            # blob is kept: it is the version this edit replaces, and approval checks it is still
+            # the one on the base branch (``CurationService`` / ``BaseMoved``).
+            base_blob = self._github.get_file_sha(self._repo, self._base_branch, path)
+            if base_blob is None:
                 raise PathwayNotFound(
                     f"{wpid_str} does not exist on {self._base_branch}; use submit for new pathways"
                 )
@@ -197,6 +202,7 @@ class UpdateService:
             pr_url=pr.html_url,
             head_repo=pr.head_repo,
             head_sha=head_sha,
+            base_blob=base_blob,
         )
 
 

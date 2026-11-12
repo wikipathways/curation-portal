@@ -212,6 +212,14 @@ class WriteDenied(GitHubError):
 
 class GitHubClient(ABC):
     @abstractmethod
+    def fork_ahead_by(self, repo: str, fork: str, branch: str) -> int:
+        """How many commits ``fork``'s ``branch`` has that ``repo``'s ``branch`` does not.
+
+        Non-zero means the fork has diverged: a branch cut from its head would carry those
+        commits into the pull request (production #120 carried a stray file that way).
+        """
+
+    @abstractmethod
     def ensure_fork(self, repo: str) -> str:
         """Return ``owner/name`` of the acting user's fork of ``repo``, creating it if absent.
 
@@ -510,6 +518,8 @@ class FakeGitHubClient(GitHubClient):
         #: Comment body -> author login, for comments a test wants posted by someone other than
         #: a bot (see ``list_issue_comments_by``).
         self.comment_authors: dict[str, str] = {}
+        #: fork -> commits it has that its parent lacks (``fork_ahead_by``).
+        self.fork_ahead: dict[str, int] = {}
         #: PR number -> review verdicts and line comments a test seeds for ``list_conversation``.
         self.pr_reviews: dict[int, list[ConversationItem]] = {}
         #: Where each branch was cut from. ``branches`` moves with every commit, so this is the
@@ -578,6 +588,10 @@ class FakeGitHubClient(GitHubClient):
             )
         if op in self.fail_on:
             raise GitHubError(f"simulated failure in {op}")
+
+    def fork_ahead_by(self, repo: str, fork: str, branch: str) -> int:
+        self._maybe_fail("fork_ahead_by")
+        return self.fork_ahead.get(fork, 0)
 
     def ensure_fork(self, repo: str) -> str:
         self._maybe_fail("ensure_fork")
@@ -1081,6 +1095,12 @@ class HttpGitHubClient(GitHubClient):
             )
         if resp.is_error:
             raise GitHubError(f"{what} failed: {resp.status_code} {resp.text}")
+
+    def fork_ahead_by(self, repo: str, fork: str, branch: str) -> int:
+        owner = fork.split("/", 1)[0]
+        resp = self._client.get(f"/repos/{repo}/compare/{branch}...{owner}:{branch}")
+        self._raise_for(resp, f"fork_ahead_by({fork})")
+        return int((resp.json() or {}).get("ahead_by") or 0)
 
     def ensure_fork(self, repo: str) -> str:
         """POST the fork, then wait until it is actually readable.
