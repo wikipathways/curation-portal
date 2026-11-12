@@ -21,6 +21,7 @@ from app.curators import CuratorRegistry
 from app.github import GitHubClient, GitHubError
 from app.locks import PathwayLockRegistry
 from app.models import Review, ReviewStatus, utcnow
+from app.review.audit import as_actor, default_actor
 from app.review.checklist import (
     ChecklistState,
     build_checklist,
@@ -285,6 +286,14 @@ def render_mirror_comment(
 def _plain(status: ReviewStatus) -> str:
     """The status in words, for an error message a curator reads."""
     return _PLAIN_STATUS.get(status.value, status.value)
+
+
+def _meta_text(metadata, attr: str, limit: int) -> str | None:
+    """One text field of parsed GPML metadata, trimmed to its column, or None."""
+    value = getattr(metadata, attr, None) if metadata is not None else None
+    if not isinstance(value, str) or not value.strip():
+        return None
+    return value.strip()[:limit]
 
 
 def _merge_checklist(old: list[dict], fresh: list[dict]) -> list[dict]:
@@ -597,6 +606,7 @@ class CurationService:
             # as a 500 on an action that already succeeded.
             pass
 
+    @as_actor("submitter")
     def register(
         self,
         *,
@@ -655,6 +665,8 @@ class CurationService:
                     pathway_paths=list(pathway_paths) if pathway_paths else None,
                     base_repo=base_repo,
                     submitter_note=(submitter_note or "").strip() or None,
+                    title=_meta_text(metadata, "name", 512),
+                    organism=_meta_text(metadata, "organism", 255),
                     checklist=build_checklist(
                         metadata=metadata,
                         before=before_metadata,
@@ -712,6 +724,8 @@ class CurationService:
                 # already replaced ("3 of 12 data nodes have no identifier" about a version that
                 # no longer exists) beside a preview drawn from the new one.
                 if metadata is not None:
+                    review.title = _meta_text(metadata, "name", 512) or review.title
+                    review.organism = _meta_text(metadata, "organism", 255) or review.organism
                     review.checklist = _merge_checklist(
                         review.checklist,
                         build_checklist(
@@ -748,6 +762,7 @@ class CurationService:
         *,
         status: ReviewStatus | None = ReviewStatus.OPEN,
         submitter: str | None = None,
+        assigned_to: str | None = None,
         limit: int | None = None,
         offset: int = 0,
     ) -> list[Review]:
@@ -767,6 +782,12 @@ class CurationService:
                 query = query.where(Review.status == status)
             if submitter is not None:
                 query = query.where(Review.submitter == submitter)
+            if assigned_to is not None:
+                # "Assigned to me" is a work list: what is still waiting on that curator, in any
+                # live state. Finished reviews stay on their own tabs.
+                query = query.where(Review.assigned_curator == assigned_to)
+                if status is None:
+                    query = query.where(Review.status.notin_(self._TERMINAL))
             # Newest first for a personal list (you want the one you just filed), oldest first
             # for the curation queue (you want the one that has waited longest).
             order = Review.updated_at.desc() if submitter is not None else Review.created_at
@@ -777,6 +798,18 @@ class CurationService:
             if limit is not None:
                 query = query.limit(limit).offset(offset)
             return list(s.execute(query).scalars())
+
+    def assigned_count(self, curator: str) -> int:
+        """How many live reviews are assigned to ``curator`` — the number on "Assigned to me"."""
+        with self._session_factory() as s:
+            return s.execute(
+                select(func.count())
+                .select_from(Review)
+                .where(
+                    Review.assigned_curator == curator,
+                    Review.status.notin_(self._TERMINAL),
+                )
+            ).scalar_one()
 
     def status_counts(self, *, submitter: str | None = None) -> dict[str, int]:
         """How many reviews sit in each status — the numbers on the queue tabs.
@@ -801,12 +834,14 @@ class CurationService:
                 raise ReviewNotFound(f"no review for PR #{pr_number}")
             return review
 
-    def assign(self, pr_number: int, curator: str) -> Review:
+    @as_actor("actor")
+    def assign(self, pr_number: int, curator: str | None, *, actor: str | None = None) -> Review:
+        """Make ``curator`` responsible for the review; empty or None unassigns it."""
         with self._session_factory() as s:
             review = s.get(Review, pr_number)
             if review is None:
                 raise ReviewNotFound(f"no review for PR #{pr_number}")
-            review.assigned_curator = curator
+            review.assigned_curator = curator or None
             s.commit()
             self._maybe_mirror(review)
             self._maybe_request_reviewer(pr_number, curator)
@@ -873,6 +908,8 @@ class CurationService:
             if head_sha is not None:
                 review.head_sha = head_sha
             review.status = ReviewStatus.OPEN
+            review.title = _meta_text(metadata, "name", 512) or review.title
+            review.organism = _meta_text(metadata, "organism", 255) or review.organism
             review.checklist = build_checklist(
                 metadata=metadata, kind=review.kind, pipeline_mode=self.is_pipeline_mode
             )
@@ -880,6 +917,7 @@ class CurationService:
             self._maybe_mirror(review)
             return review
 
+    @as_actor("curator")
     def request_changes(
         self, pr_number: int, curator: str, note: str = "", *, post_comment: bool = True
     ) -> Review:
@@ -965,6 +1003,7 @@ class CurationService:
             return None
         return self.request_changes(pr_number, reviewer, body, post_comment=False)
 
+    @as_actor("actor")
     def set_checklist_item(
         self,
         pr_number: int,
@@ -973,6 +1012,7 @@ class CurationService:
         note: str | None = None,
         *,
         auto: bool = False,
+        actor: str | None = None,
     ) -> Review:
         """Set one checklist item's state (and optionally its note).
 
@@ -1149,6 +1189,7 @@ class CurationService:
         ReviewStatus.PUBLISH_FAILED,
     )
 
+    @as_actor("curator")
     def approve(self, pr_number: int, curator: str) -> Review:
         """Approve a submission. What that *does* depends on who owns publication.
 
@@ -1277,6 +1318,7 @@ class CurationService:
             self._maybe_mirror(review)
             return review
 
+    @as_actor("curator")
     def reject(self, pr_number: int, curator: str, note: str = "") -> Review:
         """Reject a submission outright — terminal, unlike ``request_changes``.
 
@@ -1408,6 +1450,7 @@ class CurationService:
         if return_wpid and self._allocator is not None:
             self._allocator.release(wpid)
 
+    @as_actor("curator")
     def record_published_wpid(self, pr_number: int, wpid: int, curator: str) -> Review:
         """Escape hatch: a curator records the WPID the target repo assigned.
 
@@ -1593,6 +1636,7 @@ class CurationService:
             interval = interval * self._STUCK_RECHECK_FACTOR
         return utcnow() - interval
 
+    @default_actor("github")
     def handle_pr_closed(self, pr_number: int, *, merged: bool) -> Review | None:
         """React to a PR closed/merged **outside** the app (webhook, issue #8).
 
@@ -2146,6 +2190,7 @@ class CurationService:
     #: Older name, kept so existing callers keep working.
     reconcile_open_reviews = reconcile
 
+    @default_actor("github")
     def handle_head_moved(self, pr_number: int, head_sha: str) -> Review | None:
         """The pull request's head is now ``head_sha``: forget any approval of an older commit.
 
@@ -2195,6 +2240,7 @@ class CurationService:
                 self._maybe_mirror(review)
             return review
 
+    @as_actor("actor")
     def handle_label_event(
         self, pr_number: int, label: str, *, added: bool, actor: str
     ) -> Review | None:

@@ -1,11 +1,12 @@
 {% extends "base.html" %}
-{% block title %}{% if mine %}Your submissions{% else %}Curation queue{% endif %} &middot; WikiPathways Curation Portal{% endblock %}
+{% block title %}{% if mine %}Your submissions{% elif assigned %}Assigned to you{% else %}Curation queue{% endif %} &middot; WikiPathways Curation Portal{% endblock %}
 {% from "_review_card.html" import review_card with context %}
 
 {% block content %}
-<h1>{% if mine %}Your submissions{% else %}Curation queue{% endif %}</h1>
+<h1>{% if mine %}Your submissions{% elif assigned %}Assigned to you{% else %}Curation queue{% endif %}</h1>
 <p class="lede">
   {% if mine %}Every pathway you have submitted through this portal, in whatever state it reached.
+  {% elif assigned %}Every review you lead that is not finished yet, whatever state it is in.
   {% else %}Reviewing pull requests against <code>{{ repo }}</code>.{% endif %}
 </p>
 
@@ -14,8 +15,11 @@
 {% else %}
   <nav class="queue-filter" aria-label="Filter by status">
     {% for tab in tabs %}
-    <a href="/dashboard?status={{ tab.status }}"{% if not mine and status == tab.status %} aria-current="page"{% endif %}>{{ tab.label }}{% if tab.count %} <span class="queue-filter__count">{{ tab.count }}</span>{% endif %}</a>
+    <a href="/dashboard?status={{ tab.status }}"{% if not mine and not assigned and status == tab.status %} aria-current="page"{% endif %}>{{ tab.label }}{% if tab.count %} <span class="queue-filter__count">{{ tab.count }}</span>{% endif %}</a>
     {% endfor %}
+    {% if is_curator %}
+    <a class="queue-filter__mine" href="/dashboard?assigned=1"{% if assigned %} aria-current="page"{% endif %}>Assigned to me{% if assigned_total %} <span class="queue-filter__count">{{ assigned_total }}</span>{% endif %}</a>
+    {% endif %}
     <a class="queue-filter__mine" href="/dashboard?mine=1"{% if mine %} aria-current="page"{% endif %}>Mine{% if mine and total_count %} <span class="queue-filter__count">{{ total_count }}</span>{% endif %}</a>
   </nav>
 
@@ -67,6 +71,9 @@
       {% if mine %}
         <h2>You have not submitted anything yet</h2>
         <p><a href="/">Upload a pathway</a> and it will show up here.</p>
+      {% elif assigned %}
+        <h2>Nothing is assigned to you</h2>
+        <p>Pick a review in the <a href="/dashboard">queue</a> and assign it to yourself.</p>
       {% else %}
         <h2>{{ empty.empty_heading }}</h2>
         <p>{{ empty.empty_body }}</p>

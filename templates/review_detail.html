@@ -46,5 +46,21 @@
     </div>
     {% endif %}
   </section>
+
+  {# Who did what to this review, newest first. From the portal's own records, so it covers
+     decisions made in the portal and the ones it saw arrive from GitHub. #}
+  {% if history %}
+  <section class="history" aria-labelledby="history-title">
+    <h2 class="history__title" id="history-title">History</h2>
+    <ol class="history__list">
+      {% for e in history %}
+      <li class="history__item">
+        <time datetime="{{ e.at.isoformat() }}">{{ e.at.strftime('%Y-%m-%d %H:%M') }}</time>
+        <span><strong>{% if e.actor in ('github', 'portal', 'pipeline') %}{{ e.actor | capitalize }}{% else %}@{{ e.actor }}{% endif %}</strong> {{ e.what }}{% if e.note %}: <span class="history__note">{{ e.note }}</span>{% endif %}</span>
+      </li>
+      {% endfor %}
+    </ol>
+  </section>
+  {% endif %}
 {% endif %}
 {% endblock %}

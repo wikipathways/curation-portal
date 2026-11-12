@@ -48,7 +48,13 @@ def make_engine(url: str, **kwargs) -> Engine:
 
 
 def make_session_factory(engine: Engine) -> sessionmaker[Session]:
-    return sessionmaker(bind=engine, future=True, expire_on_commit=False)
+    factory = sessionmaker(bind=engine, future=True, expire_on_commit=False)
+    # Every review change is attributed and kept (app.review.audit). Imported here rather than at
+    # module level: the audit module imports the models, which this module must not.
+    from app.review.audit import install
+
+    install(factory)
+    return factory
 
 
 @contextmanager

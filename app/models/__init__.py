@@ -13,7 +13,7 @@ from __future__ import annotations
 import enum
 from datetime import UTC, datetime
 
-from sqlalchemy import JSON, DateTime, Enum, Integer, String, Text
+from sqlalchemy import JSON, DateTime, Enum, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from app.review.checklist import default_checklist
@@ -141,6 +141,11 @@ class Review(Base):
     #: blocked at the approval gate, because the repository publishes one pathway per pull
     #: request. Also how a new pathway with no WPID gets named on screen.
     pathway_paths: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    #: The pathway's title and organism, as the submitted GPML declares them. Stored so the queue
+    #: can name a submission without opening the render cache, which is deleted at every terminal
+    #: transition — and so a new pathway, which has no WPID, is not a row of "WP0001"s.
+    title: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    organism: Mapped[str | None] = mapped_column(String(255), nullable=True)
     #: What the submitter said they changed, and why — the checkbox selections and free text from
     #: the submit form, joined. Stored on the review rather than read back from the render cache
     #: (where ``PreviewService`` also keeps a copy) for two reasons: the cache is deleted at every
@@ -206,3 +211,25 @@ class Review(Base):
 
     def __repr__(self) -> str:  # pragma: no cover - debug aid
         return f"<Review PR#{self.pr_number} {self.wpid_str} {self.status.value}>"
+
+
+class ReviewEvent(Base):
+    """One attributed, time-stamped change to a review: who moved it, from what, to what.
+
+    Written by ``app.review.audit`` from the session's own change tracking, so every path that
+    changes a status, an assignment or a curator's checklist answer is recorded without each one
+    having to remember to. Append-only.
+    """
+
+    __tablename__ = "review_event"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    pr_number: Mapped[int] = mapped_column(
+        Integer, ForeignKey("review.pr_number", ondelete="CASCADE"), index=True
+    )
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    #: A GitHub login, or ``github`` / ``portal`` / ``pipeline`` for changes nobody typed.
+    actor: Mapped[str] = mapped_column(String(255))
+    #: ``opened`` | ``status`` | ``assigned`` | ``checklist``.
+    kind: Mapped[str] = mapped_column(String(32))
+    detail: Mapped[dict | None] = mapped_column(JSON, nullable=True)

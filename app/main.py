@@ -66,6 +66,8 @@ from app.preview import PreviewService
 from app.preview.metadata import parse_curation_metadata
 from app.ratelimit import RateLimited, SubmissionRateLimiter
 from app.review.adoption import AdoptionService
+from app.review.audit import acting_as
+from app.review.audit import history as review_history
 from app.review.conversation import ConversationCache
 from app.review.conversation import present as present_conversation
 from app.review.service import (
@@ -854,8 +856,14 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             preview = {"status": "failed"}
         # 'pending' → leave None so the template shows the "generating" empty state
         shown = presentation(r.status.value)
+        metadata = request.app.state.preview.metadata(r.pr_number)
         return {
             **_detail(r).model_dump(),
+            # Which pathway this is, in words. Stored on the row since Wave 2; older rows fall
+            # back to the render cache while it lasts.
+            "title": getattr(r, "title", None) or (metadata or {}).get("name"),
+            "organism": getattr(r, "organism", None) or (metadata or {}).get("organism"),
+            "created_at": r.created_at,
             "wpid_str": r.wpid_str,
             "pr_url": pr_url,
             # Everything the templates need to talk about this state in words rather than in
@@ -872,7 +880,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             "preview": preview,
             # Parsed curation metadata (data nodes, references, description, ontology tags,
             # submitter note) cached at render time — a cheap disk read, None if not rendered.
-            "metadata": request.app.state.preview.metadata(r.pr_number),
+            "metadata": metadata,
             "labels": r.github_labels or [],
             "decision_note": r.decision_note,
             "pipeline": _pipeline_view(request, r),
@@ -973,6 +981,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         request: Request,
         status: ReviewStatus | None = None,
         mine: bool = False,
+        assigned: bool = False,
         page: int = 1,
     ):
         # Renders from the database only. Keeping it in line with GitHub (issue #1) is the
@@ -986,21 +995,33 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         # Keyed on `submitter`, not on `mine`: ?mine=1 while logged out has nobody to filter by,
         # and leaving the status unset there would render the queue's empty state against a
         # status that is None.
-        if submitter is not None:
+        # "Assigned to me" is a curator's work list: every live review they lead, in any state.
+        assigned_to = (
+            login
+            if (assigned and not submitter and login
+                and request.app.state.curators.is_curator(login))
+            else None
+        )
+        if submitter is not None or assigned_to is not None:
             status = None
         elif status is None:
             status = ReviewStatus.OPEN
         curation = _curation(request)
         counts = curation.status_counts(submitter=submitter)
+        assigned_total = curation.assigned_count(login) if login else 0
         # The page's own total, which is what the pager has to count against — the whole queue for
         # Mine (every status at once), one tab's worth otherwise.
-        matching = sum(counts.values()) if status is None else counts.get(status.value, 0)
+        if assigned_to is not None:
+            matching = assigned_total
+        else:
+            matching = sum(counts.values()) if status is None else counts.get(status.value, 0)
         pager = _pager(request, page=page, total=matching)
         reviews = [
             _review_view(request, r)
             for r in curation.list_queue(
                 status=status,
                 submitter=submitter,
+                assigned_to=assigned_to,
                 limit=QUEUE_PAGE_SIZE,
                 offset=pager["offset"],
             )
@@ -1019,12 +1040,14 @@ def build_app(settings: Settings | None = None) -> FastAPI:
                 "repo": settings.content_repo,
                 "status": status.value if status is not None else None,
                 "mine": bool(submitter),
+                "assigned": assigned_to is not None,
+                "assigned_total": assigned_total,
                 "counts": counts,
                 "total_count": sum(counts.values()),
                 "tabs": queue_tabs(counts=tab_counts, pipeline_mode=settings.is_pipeline_mode),
                 "empty": presentation(status.value) if status is not None else None,
                 "pager": pager,
-                "untracked": _untracked_view(request, login),
+                "untracked": _untracked_view(request, login) if assigned_to is None else None,
             },
         )
 
@@ -1131,6 +1154,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         # Read the row last. Both calls above write to it, and rendering the copy fetched before
         # them would show the page as it was one refresh ago.
         r = curation.get(pr_number)
+        events = review_history(request.app.state.session_factory, pr_number)
         return templates.TemplateResponse(
             request,
             "review_detail.html",
@@ -1139,8 +1163,32 @@ def build_app(settings: Settings | None = None) -> FastAPI:
                 "review": _review_view(request, r),
                 "curators": sorted(request.app.state.curators.members()),
                 "repo": settings.content_repo,
+                "history": [_event_view(e) for e in events],
             },
         )
+
+    def _event_view(e) -> dict:
+        """One audit event as a sentence's worth of parts."""
+        d = e.detail or {}
+        if e.kind == "opened":
+            what = (
+                "opened it on GitHub; the portal adopted it"
+                if d.get("origin") == "adopted"
+                else "submitted it through the portal"
+            )
+        elif e.kind == "status":
+            what = (
+                f"moved it from {presentation(d.get('from') or 'open').label.lower()} "
+                f"to {presentation(d.get('to') or 'open').label.lower()}"
+            )
+        elif e.kind == "assigned":
+            what = f"assigned it to @{d['to']}" if d.get("to") else "removed the assignment"
+        elif e.kind == "checklist":
+            label = d.get("label") or d.get("key")
+            what = f"marked “{label}” {_CHECK_WORD.get(d.get('to'), d.get('to'))}"
+        else:
+            what = e.kind
+        return {"at": e.at, "actor": e.actor, "what": what, "note": d.get("note")}
 
     # -- Auth (GitHub OAuth) ---------------------------------------------------------------
 
@@ -1574,12 +1622,13 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             submitter_note=description,
         )
         # Re-open the review and rebuild its checklist from the revised content.
-        curation.revise(
-            result.pr_number,
-            metadata=parse_curation_metadata(content),
-            submitter_note=description,
-            head_sha=result.head_sha,
-        )
+        with acting_as(submitter):
+            curation.revise(
+                result.pr_number,
+                metadata=parse_curation_metadata(content),
+                submitter_note=description,
+                head_sha=result.head_sha,
+            )
         return SubmitResponse(
             wpid=result.wpid_str,
             pr_number=result.pr_number,
@@ -1662,7 +1711,9 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         if not request.app.state.curators.is_curator(actor):
             raise HTTPException(status_code=403, detail=f"{actor} is not a curator")
         try:
-            r = _curation(request, bot).set_checklist_item(pr_number, key, state, note)
+            r = _curation(request, bot).set_checklist_item(
+                pr_number, key, state, note, actor=actor
+            )
         except ReviewNotFound as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ValueError as exc:
@@ -1776,14 +1827,19 @@ def build_app(settings: Settings | None = None) -> FastAPI:
     def assign_review(
         request: Request,
         pr_number: int,
-        curator: str = Form(...),
+        # Empty means "Unassigned", which the select offers first. Form(...) refused it with a
+        # 422, so a curator could assign a review and never take the assignment back.
+        curator: str = Form(""),
         actor: str = Depends(get_current_user),
         bot: GitHubClient | None = Depends(get_bot_optional),
     ):
         if not request.app.state.curators.is_curator(actor):
             raise HTTPException(status_code=403, detail=f"{actor} is not a curator")
+        curator = curator.strip()
+        if curator and not request.app.state.curators.is_curator(curator):
+            raise HTTPException(status_code=422, detail=f"{curator} is not a curator")
         try:
-            r = _curation(request, bot).assign(pr_number, curator)
+            r = _curation(request, bot).assign(pr_number, curator or None, actor=actor)
         except ReviewNotFound as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return _detail(r)
@@ -2088,6 +2144,9 @@ def build_app(settings: Settings | None = None) -> FastAPI:
 
     return app
 
+
+#: The checklist states in the words the history uses.
+_CHECK_WORD = {"pass": "pass", "fail": "fail", "na": "not applicable", "pending": "not checked"}
 
 #: A portal comment is a note in a thread, not a document.
 _MAX_COMMENT_CHARS = 10_000

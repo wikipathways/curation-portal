@@ -180,7 +180,7 @@
       <span class="tag-wpid__id">{{ r.wpid_str }}</span>
     </div>
     <h2 class="review-card__title" id="{{ title_id }}">
-      {{ r.wpid_str }} &mdash; {{ 'new pathway' if r.kind == 'new' else 'update' }} from @{{ r.submitter }}, pull request #{{ r.pr_number }}
+      {% if r.title %}{{ r.title }}, {% endif %}{{ r.wpid_str }} &mdash; {{ 'new pathway' if r.kind == 'new' else 'update' }} from @{{ r.submitter }}, pull request #{{ r.pr_number }}
     </h2>
     <div class="review-card__meta">
       <span class="badge badge--{{ r.kind }}">{{ 'New pathway' if r.kind == 'new' else 'Update' }}</span>
@@ -203,8 +203,17 @@
     {% endif %}
   </div>
 
+  {# The pathway, by name. A queue of WPID chips said which number each card was and not what it
+     was about, and a new pathway has no number at all until it is published. #}
+  {% if r.title or r.organism %}
+  <p class="review-card__pathway">
+    {% if r.title %}<span class="review-card__name">{{ r.title }}</span>{% endif %}
+    {% if r.organism %}<span class="review-card__organism">{{ r.organism }}</span>{% endif %}
+  </p>
+  {% endif %}
+
   <p class="review-card__submitter">
-    Submitted by <strong>@{{ r.submitter }}</strong>{% if r.assigned_curator %} &middot; assigned to <strong>@{{ r.assigned_curator }}</strong>{% endif %}
+    Submitted by <strong>@{{ r.submitter }}</strong>{% if r.created_at %} {{ r.created_at | age }}{% endif %}{% if r.assigned_curator %} &middot; assigned to <strong>@{{ r.assigned_curator }}</strong>{% endif %}
   </p>
 
   {# The repository's own labels. A curator will reach for them on GitHub as readily as for the
