@@ -580,7 +580,8 @@
   {% if can_revise and expanded %}
   <div class="revise-panel">
     <label class="revise-panel__label" for="revise-{{ r.pr_number }}">Upload a revision</label>
-    <input type="file" id="revise-{{ r.pr_number }}" class="revise-file" accept=".gpml,application/xml,text/xml">
+    <input type="file" id="revise-{{ r.pr_number }}" class="revise-file" accept=".gpml,application/xml,text/xml" data-preflight="revise-preflight-{{ r.pr_number }}">
+    <div class="preflight" id="revise-preflight-{{ r.pr_number }}" role="status" aria-live="polite" hidden></div>
     <button type="button" class="btn btn--sm btn--revise">Commit onto this pull request</button>
     <p class="revise-panel__hint">Replaces the file on the existing branch. No new pull request is opened, and the review returns to the queue.</p>
   </div>

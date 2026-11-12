@@ -63,6 +63,16 @@
   function describeError(status, body) {
     var detail = body && body.detail;
     if (detail && Array.isArray(detail.errors)) return detail.errors.join('; ');
+    // The bare "not authenticated" is written for API callers; a person needs to know what to do.
+    if (status === 401 && (!detail || /^not authenticated/i.test(String(detail)))) {
+      return STATUS_FALLBACK[401];
+    }
+    // A 502 detail is GitHub's own error ("put_file(...) failed: 422 ..."): useful to whoever
+    // reports it, meaningless as the whole message. Say what happened first, then quote it.
+    if (status === 502 && typeof detail === 'string') {
+      var quoted = detail.length > 240 ? detail.slice(0, 240) + '…' : detail;
+      return STATUS_FALLBACK[502] + ' If it keeps happening, report this: ' + quoted;
+    }
     if (typeof detail === 'string') return detail;
     if (detail && detail.reason) {
       return detail.held_by
@@ -201,6 +211,27 @@
     });
   }
 
+  // After a successful upload: clear the file and the note, and keep the button off until
+  // another file is picked. Re-arming on the file input's change event means a second, different
+  // submission still works without a reload.
+  function disarm(form, btn, doneLabel, readyLabel) {
+    var file = form.querySelector('input[type="file"]');
+    form.querySelectorAll('textarea').forEach(function (t) { t.value = ''; });
+    form.querySelectorAll('input[type="checkbox"]').forEach(function (c) { c.checked = false; });
+    var flight = form.querySelector('.preflight');
+    if (flight) { flight.hidden = true; flight.innerHTML = ''; }
+    if (file) { file.value = ''; }
+    btn.disabled = true;
+    btn.textContent = doneLabel;
+    if (file) {
+      file.addEventListener('change', function rearm() {
+        btn.disabled = false;
+        btn.textContent = readyLabel;
+        file.removeEventListener('change', rearm);
+      });
+    }
+  }
+
   // ---------- new-pathway submit (single action — validate + open PR together) ----------
   var submitForm = document.getElementById('submit-form');
   if (submitForm) {
@@ -238,6 +269,9 @@
               ' (<code>' + res.body.path + '</code>).' + mine;
           resultCard.hidden = false;
           toast('Pathway submitted.', 'success');
+          // Disarmed until a new file is chosen: the pull request exists, and a second press
+          // would open another one for the same pathway.
+          disarm(submitForm, submitBtn, 'Submitted', 'Submit new pathway');
         })
         .catch(function () {
           submitBtn.disabled = false;
@@ -489,6 +523,7 @@
             '(<code>' + res.body.path + '</code>). <a href="/dashboard/' + res.body.pr_number + '">Follow the review</a>.';
           out.hidden = false;
           toast(noun + ' submitted.', 'success');
+          disarm(updateForm, btn, 'Submitted', 'Submit update');
         })
         .catch(function () {
           reset();
@@ -1231,6 +1266,25 @@
         toast(select.value ? 'Assigned to @' + select.value + '.' : 'Unassigned.', 'success');
       })
       .catch(function () { select.disabled = false; toast('Could not reach the server. Try again.', 'error'); });
+  });
+
+  // ---------- revise panel pre-flight (review page) ----------
+  document.addEventListener('change', function (e) {
+    var input = e.target.closest('.revise-file');
+    if (!input || !input.files[0]) return;
+    var hostId = input.getAttribute('data-preflight');
+    var fd = new FormData();
+    fd.append('file', input.files[0]);
+    fetch('/api/validate', { method: 'POST', body: fd })
+      .then(function (r) {
+        return r.json().catch(function () { return {}; })
+          .then(function (j) { return { ok: r.ok, status: r.status, body: j }; });
+      })
+      .then(function (res) {
+        if (!res.ok) { toast(describeError(res.status, res.body), 'error'); return; }
+        renderPreflight((res.body.quality || {}).findings, hostId);
+      })
+      .catch(function () { /* a courtesy check */ });
   });
 
   // ---------- "On GitHub, not in the portal" (dashboard, curators) ----------

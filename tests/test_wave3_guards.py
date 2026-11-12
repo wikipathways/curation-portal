@@ -229,3 +229,22 @@ def test_validate_checks_the_file_against_the_wpid_being_updated(tmp_path):
 
         assert finding("WP123")["severity"] == "warn"
         assert finding("5636")["severity"] == "pass"
+
+
+def test_the_forms_say_what_submitting_licenses_and_the_revise_panel_checks_first(tmp_path):
+    from tests.test_api import GOOD_GPML
+
+    app, current, _fake, _repo = _app(tmp_path)
+    with TestClient(app) as c:
+        _login(c, "alice")
+        page = c.get("/").text
+        assert page.count("creativecommons.org/publicdomain/zero/1.0/") == 2
+        assert 'id="update-preflight"' in page
+
+        current["user"] = "alice"
+        pr = c.post(
+            "/api/submit",
+            files={"file": ("u.gpml", io.BytesIO(GOOD_GPML), "application/xml")},
+        ).json()["pr_number"]
+        review = c.get(f"/dashboard/{pr}").text
+        assert f'data-preflight="revise-preflight-{pr}"' in review

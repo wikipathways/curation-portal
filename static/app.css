@@ -1652,3 +1652,5 @@ a.pager__step:hover { background: var(--surface); border-color: var(--moss); }
 .db-checks__list { margin: 0.5rem 0 0; padding-left: 1.1rem; }
 .db-checks__list li { margin: 0.2rem 0; overflow-wrap: anywhere; }
 .db-checks__test { font-family: var(--font-mono); font-size: 0.78rem; color: var(--ink-muted); }
+
+.consent { margin: 0.2rem 0 0.8rem; font-size: 0.82rem; color: var(--ink-muted); }
