@@ -423,3 +423,14 @@ def test_an_adopted_review_cannot_be_revised_through_the_portal(tmp_path):
         )
         assert r.status_code == 409
         assert "opened outside the portal" in r.json()["detail"]
+
+
+def test_an_adopted_pull_request_is_graded_as_one(session_factory, previews, locks):
+    """No Author attribute is a warning on an upload, which the portal repairs before committing,
+    and a failure on a pull request it never rewrites."""
+    gh = FakeGitHubClient()
+    _plugin_update(gh)
+    assert 'Author="' not in HEAD_GPML
+    _adoption(session_factory, gh, previews, locks).adopt(73)
+
+    assert previews.quality(73).by_id("gpml.author").severity == "fail"

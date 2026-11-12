@@ -142,6 +142,7 @@ class AdoptionService:
                 plan.wpid or 0,
                 after_gpml=after,
                 before_gpml=before,
+                origin="adopted",
             )
         except Exception:  # noqa: BLE001 — a render failure costs the picture, not the review
             logger.warning("preview render failed for PR #%s", plan.pr_number, exc_info=True)

@@ -353,3 +353,35 @@ def test_a_reference_nothing_cites_does_not_count_as_a_reference():
 def test_a_cited_reference_still_passes():
     """The guard against fixing the above by making the rule never pass."""
     assert _severity(inspect_gpml(GOOD), "content.references") == Severity.PASS.value
+
+
+# ---- origin-aware grading (Wave 2) -------------------------------------------------------------
+
+
+def _root(attrs: str) -> str:
+    return (
+        f'<Pathway xmlns="http://pathvisio.org/GPML/2013a" Name="Glycolysis" '
+        f'Organism="Homo sapiens" {attrs}><Graphics BoardWidth="10" BoardHeight="10"/></Pathway>'
+    )
+
+
+def test_a_missing_author_fails_only_where_nothing_will_repair_it():
+    """The portal stamps the submitter into its own uploads; an adopted pull request is committed
+    by its author and reaches the repository's metadata step as it is."""
+    text = _root("")
+    assert _severity(inspect_gpml(text), "gpml.author") == Severity.WARN.value
+    assert _severity(inspect_gpml(text, origin="adopted"), "gpml.author") == Severity.FAIL.value
+    with_author = _root('Author="Jane"')
+    assert _severity(inspect_gpml(with_author, origin="adopted"), "gpml.author") == "pass"
+
+
+def test_the_version_rule_predicts_what_the_repository_will_publish():
+    assert _severity(inspect_gpml(_root("")), "gpml.version") == Severity.PASS.value
+    stamped = _root('Version="WP554_r20260101120000"')
+    assert _severity(inspect_gpml(stamped), "gpml.version") == Severity.PASS.value
+    legacy = _root('Version="WP554_r117123"')  # a MediaWiki revision on an older pathway
+    assert _severity(inspect_gpml(legacy), "gpml.version") == Severity.PASS.value
+    pathvisio = inspect_gpml(_root('Version="1"'))
+    assert _severity(pathvisio, "gpml.version") == Severity.WARN.value
+    assert "WP<id>_1" in pathvisio.by_id("gpml.version").detail
+    assert pathvisio.by_id("gpml.version").predicts_repo is True

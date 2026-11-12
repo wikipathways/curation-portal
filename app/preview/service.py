@@ -71,6 +71,7 @@ class PreviewService:
         after_gpml: bytes,
         before_gpml: bytes | None = None,
         submitter_note: str | None = None,
+        origin: str = "portal",
     ) -> PreviewState:
         """Render the before/after SVGs in-process and cache them on disk.
 
@@ -107,7 +108,9 @@ class PreviewService:
         # The one moment the renderer's verdict is in hand for free. ``app.quality`` will not run
         # the renderer itself — that would break the offline-and-cheap rule its rules work under —
         # so this is the only caller that can answer the "is it drawable" rule at all.
-        self._write_quality(out, after_gpml, before_gpml=before_gpml, drawable=drawn)
+        self._write_quality(
+            out, after_gpml, before_gpml=before_gpml, drawable=drawn, origin=origin
+        )
         # Record the outcome so a re-upload that now renders clears a previous failure, and a
         # GPML we cannot draw reads as 'failed' rather than 'pending' forever.
         marker = out / _FAILED_MARKER
@@ -181,7 +184,12 @@ class PreviewService:
     # -- quality report sidecar (app.quality) ----------------------------------------------
     @staticmethod
     def _write_quality(
-        out: Path, after_gpml: bytes, *, before_gpml: bytes | None, drawable: bool
+        out: Path,
+        after_gpml: bytes,
+        *,
+        before_gpml: bytes | None,
+        drawable: bool,
+        origin: str = "portal",
     ) -> None:
         """Cache the graded quality report next to the render (best-effort).
 
@@ -204,6 +212,7 @@ class PreviewService:
                 before=before,
                 kind="update" if before_gpml else "new",
                 drawable=drawable,
+                origin=origin,
             )
             (out / "quality.json").write_text(json.dumps(report.as_dict()), encoding="utf-8")
         except (OSError, ValueError):

@@ -165,6 +165,12 @@ class Subject:
     #: Why ``text`` could not be read as XML, in words for the submitter, or None if it could (or
     #: there is no text). See ``_read_tree``.
     unreadable: str | None = None
+    #: ``portal`` for an upload, ``adopted`` for a pull request opened on GitHub. It changes what
+    #: a missing attribute means: the portal repairs its own uploads before committing them, and
+    #: nothing repairs an adopted pull request's file before the repository's workflows read it.
+    origin: str = "portal"
+    #: The root element's ``Version`` attribute, as written.
+    version: str | None = None
 
 
 @dataclass(frozen=True)
@@ -331,6 +337,13 @@ def _check_author(s: Subject) -> tuple[str, str] | None:
     none — so this never blocks. It is worth saying because the fix belongs in the file the
     submitter keeps, not only in the copy the portal commits.
     """
+    if not s.author and s.origin == "adopted":
+        return (
+            Severity.FAIL.value,
+            "The GPML carries no Author attribute. This pull request was opened on GitHub, so the "
+            "portal never rewrites the file, and the repository's metadata step crashes on a "
+            "pathway without one. Ask the author to set it and push again.",
+        )
     if not s.author:
         return (
             Severity.WARN.value,
@@ -339,6 +352,35 @@ def _check_author(s: Subject) -> tuple[str, str] | None:
             "is worth setting in your own copy.",
         )
     return (Severity.PASS.value, f"Author is {s.author}.")
+
+
+_VERSION_RE = re.compile(r"^WP\d+_r\d+$")
+
+
+def _check_version(s: Subject) -> tuple[str, str] | None:
+    """What the published file's ``Version`` will say, predicted from what the upload carries.
+
+    The repository's publish step (3A) keeps whatever follows the ``WP<n>`` part and sets
+    ``Last-Modified`` from a 14-digit revision stamp, or from the publication time when there is
+    none. So a ``Version`` of ``WP<n>_r<digits>`` publishes cleanly and a missing one gets a fresh
+    stamp, but anything else — an old PathVisio ``Version="1"`` — is carried into the published
+    file as ``WP<n>_1``. Not blocking: the pathway publishes either way.
+    """
+    if s.tree is None:
+        return None
+    if not s.version:
+        return (
+            Severity.PASS.value,
+            "No Version yet. The repository stamps WP<id>_r<time> when it publishes.",
+        )
+    if _VERSION_RE.match(s.version):
+        return (Severity.PASS.value, f"Version is {s.version}.")
+    return (
+        Severity.WARN.value,
+        f"Version is “{s.version}”, which is not the WP<id>_r<revision> form. The repository keeps "
+        f"what follows the id, so the published file would say WP<id>_{s.version} and its "
+        "Last-Modified would be the publication time. Clearing the attribute avoids that.",
+    )
 
 
 def _check_citation_ids(s: Subject) -> tuple[str, str] | None:
@@ -660,6 +702,7 @@ RULES: tuple[Rule, ...] = (
     Rule("gpml.board", "Pathway canvas", _check_board),
     Rule("gpml.line_thickness", "Interaction line thickness", _check_line_thickness),
     Rule("gpml.author", "Authors", _check_author),
+    Rule("gpml.version", "Version", _check_version, predicts_repo=True),
     Rule("gpml.citation_ids", "Empty citation IDs", _check_citation_ids),
     Rule("gpml.datanodes", "DataNodes in GPML", _check_datanodes_present, needs_text=False),
     Rule(
@@ -735,6 +778,7 @@ def build_subject(
     before: object | None = None,
     kind: str = "new",
     drawable: bool | None = None,
+    origin: str = "portal",
 ) -> Subject:
     """Parse once, into the struct every rule reads.
 
@@ -763,6 +807,7 @@ def build_subject(
             kind=kind,
             drawable=drawable,
             unreadable=unreadable,
+            origin=origin,
         )
     if text:
         from app.submit.gpml import InvalidGpml, parse_pathway_meta
@@ -796,6 +841,8 @@ def build_subject(
         kind=kind,
         drawable=drawable,
         tree=tree,
+        origin=origin,
+        version=tree.get("Version") if tree is not None else None,
     )
 
 
