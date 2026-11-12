@@ -65,27 +65,29 @@ repository's own workflows are recommendations for its maintainers, not portal w
    `MERGED` even when `on_gpml_change` then fails or is cancelled. MERGED is not published.
 8. **Serialise merges.** Several approvals within minutes can make `on_gpml_change` skip one
    pathway's derived files.
-9. **Stale-base guard.** Record the GPML blob on `main` at submission; refuse approval when it
-   has changed since, with a re-base message. Subscribe the App to `push` to flag open reviews
-   whose pathway was touched directly.
-10. **Pull-request file list.** Five of 26 production forks are diverged from upstream, so a
-    fork-mode branch cut from the fork's own head carries the fork's commits into the pull
-    request (production #120 carried a stray file). After opening, list the pull request's
-    files; refuse approval when it touches anything but the expected path.
-11. **Embedded-WPID checks.** A file declaring another pathway's identifier is accepted as new,
-    or renumbered on update, without a word.
-12. **Grade updates relative to the base.** The ruleset fails 1175 of the 2218 published
-    pathways outright (mostly unmapped data nodes), so an edit that improves a pathway is graded
-    on legacy debt it did not introduce. Fail only on regressions; report the rest as
-    pre-existing.
+9. **Stale-base guard.** *Built 2026-11-12 (Wave 3):* `Review.base_blob` records the GPML blob
+   on `main` when an update is made or adopted; approval is refused when it has changed
+   (`BaseMoved`), the background check withdraws an approval it overtakes, and a `push` webhook
+   marks the pathway's open updates due. The App must be subscribed to `push`.
+10. **Pull-request file list.** *Built 2026-11-12:* approval lists the pull request's files and
+    refuses anything but the review's pathway (`UnexpectedFiles`), and the card says so. Before
+    branching from a fork the portal compares it with the content repo and pushes as the bot
+    when the fork is ahead (five of 26 production forks had diverged; #120 carried a stray file).
+11. **Embedded-WPID checks.** *Built 2026-11-12:* `gpml.embedded_wpid` compares the file's
+    Version with the pathway it is submitted as; the Update tab asks once before uploading a file
+    that names another pathway.
+12. **Grade updates relative to the base.** *Built 2026-11-12:* an update fails only on what it
+    makes worse (more unannotated nodes, fewer cited references, a description removed). As new
+    uploads 1181 of 2206 published pathways fail; as unchanged updates of themselves, none do.
+    Unconnected interactions are not computed by the portal's rules and stay a curator check.
 13. **Author identity.** The portal stamps the GitHub login as `Author`; production keys authors
     on the WikiPathways username (`scripts/author_list.csv`).
 14. **Metadata-only edits** — most production edits — have no portal path: the portal accepts a
     whole GPML upload and nothing else. Structured edit forms (title and description, references
     by PMID/DOI, node identifiers, ontology tags, community membership) would be needed before
     the front door covers what curators actually change. Deliberately not scheduled.
-15. **Show the `wikipathways-collection` reports** (`reports/WPxxxx.json`, the site's curation
-    badge) beside the portal's own rules, so the two quality systems stop disagreeing silently.
+15. **Show the `wikipathways-collection` reports.** *Built 2026-11-12:* an update's review page
+    shows the problems from `reports/WP<n>.md` (155 tests) for the published version.
 
 ### Cutover mechanics
 
