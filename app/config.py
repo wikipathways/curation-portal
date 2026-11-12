@@ -134,6 +134,14 @@ class Settings(BaseSettings):
     # reconcile pass. Reviews waiting on the repo's pipeline accumulate, so this matters.
     reconcile_min_interval_seconds: int = 30
 
+    # The background loop that keeps reviews in line with GitHub (app.background). Pages render
+    # from the database; this is what refreshes it. 0 turns the loop off, which leaves webhooks
+    # and a curator's own page loads as the only refresh.
+    background_interval_seconds: int = 60
+    # How often the loop re-lists open pull requests the portal has no review for. A pull_request
+    # webhook for an untracked pull request also triggers a re-list.
+    untracked_scan_interval_seconds: int = 600
+
     # Level for the `wpsubmit.*` loggers. INFO because the things logged at it are the ones that
     # explain a quiet decision after the fact — how long an expired lock was held, why a
     # submission fell back to the bot — and none of them fire per request.

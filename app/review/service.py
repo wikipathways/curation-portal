@@ -13,7 +13,7 @@ from collections.abc import Iterable
 from datetime import UTC, timedelta
 
 import httpx
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.orm.exc import StaleDataError
 
@@ -880,10 +880,17 @@ class CurationService:
             self._maybe_mirror(review)
             return review
 
-    def request_changes(self, pr_number: int, curator: str, note: str = "") -> Review:
+    def request_changes(
+        self, pr_number: int, curator: str, note: str = "", *, post_comment: bool = True
+    ) -> Review:
         """Ask the submitter to revise: move the review to CHANGES_REQUESTED and post the note as a
         PR comment so it reaches them on GitHub. The lock/reservation stay held — the PR is still
-        open and a re-upload re-opens the review (see ``register``). Comment is best-effort."""
+        open and a re-upload re-opens the review (see ``register``). Comment is best-effort.
+
+        The note is kept on the review as well (``decision_note``), so the card says what was
+        asked for without a trip to GitHub. ``post_comment=False`` is for a change request that
+        was made on GitHub in the first place: it is already in the thread.
+        """
         with self._session_factory() as s:
             review = s.get(Review, pr_number)
             if review is None:
@@ -892,6 +899,10 @@ class CurationService:
                 raise ReviewNotActionable(f"PR #{pr_number} is {_plain(review.status)}")
             was_approved = review.status == ReviewStatus.APPROVED
             review.status = ReviewStatus.CHANGES_REQUESTED
+            review.decided_by = curator
+            review.decision_note = (
+                f"@{curator}: {note.strip()}" if note.strip() else f"@{curator} asked for changes."
+            )
             s.commit()
             if was_approved and self.is_pipeline_mode and self._github is not None:
                 # Taking the approval back means taking the label back: while `accepted` is on
@@ -901,7 +912,7 @@ class CurationService:
                     self._github.remove_label(self._repo, pr_number, self._label_accepted)
                 except (GitHubError, httpx.HTTPError):
                     pass
-            if self._github is not None:
+            if self._github is not None and post_comment:
                 body = (
                     f"@{review.submitter} — @{curator} asked for changes before this can "
                     f"be accepted."
@@ -932,6 +943,27 @@ class CurationService:
                     pass
             self._maybe_mirror(review)
             return review
+
+    def handle_github_review(
+        self, pr_number: int, *, reviewer: str, state: str, body: str = ""
+    ) -> Review | None:
+        """A review verdict submitted on GitHub rather than in the portal.
+
+        Only a curator's ``changes_requested`` changes anything: it is the same decision as the
+        portal's Request changes button, made in the other venue, and leaving the dashboard on
+        "open" would invite a second curator to approve what the first just sent back. An
+        ``approved`` review on GitHub is deliberately *not* an approval here — approving in the
+        portal is what applies the label and starts publication, and it is gated on the checklist.
+        """
+        if state.lower() != "changes_requested" or not self.is_curator(reviewer):
+            return None
+        try:
+            review = self.get(pr_number)
+        except ReviewNotFound:
+            return None
+        if review.status in self._TERMINAL:
+            return None
+        return self.request_changes(pr_number, reviewer, body, post_comment=False)
 
     def set_checklist_item(
         self,
@@ -2009,7 +2041,72 @@ class CurationService:
             cutoff = self._due_cutoff(review.status)
         if last is not None and last > cutoff:
             return False
+        if not self._claim(pr_number, cutoff):
+            return False
         return self._reconcile_one(pr_number)
+
+    def _claim(self, pr_number: int, cutoff) -> bool:
+        """Take the right to re-check one review now. False when somebody else just did.
+
+        A conditional UPDATE, so exactly one of two concurrent callers wins: the background loop
+        and a curator's on-demand refresh, or two replicas. Done on the table rather than through
+        the ORM so the optimistic-concurrency counter is not bumped — the claim is a throttle
+        stamp, and bumping the version would make a curator's in-flight checklist write retry
+        for nothing.
+        """
+        t = Review.__table__
+        with self._session_factory() as s:
+            result = s.execute(
+                update(t)
+                .where(
+                    t.c.pr_number == pr_number,
+                    or_(t.c.last_checked_at.is_(None), t.c.last_checked_at <= cutoff),
+                )
+                .values(last_checked_at=utcnow())
+            )
+            s.commit()
+            return result.rowcount == 1
+
+    def mark_due(
+        self,
+        pr_numbers: Iterable[int] | None = None,
+        *,
+        head_sha: str | None = None,
+        include_awaiting: bool = False,
+    ) -> int:
+        """Make reviews due for a re-check on the next pass, without doing any GitHub work.
+
+        What a webhook delivery does instead of reconciling inline: a workflow finished, a marker
+        comment arrived, a review was submitted. Pass PR numbers, or a head commit to match (a
+        ``workflow_run`` for a fork pull request names no pull request, only its head sha).
+        Terminal reviews are left alone. Returns how many rows were marked.
+        """
+        t = Review.__table__
+        conds = [t.c.status.notin_(list(self._TERMINAL))]
+        numbers = sorted(set(pr_numbers or ()))
+        which = []
+        if numbers:
+            which.append(t.c.pr_number.in_(numbers))
+        if head_sha:
+            which.append(t.c.head_sha == head_sha)
+        if include_awaiting:
+            which.append(t.c.status.in_(list(_AWAITING_WPID)))
+        if not which:
+            return 0
+        conds.append(or_(*which))
+        with self._session_factory() as s:
+            result = s.execute(update(t).where(*conds).values(last_checked_at=None))
+            s.commit()
+            return result.rowcount or 0
+
+    def live_pr_numbers(self) -> list[int]:
+        """Every review that is not in a terminal state."""
+        with self._session_factory() as s:
+            return list(
+                s.execute(
+                    select(Review.pr_number).where(Review.status.notin_(self._TERMINAL))
+                ).scalars()
+            )
 
     def reconcile(self) -> int:
         """Bring every non-terminal review in line with GitHub (issue #1).
@@ -2037,12 +2134,14 @@ class CurationService:
 
         if self._github is None:
             return 0
-        due = [
-            pr_number
-            for pr_number, status, last in live
-            if last is None or last <= self._due_cutoff(status)
-        ]
-        return sum(1 for pr_number in due if self._reconcile_one(pr_number))
+        changed = 0
+        for pr_number, status, last in live:
+            cutoff = self._due_cutoff(status)
+            if last is not None and last > cutoff:
+                continue
+            if self._claim(pr_number, cutoff) and self._reconcile_one(pr_number):
+                changed += 1
+        return changed
 
     #: Older name, kept so existing callers keep working.
     reconcile_open_reviews = reconcile

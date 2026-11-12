@@ -19,6 +19,48 @@
     <a class="queue-filter__mine" href="/dashboard?mine=1"{% if mine %} aria-current="page"{% endif %}>Mine{% if mine and total_count %} <span class="queue-filter__count">{{ total_count }}</span>{% endif %}</a>
   </nav>
 
+  {# Curators only. Pull requests opened on GitHub — the PathVisio plugin, anyone with push
+     access — used to be invisible here however long they waited. Adopting stays a click: it
+     comments on the pull request, so nobody should be adopted by a background job they never
+     chose. #}
+  {% if untracked and not mine %}
+  <section class="untracked" aria-labelledby="untracked-title">
+    <details class="untracked__fold"{% if untracked['items'] %} open{% endif %}>
+      <summary>
+        <h2 class="untracked__title" id="untracked-title">On GitHub, not in the portal</h2>
+        {% if untracked['items'] %}<span class="queue-filter__count">{{ untracked['items'] | length }}</span>{% endif %}
+      </summary>
+      <p class="untracked__lede">
+        Open pull requests on <code>{{ repo }}</code> that change pathway files and have no review here.
+        Adopting one builds a review from the pull request and posts a short comment on it.
+        {% if untracked.checked_at %}Checked {{ untracked.checked_at | age }}{% if untracked.checked_at | age == 'today' %} at {{ untracked.checked_at.strftime('%H:%M') }} UTC{% endif %}.{% endif %}
+      </p>
+      {% if untracked.error %}<p class="untracked__error" role="status">{{ untracked.error }}</p>{% endif %}
+      {% if not untracked.checked_at and not untracked.error %}
+        <p class="untracked__empty">Not checked yet. The list fills in within a minute of the portal starting.</p>
+      {% elif not untracked['items'] %}
+        <p class="untracked__empty">Every open pull request that touches a pathway has a review here.</p>
+      {% else %}
+      <ul class="untracked__list">
+        {% for p in untracked['items'] %}
+        <li class="untracked__item" data-pr="{{ p.number }}">
+          <div class="untracked__main">
+            <a class="untracked__pr" href="{{ p.html_url }}" target="_blank" rel="noopener">#{{ p.number }}</a>
+            <span class="untracked__name">{{ p.title or '(no title)' }}</span>
+            <span class="untracked__meta">@{{ p.author }}{% if p.created_at %} &middot; opened {{ p.created_at | age }}{% endif %} &middot; {{ p.summary }}{% if p.draft %} &middot; draft{% endif %}</span>
+            {% if p.reason %}<span class="untracked__reason">{{ p.reason }}</span>{% endif %}
+          </div>
+          {% if p.adoptable %}
+          <button type="button" class="btn btn--sm btn--adopt" data-pr="{{ p.number }}">Adopt</button>
+          {% endif %}
+        </li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+    </details>
+  </section>
+  {% endif %}
+
   {% if not reviews %}
     <div class="empty-state">
       <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="7" cy="7" r="3.5" stroke="currentColor" stroke-width="1.6"/><circle cx="17" cy="9" r="3.5" stroke="currentColor" stroke-width="1.6"/><circle cx="12" cy="18" r="3.5" stroke="currentColor" stroke-width="1.6"/><path d="M9.7 8.8L15 9.6M9.2 9.9l2 6.2M15.5 12l-2.3 3.9" stroke="currentColor" stroke-width="1.6"/></svg>

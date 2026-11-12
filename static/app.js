@@ -1178,4 +1178,124 @@
       })
       .catch(function () { select.disabled = false; toast('Could not reach the server. Try again.', 'error'); });
   });
+
+  // ---------- "On GitHub, not in the portal" (dashboard, curators) ----------
+  document.addEventListener('click', function (e) {
+    var btn = e.target.closest('.btn--adopt');
+    if (!btn || btn.disabled) return;
+    var pr = btn.getAttribute('data-pr');
+    btn.disabled = true;
+    btn.textContent = 'Adopting…';
+    postForm('/api/reviews/' + pr + '/adopt', {})
+      .then(function (res) {
+        if (res.ok && res.body && res.body.adopted) {
+          location.href = '/dashboard/' + pr;
+          return;
+        }
+        btn.disabled = false;
+        btn.textContent = 'Adopt';
+        var why = res.ok && res.body && res.body.reason
+          ? 'Not adopted: pull request #' + pr + ' ' + res.body.reason + '.'
+          : describeError(res.status, res.body);
+        toast(why, 'error');
+      })
+      .catch(function () {
+        btn.disabled = false;
+        btn.textContent = 'Adopt';
+        toast('Could not reach the server. Try again.', 'error');
+      });
+  });
+
+  // ---------- pull request conversation (review page) ----------
+  // Everything from GitHub is set as text. Comment bodies are Markdown written by anyone who can
+  // comment on the pull request; none of it is ever parsed as HTML here.
+  function conversationEntry(item) {
+    var li = document.createElement('li');
+    li.className = 'conversation__item conversation__item--' + item.role;
+    var head = document.createElement('p');
+    head.className = 'conversation__head';
+    var who = document.createElement('strong');
+    who.textContent = '@' + item.author;
+    head.appendChild(who);
+    if (item.role === 'curator') head.appendChild(span('conversation__tag', 'curator'));
+    var what = item.verdict ? ' ' + item.verdict
+      : item.kind === 'line' ? ' commented on ' + (item.path || 'the diff')
+      : ' commented';
+    head.appendChild(document.createTextNode(what));
+    if (item.created_at) {
+      var when = document.createElement('time');
+      when.dateTime = item.created_at;
+      when.textContent = ' · ' + item.created_at.slice(0, 10);
+      head.appendChild(when);
+    }
+    if (item.url) {
+      var a = document.createElement('a');
+      a.href = item.url;
+      a.target = '_blank';
+      a.rel = 'noopener';
+      a.className = 'conversation__link';
+      a.textContent = 'on GitHub';
+      head.appendChild(document.createTextNode(' · '));
+      head.appendChild(a);
+    }
+    var body = document.createElement('div');
+    body.className = 'conversation__body';
+    body.textContent = item.body || (item.verdict ? '' : '(empty)');
+    if (item.collapsed) {
+      var fold = document.createElement('details');
+      var sum = document.createElement('summary');
+      sum.appendChild(head);
+      fold.appendChild(sum);
+      fold.appendChild(body);
+      li.appendChild(fold);
+    } else {
+      li.appendChild(head);
+      if (body.textContent) li.appendChild(body);
+    }
+    if (item.verdict === 'requested changes') li.classList.add('conversation__item--changes');
+    return li;
+  }
+
+  function loadConversation(section) {
+    var pr = section.getAttribute('data-pr');
+    var status = section.querySelector('.conversation__status');
+    var list = section.querySelector('.conversation__list');
+    return fetch('/api/reviews/' + pr + '/conversation')
+      .then(function (r) {
+        return r.json().catch(function () { return {}; }).then(function (j) { return { ok: r.ok, status: r.status, body: j }; });
+      })
+      .then(function (res) {
+        if (!res.ok) { status.textContent = describeError(res.status, res.body); return; }
+        list.textContent = '';
+        var items = res.body.items || [];
+        var people = items.filter(function (i) { return !i.collapsed; }).length;
+        status.textContent = items.length === 0
+          ? 'Nobody has commented on this pull request yet.'
+          : people + (people === 1 ? ' comment' : ' comments') + ' from people' +
+            (items.length > people ? ', and ' + (items.length - people) + ' from bots, folded.' : '.');
+        items.forEach(function (i) { list.appendChild(conversationEntry(i)); });
+      })
+      .catch(function () { status.textContent = 'Could not load the conversation. Reload to try again.'; });
+  }
+
+  document.querySelectorAll('.conversation[data-pr]').forEach(loadConversation);
+
+  document.addEventListener('click', function (e) {
+    var btn = e.target.closest('.btn--comment');
+    if (!btn || btn.disabled) return;
+    var section = btn.closest('.conversation');
+    var box = section.querySelector('.comment-box__text');
+    var text = (box.value || '').trim();
+    if (!text) { toast('Write something first.', 'error'); box.focus(); return; }
+    btn.disabled = true;
+    postForm('/api/reviews/' + section.getAttribute('data-pr') + '/comments', { body: text })
+      .then(function (res) {
+        btn.disabled = false;
+        if (!res.ok) { toast(describeError(res.status, res.body), 'error'); return; }
+        box.value = '';
+        toast('Comment posted on GitHub.', 'success');
+        loadConversation(section);
+      })
+      .catch(function () { btn.disabled = false; toast('Could not reach the server. Try again.', 'error'); });
+  });
 })();

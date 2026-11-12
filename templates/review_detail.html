@@ -27,5 +27,24 @@
     <strong>@{{ review.submitter }}</strong>, against <code>{{ repo }}</code>.
   </p>
   {{ review_card(review, is_curator, curators, expanded=True) }}
+
+  {# The thread is where contributors answer and the repository's workflows report. Loaded after
+     the page so a slow GitHub never holds up the review itself; rendered as text, never HTML. #}
+  <section class="conversation" data-pr="{{ review.pr_number }}" aria-labelledby="conversation-title">
+    <h2 class="conversation__title" id="conversation-title">Conversation on the pull request</h2>
+    <p class="conversation__status" role="status">Loading the conversation from GitHub&hellip;</p>
+    <ol class="conversation__list"></ol>
+    {% if is_curator or login == review.submitter %}
+    <div class="comment-box">
+      <label class="comment-box__label" for="comment-{{ review.pr_number }}">Add a comment</label>
+      <textarea id="comment-{{ review.pr_number }}" class="comment-box__text" rows="3" maxlength="10000"
+                placeholder="Posted on pull request #{{ review.pr_number }} as @{{ login }}."></textarea>
+      <div class="comment-box__row">
+        <p class="comment-box__hint">Posted on GitHub under your own name. It does not change the review's state.</p>
+        <button type="button" class="btn btn--sm btn--comment">Comment</button>
+      </div>
+    </div>
+    {% endif %}
+  </section>
 {% endif %}
 {% endblock %}

@@ -10,6 +10,8 @@ depend on a GitHub client via ``get_github_client`` and return 503 until the OAu
 """
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import hashlib
 import hmac
 import json
@@ -46,6 +48,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.middleware.sessions import SessionMiddleware
 
 from app.auth import GitHubApp, GithubOAuth, OAuthError, TokenCipher, TokenCipherError
+from app.background import BackgroundWorker
 from app.config import Settings
 from app.curators import make_curator_registry
 from app.db import make_engine, make_session_factory
@@ -63,6 +66,8 @@ from app.preview import PreviewService
 from app.preview.metadata import parse_curation_metadata
 from app.ratelimit import RateLimited, SubmissionRateLimiter
 from app.review.adoption import AdoptionService
+from app.review.conversation import ConversationCache
+from app.review.conversation import present as present_conversation
 from app.review.service import (
     TESTING_RULE_IDS,
     ChecklistIncomplete,
@@ -100,6 +105,38 @@ from app.wpid.github_floor import github_wpid_floor
 
 _ROOT = Path(__file__).resolve().parent.parent
 templates = Jinja2Templates(directory=str(_ROOT / "templates"))
+
+
+def _age(value) -> str:
+    """How long ago, in the words a queue needs: "today", "3 days ago", "5 weeks ago".
+
+    Takes a datetime or GitHub's ISO 8601 string. Empty for anything it cannot read, so a card
+    with no timestamp says nothing rather than "None".
+    """
+    from datetime import UTC, datetime
+
+    if not value:
+        return ""
+    if isinstance(value, str):
+        try:
+            value = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return ""
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=UTC)
+    days = (datetime.now(UTC) - value).days
+    if days < 1:
+        return "today"
+    if days == 1:
+        return "yesterday"
+    if days < 14:
+        return f"{days} days ago"
+    if days < 70:
+        return f"{days // 7} weeks ago"
+    return f"{days // 30} months ago"
+
+
+templates.env.filters["age"] = _age
 
 # Serve preview SVGs with script execution disabled (SVGs can carry <script>): a strict CSP plus
 # the sandbox directive neutralises them even if a viewer opens the URL directly.
@@ -551,11 +588,35 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             if settings.github_oauth_client_id and settings.github_oauth_client_secret
             else None
         )
-        yield
+        app.state.conversations = ConversationCache()
+        app.state.worker = BackgroundWorker(
+            make_curation=lambda gh: _make_curation(app.state, gh),
+            bot_provider=lambda: app.state.bot_client_provider(),
+            session_factory=session_factory,
+            preview=app.state.preview,
+            content_repo=settings.content_repo,
+            untracked_interval_seconds=settings.untracked_scan_interval_seconds,
+        )
+        # Only with an App identity: without one there is nothing to reconcile against, and the
+        # tests (which wire no App) drive ``worker.tick`` themselves.
+        loop_task = None
+        if bot_app is not None and settings.background_interval_seconds > 0:
+            loop_task = asyncio.create_task(
+                app.state.worker.run(settings.background_interval_seconds)
+            )
+        try:
+            yield
+        finally:
+            if loop_task is not None:
+                loop_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await loop_task
 
     def _curation(request: Request, github: GitHubClient | None = None) -> CurationService:
         # Review CRUD needs no GitHub client; only approve_and_merge does.
-        st = request.app.state
+        return _make_curation(request.app.state, github)
+
+    def _make_curation(st, github: GitHubClient | None = None) -> CurationService:
         return CurationService(
             st.session_factory,
             github,
@@ -913,11 +974,10 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         status: ReviewStatus | None = None,
         mine: bool = False,
         page: int = 1,
-        bot: GitHubClient | None = Depends(get_bot_optional),
     ):
-        # Terminalise any review whose PR was closed/merged outside the app before rendering the
-        # queue, so the dashboard never shows a PR that no longer exists (issue #1).
-        _curation(request, bot).reconcile_open_reviews()
+        # Renders from the database only. Keeping it in line with GitHub (issue #1) is the
+        # background loop's job since Wave 2: reconciling here cost four or five GitHub calls per
+        # open review on every load, anonymous ones included, and wrote from a GET.
         login = request.session.get("gh_login")
         # "Mine" is every state at once. A submitter is looking for one particular pathway and
         # does not know which state it reached — making them guess the tab is the same dead end
@@ -964,8 +1024,21 @@ def build_app(settings: Settings | None = None) -> FastAPI:
                 "tabs": queue_tabs(counts=tab_counts, pipeline_mode=settings.is_pipeline_mode),
                 "empty": presentation(status.value) if status is not None else None,
                 "pager": pager,
+                "untracked": _untracked_view(request, login),
             },
         )
+
+    def _untracked_view(request: Request, login: str | None) -> dict | None:
+        """The "On GitHub, not in the portal" panel, for curators only."""
+        if not login or not request.app.state.curators.is_curator(login):
+            return None
+        state = request.app.state.worker.untracked
+        return {
+            "items": state.items,
+            "checked_at": state.checked_at,
+            "error": state.error,
+            "auto_adopt": settings.adopt_foreign_prs,
+        }
 
     @app.get("/previews/{pr_number}/{side}.svg")
     def preview_svg(request: Request, pr_number: int, side: str):
@@ -1036,23 +1109,25 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             curation.get(pr_number)
         except ReviewNotFound as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
-        # This page is reached directly as often as it is reached from the queue — a link in a
-        # comment, a refresh after acting — so it cannot rely on a queue load having run.
-        curation.reconcile_review(pr_number)
-        # Fill in whatever the target repo's pipeline has already worked out, so the curator is
-        # confirming answers rather than deriving them. Best-effort, and it never overwrites a
-        # state a curator set by hand.
-        meta = request.app.state.preview.metadata(pr_number)
-        # The *cited* count, not the total: the target repo's generator only emits references a
-        # <BiopaxRef> actually points at, so comparing its output against every PublicationXref
-        # in the file reports a shortfall that is not one — and that item is required, so the
-        # false FAIL would block approval and read as the submitter's fault.
-        # `meta` is the parsed metadata.json, a plain dict — attribute access on it silently
-        # yields None, which made the pipeline's reference check return early and do nothing.
-        curation.refresh_pipeline_checks(
-            pr_number,
-            gpml_reference_count=meta.get("cited_reference_count") if meta else None,
-        )
+        # A curator about to decide gets the freshest state the throttle allows: this page is
+        # reached directly as often as from the queue (a link in a comment, a refresh after
+        # acting). Anyone else reads what the background loop last recorded — a GET from a
+        # visitor never writes and never spends GitHub calls.
+        login = request.session.get("gh_login")
+        if login and request.app.state.curators.is_curator(login):
+            curation.reconcile_review(pr_number)
+            # Fill in whatever the target repo's pipeline has already worked out, so the curator
+            # is confirming answers rather than deriving them. Best-effort, and it never
+            # overwrites a state a curator set by hand.
+            meta = request.app.state.preview.metadata(pr_number)
+            # The *cited* count, not the total: the target repo's generator only emits references
+            # a <BiopaxRef> actually points at, so comparing its output against every
+            # PublicationXref in the file reports a shortfall that is not one — and that item is
+            # required, so the false FAIL would block approval and read as the submitter's fault.
+            curation.refresh_pipeline_checks(
+                pr_number,
+                gpml_reference_count=meta.get("cited_reference_count") if meta else None,
+            )
         # Read the row last. Both calls above write to it, and rendering the copy fetched before
         # them would show the page as it was one refresh ago.
         r = curation.get(pr_number)
@@ -1613,12 +1688,89 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         if bot is None:
             raise HTTPException(status_code=503, detail="no bot identity is configured")
         outcome = _adoption(request, bot).adopt(pr_number)
+        if outcome.adopted:
+            request.app.state.worker.forget(pr_number)
         return {
             "pr_number": outcome.pr_number,
             "adopted": outcome.adopted,
             "refreshed": outcome.refreshed,
             "reason": outcome.reason,
         }
+
+    @app.get("/api/reviews/{pr_number}/conversation")
+    def review_conversation(
+        request: Request,
+        pr_number: int,
+        _user: str = Depends(get_current_user),
+        bot: GitHubClient | None = Depends(get_bot_optional),
+    ) -> dict[str, object]:
+        """The pull request's comments, review verdicts and line comments, oldest first.
+
+        Read as the App, through a one-minute cache the webhook invalidates. Signed-in only, like
+        the review page it feeds: the thread is public on GitHub, but the API quota is the
+        portal's.
+        """
+        try:
+            _curation(request).get(pr_number)
+        except ReviewNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        if bot is None:
+            raise HTTPException(status_code=503, detail="the portal cannot read GitHub right now")
+        try:
+            entry = request.app.state.conversations.get(
+                pr_number, lambda: bot.list_conversation(settings.content_repo, pr_number)
+            )
+        except (GitHubError, httpx.HTTPError) as exc:
+            raise HTTPException(
+                status_code=502, detail=f"could not read the pull request's conversation: {exc}"
+            ) from exc
+        curators = set(request.app.state.curators.members())
+        return {
+            "pr_number": pr_number,
+            "url": f"https://github.com/{settings.content_repo}/pull/{pr_number}",
+            "items": [present_conversation(i, curators=curators) for i in entry.items],
+        }
+
+    @app.post("/api/reviews/{pr_number}/comments", status_code=201)
+    def post_review_comment(
+        request: Request,
+        pr_number: int,
+        body: str = Form(...),
+        actor: str = Depends(get_current_user),
+        gh: GitHubClient = Depends(get_github_client),
+    ) -> dict[str, object]:
+        """Comment on the pull request as yourself, without changing the review's state.
+
+        Posted with the signed-in person's own token, so the comment is theirs on GitHub and the
+        submitter is notified the ordinary way. Curators and the review's own submitter only.
+        """
+        try:
+            review = _curation(request).get(pr_number)
+        except ReviewNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        if actor != review.submitter and not request.app.state.curators.is_curator(actor):
+            raise HTTPException(
+                status_code=403,
+                detail="only curators and the submitter can comment from the portal",
+            )
+        text = body.strip()
+        if not text:
+            raise HTTPException(status_code=422, detail="the comment is empty")
+        if len(text) > _MAX_COMMENT_CHARS:
+            raise HTTPException(
+                status_code=422,
+                detail=f"the comment is longer than {_MAX_COMMENT_CHARS} characters",
+            )
+        try:
+            gh.create_issue_comment(settings.content_repo, pr_number, text)
+        except CredentialsRejected:
+            raise
+        except (GitHubError, httpx.HTTPError) as exc:
+            raise HTTPException(
+                status_code=502, detail=f"GitHub did not accept the comment: {exc}"
+            ) from exc
+        request.app.state.conversations.invalidate(pr_number)
+        return {"ok": True, "pr_number": pr_number}
 
     @app.post("/api/reviews/{pr_number}/assign", response_model=ReviewDetail)
     def assign_review(
@@ -1758,6 +1910,59 @@ def build_app(settings: Settings | None = None) -> FastAPI:
                 "adopting PR #%s failed", pr_number, exc_info=True
             )
 
+    async def _webhook_activity(
+        request: Request, event: str, payload: dict, bot: GitHubClient | None
+    ) -> dict[str, object]:
+        """Comments, reviews and workflow runs: mark the review due and wake the loop.
+
+        None of these is acted on inline. A finished workflow or a marker comment is exactly what
+        the reconcile pass already knows how to read, so the delivery only says "look now" —
+        which also means a delivery GitHub retries, or one that arrives twice, costs nothing.
+        """
+        curation = _curation(request, bot)
+        worker = request.app.state.worker
+        action = payload.get("action")
+        if event == "workflow_run":
+            if action != "completed":
+                return {"ok": True, "ignored": f"action:{action}"}
+            run = payload.get("workflow_run") or {}
+            numbers = [
+                int(p["number"]) for p in run.get("pull_requests") or [] if p.get("number")
+            ]
+            # A fork pull request's run names no pull request, only its head commit, and the
+            # publish workflow runs on dispatch and names neither — so anything waiting on a
+            # publication is due as well.
+            marked = await run_in_threadpool(
+                curation.mark_due,
+                numbers,
+                head_sha=str(run.get("head_sha") or "") or None,
+                include_awaiting=True,
+            )
+        else:
+            if event == "issue_comment":
+                issue = payload.get("issue") or {}
+                if "pull_request" not in issue:
+                    return {"ok": True, "ignored": "issue"}
+                number = issue.get("number")
+            else:
+                number = (payload.get("pull_request") or {}).get("number")
+            if number is None:
+                raise HTTPException(status_code=422, detail="no PR number in payload")
+            request.app.state.conversations.invalidate(int(number))
+            if event == "pull_request_review" and action == "submitted":
+                verdict = payload.get("review") or {}
+                await run_in_threadpool(
+                    curation.handle_github_review,
+                    int(number),
+                    reviewer=str((verdict.get("user") or {}).get("login") or ""),
+                    state=str(verdict.get("state") or ""),
+                    body=str(verdict.get("body") or ""),
+                )
+            marked = await run_in_threadpool(curation.mark_due, [int(number)])
+        if marked:
+            worker.poke()
+        return {"ok": True, "event": event, "marked": marked}
+
     @app.post("/webhooks/github")
     async def github_webhook(
         request: Request,
@@ -1777,7 +1982,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         event = request.headers.get("X-GitHub-Event", "")
         if event == "ping":
             return {"ok": True, "pong": True}
-        if event != "pull_request":
+        if event not in _WEBHOOK_EVENTS:
             return {"ok": True, "ignored": f"event:{event}"}
         try:
             payload = json.loads(raw)
@@ -1795,6 +2000,9 @@ def build_app(settings: Settings | None = None) -> FastAPI:
                 settings.content_repo,
             )
             return {"ok": True, "ignored": f"repository:{repo_name or 'missing'}"}
+
+        if event != "pull_request":
+            return await _webhook_activity(request, event, payload, bot)
 
         action = payload.get("action")
         if action not in ("closed", "labeled", "unlabeled", "opened", "reopened", "synchronize"):
@@ -1832,6 +2040,10 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             # SVG render, and this handler is async, so doing it inline would hold the event loop
             # and risk GitHub abandoning the delivery and retrying into a half-written adoption.
             if not settings.adopt_foreign_prs:
+                # Not adopted, but no longer invisible: the curators' "On GitHub, not in the
+                # portal" panel lists it on the next tick.
+                request.app.state.worker.request_scan()
+                request.app.state.worker.poke()
                 return {"ok": True, "ignored": f"action:{action}", "adoption": "disabled"}
             if bot is None:
                 logging.getLogger("wpsubmit.adopt").warning(
@@ -1865,6 +2077,8 @@ def build_app(settings: Settings | None = None) -> FastAPI:
 
         merged = bool(pr.get("merged"))
         review = await run_in_threadpool(curation.handle_pr_closed, int(pr_number), merged=merged)
+        if review is None:
+            request.app.state.worker.forget(int(pr_number))
         return {
             "ok": True,
             "pr_number": int(pr_number),
@@ -1873,6 +2087,22 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         }
 
     return app
+
+
+#: A portal comment is a note in a thread, not a document.
+_MAX_COMMENT_CHARS = 10_000
+
+#: Webhook events the portal reads. The App must be subscribed to each of them on GitHub; the
+#: background loop covers any it is not, a minute or so later.
+_WEBHOOK_EVENTS = frozenset(
+    {
+        "pull_request",
+        "issue_comment",
+        "pull_request_review",
+        "pull_request_review_comment",
+        "workflow_run",
+    }
+)
 
 
 class ValidateResponse(BaseModel):

@@ -7,6 +7,7 @@ GitHub App for privileged actions — can be swapped in behind the same interfac
 
 from app.github.client import (
     BranchAlreadyExists,
+    ConversationItem,
     CredentialsRejected,
     FakeGitHubClient,
     GitHubClient,
@@ -21,6 +22,7 @@ from app.github.client import (
 
 __all__ = [
     "BranchAlreadyExists",
+    "ConversationItem",
     "CredentialsRejected",
     "WriteDenied",
     "FakeGitHubClient",

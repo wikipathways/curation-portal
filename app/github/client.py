@@ -37,6 +37,25 @@ def _head_repo_of(pull: dict, base_repo: str) -> str | None:
     return full_name if full_name and full_name != base_repo else None
 
 
+def _detail_of(data: dict, repo: str) -> PullRequestDetail:
+    """A ``PullRequestDetail`` from one pull request object, single or listed."""
+    return PullRequestDetail(
+        number=data["number"],
+        html_url=data.get("html_url", ""),
+        head_branch=(data.get("head") or {}).get("ref", ""),
+        head_sha=(data.get("head") or {}).get("sha", ""),
+        state=data.get("state", ""),
+        merged=bool(data.get("merged") or data.get("merged_at")),
+        title=data.get("title") or "",
+        body=data.get("body") or "",
+        labels=[label["name"] for label in data.get("labels") or []],
+        author=(data.get("user") or {}).get("login", ""),
+        head_repo=_head_repo_of(data, repo),
+        created_at=data.get("created_at") or "",
+        draft=bool(data.get("draft")),
+    )
+
+
 @dataclass(frozen=True)
 class PullRequest:
     number: int
@@ -72,6 +91,32 @@ class PullRequestDetail:
     #: ``PullRequest``. Carried here so a reconcile can *repair* a review row whose head repo was
     #: never recorded — which is every cross-repository submission opened before 2026-08-04.
     head_repo: str | None = None
+    #: ISO 8601, as GitHub sends it. Empty where a caller built the detail by hand.
+    created_at: str = ""
+    draft: bool = False
+
+
+@dataclass(frozen=True)
+class ConversationItem:
+    """One entry in a pull request's conversation, as the review page shows it.
+
+    Three GitHub sources fold into this: issue comments (``kind="comment"``), review verdicts
+    (``kind="review"``, ``state`` one of APPROVED / CHANGES_REQUESTED / COMMENTED / DISMISSED) and
+    line comments on the diff (``kind="line"``, ``path`` set). ``body`` is the raw Markdown; the
+    page renders it as text, never as HTML.
+    """
+
+    kind: str
+    author: str
+    body: str
+    created_at: str
+    html_url: str = ""
+    state: str | None = None
+    path: str | None = None
+
+    @property
+    def is_bot(self) -> bool:
+        return self.author.endswith("[bot]")
 
 
 @dataclass(frozen=True)
@@ -379,6 +424,18 @@ class GitHubClient(ABC):
         """
 
     @abstractmethod
+    def list_open_pull_requests(self, repo: str, *, limit: int = 100) -> list[PullRequestDetail]:
+        """The repository's open pull requests, newest first, at most ``limit``.
+
+        One listing call. File lists are not included: the caller reads them only for the pull
+        requests it does not already track.
+        """
+
+    @abstractmethod
+    def list_conversation(self, repo: str, pr_number: int) -> list[ConversationItem]:
+        """Comments, review verdicts and line comments on a pull request, oldest first."""
+
+    @abstractmethod
     def close_pull_request(self, repo: str, pr_number: int) -> None:
         """Close a PR without merging."""
 
@@ -453,6 +510,8 @@ class FakeGitHubClient(GitHubClient):
         #: Comment body -> author login, for comments a test wants posted by someone other than
         #: a bot (see ``list_issue_comments_by``).
         self.comment_authors: dict[str, str] = {}
+        #: PR number -> review verdicts and line comments a test seeds for ``list_conversation``.
+        self.pr_reviews: dict[int, list[ConversationItem]] = {}
         #: Where each branch was cut from. ``branches`` moves with every commit, so this is the
         #: only record of the base a test can assert on.
         self.branch_bases: dict[tuple[str, str], str] = {}
@@ -844,6 +903,29 @@ class FakeGitHubClient(GitHubClient):
         # how a test plays a human typing a marker into a comment.
         bodies = self.list_issue_comments(repo, issue_number)
         return [(self.comment_authors.get(b, "github-actions[bot]"), b) for b in bodies]
+
+    def list_open_pull_requests(self, repo: str, *, limit: int = 100) -> list[PullRequestDetail]:
+        self._maybe_fail("list_open_pull_requests")
+        out = []
+        for pr in reversed(self.pulls):
+            detail = self.get_pull_request(repo, pr.number)
+            if detail is not None and detail.state == "open":
+                out.append(detail)
+        return out[:limit]
+
+    def list_conversation(self, repo: str, pr_number: int) -> list[ConversationItem]:
+        self._maybe_fail("list_conversation")
+        items = [
+            ConversationItem(
+                kind="comment",
+                author=author,
+                body=body,
+                created_at=f"2026-01-01T00:00:{i:02d}Z",
+            )
+            for i, (author, body) in enumerate(self.list_issue_comments_by(repo, pr_number))
+        ]
+        items.extend(self.pr_reviews.get(pr_number, []))
+        return sorted(items, key=lambda c: c.created_at)
 
     def close_pull_request(self, repo: str, pr_number: int) -> None:
         self._maybe_fail("close_pull_request")
@@ -1390,20 +1472,74 @@ class HttpGitHubClient(GitHubClient):
         if resp.status_code == 404:
             return None
         self._raise_for(resp, f"get_pull_request({pr_number})")
-        data = resp.json()
-        return PullRequestDetail(
-            number=data["number"],
-            html_url=data.get("html_url", ""),
-            head_branch=(data.get("head") or {}).get("ref", ""),
-            head_sha=(data.get("head") or {}).get("sha", ""),
-            state=data.get("state", ""),
-            merged=bool(data.get("merged")),
-            title=data.get("title") or "",
-            body=data.get("body") or "",
-            labels=[label["name"] for label in data.get("labels") or []],
-            author=(data.get("user") or {}).get("login", ""),
-            head_repo=_head_repo_of(data, repo),
+        return _detail_of(resp.json(), repo)
+
+    def list_open_pull_requests(self, repo: str, *, limit: int = 100) -> list[PullRequestDetail]:
+        resp = self._client.get(
+            f"/repos/{repo}/pulls",
+            params={"state": "open", "per_page": min(limit, 100), "sort": "created",
+                    "direction": "desc"},
         )
+        self._raise_for(resp, "list_open_pull_requests")
+        return [_detail_of(data, repo) for data in resp.json()[:limit]]
+
+    def _paged(self, path: str, what: str, *, limit: int = 300) -> list[dict]:
+        out: list[dict] = []
+        page = 1
+        while len(out) < limit:
+            resp = self._client.get(path, params={"per_page": 100, "page": page})
+            self._raise_for(resp, what)
+            batch = resp.json()
+            out.extend(batch)
+            if len(batch) < 100:
+                break
+            page += 1
+        return out[:limit]
+
+    def list_conversation(self, repo: str, pr_number: int) -> list[ConversationItem]:
+        items: list[ConversationItem] = []
+        for c in self._paged(
+            f"/repos/{repo}/issues/{pr_number}/comments", f"comments({pr_number})"
+        ):
+            items.append(
+                ConversationItem(
+                    kind="comment",
+                    author=(c.get("user") or {}).get("login") or "",
+                    body=c.get("body") or "",
+                    created_at=c.get("created_at") or "",
+                    html_url=c.get("html_url") or "",
+                )
+            )
+        for r in self._paged(f"/repos/{repo}/pulls/{pr_number}/reviews", f"reviews({pr_number})"):
+            state = r.get("state") or ""
+            # A review with no body and no verdict is the shell GitHub creates around line
+            # comments; the line comments themselves carry the content.
+            if state == "PENDING" or (state == "COMMENTED" and not (r.get("body") or "").strip()):
+                continue
+            items.append(
+                ConversationItem(
+                    kind="review",
+                    author=(r.get("user") or {}).get("login") or "",
+                    body=r.get("body") or "",
+                    created_at=r.get("submitted_at") or "",
+                    html_url=r.get("html_url") or "",
+                    state=state,
+                )
+            )
+        for c in self._paged(
+            f"/repos/{repo}/pulls/{pr_number}/comments", f"line comments({pr_number})"
+        ):
+            items.append(
+                ConversationItem(
+                    kind="line",
+                    author=(c.get("user") or {}).get("login") or "",
+                    body=c.get("body") or "",
+                    created_at=c.get("created_at") or "",
+                    html_url=c.get("html_url") or "",
+                    path=c.get("path"),
+                )
+            )
+        return sorted(items, key=lambda c: c.created_at)
 
     def get_pull_request_state(self, repo: str, pr_number: int) -> str | None:
         detail = self.get_pull_request(repo, pr_number)

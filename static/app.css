@@ -1558,3 +1558,76 @@ a.pager__step:hover { background: var(--surface); border-color: var(--moss); }
   .site-header__who { min-width: 0; overflow-wrap: anywhere; }
   .queue-filter__mine { margin-left: 0; }
 }
+
+/* ---------- "On GitHub, not in the portal" (dashboard, curators) ---------- */
+.untracked {
+  margin: 0 0 1.5rem;
+  padding: 0.8rem 1rem;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--amber);
+  border-radius: var(--radius-m);
+  background: var(--surface);
+}
+.untracked__fold > summary {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+  list-style-position: outside;
+}
+.untracked__title { font-size: 1rem; margin: 0; }
+.untracked__lede, .untracked__empty { margin: 0.5rem 0 0; font-size: 0.88rem; color: var(--ink-muted); }
+.untracked__error { margin: 0.5rem 0 0; font-size: 0.88rem; color: var(--brick); }
+.untracked__list { list-style: none; margin: 0.7rem 0 0; padding: 0; }
+.untracked__item {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.8rem;
+  padding: 0.6rem 0;
+  border-top: 1px solid var(--line);
+}
+.untracked__main { display: flex; flex-direction: column; gap: 0.15rem; min-width: 0; }
+.untracked__pr { font-family: var(--font-mono); font-size: 0.82rem; }
+.untracked__name { font-weight: 600; overflow-wrap: anywhere; }
+.untracked__meta { font-size: 0.82rem; color: var(--ink-muted); }
+.untracked__reason { font-size: 0.82rem; color: var(--amber); }
+.untracked__item .btn { flex: none; }
+
+/* ---------- pull request conversation (review page) ---------- */
+.conversation { margin-top: 2rem; }
+.conversation__title { font-size: 1.05rem; }
+.conversation__status { font-size: 0.88rem; color: var(--ink-muted); }
+.conversation__list { list-style: none; margin: 0.8rem 0 0; padding: 0; }
+.conversation__item {
+  padding: 0.6rem 0.8rem;
+  margin-bottom: 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-m);
+  background: var(--surface);
+}
+.conversation__item--bot, .conversation__item--portal { background: var(--surface-2); }
+.conversation__item--changes { border-left: 3px solid var(--amber); }
+.conversation__item summary { cursor: pointer; }
+.conversation__item summary .conversation__head { display: inline; }
+.conversation__head { margin: 0; font-size: 0.85rem; color: var(--ink-muted); }
+.conversation__head strong { color: var(--ink); }
+.conversation__tag {
+  margin-left: 0.35rem;
+  font-size: 0.7rem;
+  padding: 0.05em 0.45em;
+  border-radius: 999px;
+  background: var(--moss-tint);
+  color: var(--moss-strong);
+}
+.conversation__body {
+  margin-top: 0.4rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 0.9rem;
+}
+.comment-box { margin-top: 1rem; display: flex; flex-direction: column; gap: 0.4rem; }
+.comment-box__label { font-weight: 600; font-size: 0.9rem; }
+.comment-box__text { width: 100%; font: inherit; padding: 0.5rem; border: 1px solid var(--line-strong); border-radius: var(--radius-s); background: var(--surface); color: var(--ink); }
+.comment-box__row { display: flex; align-items: center; justify-content: space-between; gap: 0.8rem; flex-wrap: wrap; }
+.comment-box__hint { margin: 0; font-size: 0.82rem; color: var(--ink-muted); }

@@ -136,6 +136,8 @@ def test_a_failed_pipeline_run_is_reported_in_the_queue(pipeline_client):
     _submit(pipeline_client)
     fake = pipeline_client.app.state._fake
     fake.record_workflow_run(REPO, "1_on_pull_request.yml", conclusion="failure")
+    # The background loop records the run; the queue renders what it recorded.
+    pipeline_client.app.state.worker.tick(github=fake)
 
     _login(pipeline_client, "marvinm2")
     page = pipeline_client.get("/dashboard").text
@@ -178,6 +180,7 @@ def test_the_review_page_names_the_target_repo_in_the_notice(pipeline_client):
     body = _submit(pipeline_client)
     fake = pipeline_client.app.state._fake
     fake.record_workflow_run(REPO, "1_on_pull_request.yml", conclusion="failure")
+    pipeline_client.app.state.worker.tick(github=fake)
     _login(pipeline_client, "marvinm2")
 
     page = pipeline_client.get(f"/dashboard/{body['pr_number']}").text
@@ -285,6 +288,7 @@ def test_the_whole_lifecycle_from_submission_to_published(tmp_path):
 
         # The repository publishes, announces the id it assigned, and closes without merging.
         fake.simulate_3a(REPO, pr, wpid=5678)
+        app.state.worker.tick(github=fake)
         page = client.get("/dashboard?status=published")
         assert page.status_code == 200
 
@@ -305,6 +309,7 @@ def test_a_publication_that_never_happened_is_reachable_and_recoverable(tmp_path
         client.post(f"/api/reviews/{pr}/approve")
 
         fake.simulate_3a(REPO, pr, wpid=None)  # closed, nothing announced
+        app.state.worker.tick(github=fake)
         queue = client.get("/dashboard?status=publish_failed")
         assert f"/dashboard/{pr}" in queue.text  # it has a tab and the card is on it
 
