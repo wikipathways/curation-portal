@@ -142,6 +142,11 @@ class Settings(BaseSettings):
     # webhook for an untracked pull request also triggers a re-list.
     untracked_scan_interval_seconds: int = 600
 
+    # The database's own per-pathway quality report (app.pipeline.collection), shown beside the
+    # portal's rules on an update. Public; read anonymously. Empty turns it off.
+    collection_repo: str = "wikipathways/wikipathways-collection"
+    collection_branch: str = "main"
+
     # Level for the `wpsubmit.*` loggers. INFO because the things logged at it are the ones that
     # explain a quiet decision after the fact — how long an expired lock was held, why a
     # submission fell back to the bot — and none of them fire per request.

@@ -60,7 +60,9 @@ class BackgroundWorker:
         content_repo: str,
         untracked_interval_seconds: float = 600,
         clock: Callable[[], float] = time.monotonic,
+        collection=None,
     ) -> None:
+        self._collection = collection
         self._make_curation = make_curation
         self._bot_provider = bot_provider
         self._session_factory = session_factory
@@ -123,6 +125,11 @@ class BackgroundWorker:
             result.refreshed = self._refresh_pipeline_checks(curation)
         except Exception:  # noqa: BLE001
             logger.exception("pipeline-check refresh failed")
+        if self._collection is not None:
+            try:
+                self._refresh_collection(curation)
+            except Exception:  # noqa: BLE001
+                logger.exception("collection report refresh failed")
         if bot is not None and self._scan_due():
             self._scan(bot)
             result.scanned = True
@@ -146,6 +153,24 @@ class BackgroundWorker:
             ) is not None:
                 n += 1
         return n
+
+    def _refresh_collection(self, curation) -> None:
+        """The database's report for every pathway an open update targets (cached a day)."""
+        live = set(curation.live_pr_numbers())
+        if not live:
+            return
+        with self._session_factory() as s:
+            wpids = {
+                wpid
+                for pr, wpid in s.execute(
+                    select(Review.pr_number, Review.wpid).where(
+                        Review.kind == "update", Review.wpid.is_not(None)
+                    )
+                ).all()
+                if pr in live
+            }
+        for wpid in sorted(wpids):
+            self._collection.refresh(wpid)
 
     def _scan_due(self) -> bool:
         if self._scan_requested or self._last_scan is None:

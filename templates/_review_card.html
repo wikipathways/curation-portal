@@ -273,6 +273,30 @@
 
   {{ quality_panel(r, expanded) }}
 
+  {# The database's own test suite on the published version of the pathway this update edits.
+     A second opinion with a wider remit than the portal's rules: outdated data sources,
+     interactions drawn to labels, identifier formats. #}
+  {% if expanded and r.db_checks %}
+  <details class="db-checks"{% if r.db_checks.problems %} open{% endif %}>
+    <summary>
+      <strong>Database checks on the published {{ r.wpid_str }}</strong>
+      {% if r.db_checks.problems %}&middot; {{ r.db_checks.problems | length }} problem{{ '' if r.db_checks.problems | length == 1 else 's' }}{% elif r.db_checks.tests %}&middot; all {{ r.db_checks.tests }} tests pass{% endif %}
+    </summary>
+    <p class="db-checks__lede">
+      From WikiPathways' own quality report{% if r.db_checks.tests %} ({{ r.db_checks.tests }} tests){% endif %}.
+      It describes the version on the site, before this edit, so a problem listed here was there already unless this edit fixes it.
+      <a href="{{ r.db_checks.url }}" target="_blank" rel="noopener">Full report</a>.
+    </p>
+    {% if r.db_checks.problems %}
+    <ul class="db-checks__list">
+      {% for p in r.db_checks.problems %}
+      <li><span class="db-checks__test">{{ p.group }} &rsaquo; {{ p.test }}</span> {{ p.text }}</li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+  </details>
+  {% endif %}
+
   {# What changed, before the pictures (issue #24). Two renders side by side made the change
      visible and left spotting it to the eye, across two images that can be a hundred nodes each.
      Only an update has a "before" to compare against. #}

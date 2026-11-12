@@ -62,6 +62,7 @@ from app.github import (
 from app.locks import LockUnavailable, PathwayLockRegistry
 from app.models import Base, ReviewStatus
 from app.pipeline import DraftsReader
+from app.pipeline.collection import CollectionReports
 from app.preview import PreviewService
 from app.preview.metadata import parse_curation_metadata
 from app.ratelimit import RateLimited, SubmissionRateLimiter
@@ -592,6 +593,15 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             else None
         )
         app.state.conversations = ConversationCache()
+        app.state.collection = (
+            CollectionReports(
+                repo=settings.collection_repo,
+                branch=settings.collection_branch,
+                cache_dir=Path(settings.preview_cache_dir) / "collection",
+            )
+            if settings.collection_repo
+            else None
+        )
         app.state.worker = BackgroundWorker(
             make_curation=lambda gh: _make_curation(app.state, gh),
             bot_provider=lambda: app.state.bot_client_provider(),
@@ -599,6 +609,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             preview=app.state.preview,
             content_repo=settings.content_repo,
             untracked_interval_seconds=settings.untracked_scan_interval_seconds,
+            collection=app.state.collection,
         )
         # Only with an App identity: without one there is nothing to reconcile against, and the
         # tests (which wire no App) drive ``worker.tick`` themselves.
@@ -869,6 +880,13 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             "organism": getattr(r, "organism", None) or (metadata or {}).get("organism"),
             "created_at": r.created_at,
             "head_sha": r.head_sha,
+            # The database's own report on the pathway an update edits (wikipathways-collection),
+            # read from the background loop's cache. It describes the published version.
+            "db_checks": (
+                request.app.state.collection.cached(r.wpid)
+                if r.kind == "update" and r.wpid and request.app.state.collection is not None
+                else None
+            ),
             # Set by the background check; see CurationService._check_guards.
             "guards": (r.pipeline_run or {}).get("guards") or None,
             "wpid_str": r.wpid_str,

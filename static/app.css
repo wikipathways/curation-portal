@@ -1644,3 +1644,11 @@ a.pager__step:hover { background: var(--surface); border-color: var(--moss); }
 .history__item { display: flex; gap: 0.8rem; padding: 0.35rem 0; border-top: 1px solid var(--line); }
 .history__item time { flex: none; font-family: var(--font-mono); font-size: 0.8rem; color: var(--ink-muted); padding-top: 0.1rem; }
 .history__note { color: var(--ink-muted); overflow-wrap: anywhere; }
+
+/* ---------- the database's own report on the pathway being edited ---------- */
+.db-checks { margin: 0 0 1.1rem; padding: 0.7rem 0.9rem; border: 1px solid var(--line); border-radius: var(--radius-m); background: var(--surface-2); font-size: 0.9rem; }
+.db-checks summary { cursor: pointer; }
+.db-checks__lede { margin: 0.5rem 0 0; color: var(--ink-muted); font-size: 0.85rem; }
+.db-checks__list { margin: 0.5rem 0 0; padding-left: 1.1rem; }
+.db-checks__list li { margin: 0.2rem 0; overflow-wrap: anywhere; }
+.db-checks__test { font-family: var(--font-mono); font-size: 0.78rem; color: var(--ink-muted); }
