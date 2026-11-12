@@ -162,8 +162,17 @@ def _before_flush(session: Session, _ctx, _instances) -> None:
 
 
 def install(factory: sessionmaker) -> None:
-    if not event.contains(factory, "before_flush", _before_flush):
-        event.listen(factory, "before_flush", _before_flush)
+    """Attach the listener to ``factory`` once.
+
+    Marked on the factory itself rather than asked of ``event.contains``: SQLAlchemy's listener
+    registry is keyed by ``id()``, so a new factory that reuses the address of a collected one is
+    reported as already listened to, and then records nothing. That happened to about one fresh
+    factory in thirty in the test suite (a flaky history test, 2026-11-12).
+    """
+    if getattr(factory, "_review_audit_installed", False):
+        return
+    event.listen(factory, "before_flush", _before_flush)
+    factory._review_audit_installed = True
 
 
 def history(factory: sessionmaker, pr_number: int, *, limit: int = 200) -> list[ReviewEvent]:

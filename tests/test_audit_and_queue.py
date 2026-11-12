@@ -135,3 +135,28 @@ def test_assigned_to_me_lists_only_my_live_reviews(tmp_path):
         _login(c, "bob")  # not a curator: no tab, and the filter does nothing
         page = c.get("/dashboard?assigned=1").text
         assert "Assigned to me" not in page
+
+
+def test_every_fresh_session_factory_records_events(tmp_path):
+    """The listener was skipped for a factory reusing a collected one's id (flaky, 2026-11-12)."""
+    import gc
+
+    from sqlalchemy import func, select
+
+    from app.db import make_engine, make_session_factory
+    from app.models import Base, ReviewEvent
+
+    silent = 0
+    for i in range(150):
+        engine = make_engine(f"sqlite:///{tmp_path / f'r{i}.db'}")
+        Base.metadata.create_all(engine)
+        factory = make_session_factory(engine)
+        with factory() as s:
+            s.add(Review(pr_number=1, submitter="bob", kind="new"))
+            s.commit()
+            silent += s.execute(select(func.count()).select_from(ReviewEvent)).scalar_one() == 0
+        del factory
+        engine.dispose()
+        if i % 10 == 0:
+            gc.collect()
+    assert silent == 0
