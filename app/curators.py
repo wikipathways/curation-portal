@@ -11,6 +11,11 @@ rest of the app never cares which is in use:
 
 Decision (2026-07-25): the GitHub Team is the intended mechanism; the config list stays as the
 fallback when no team is set (and for tests / local dev without the bot).
+
+Since 2026-11-13 the two **add up** when both are set. Setting a team used to drop the configured
+list silently, so turning the team on (which needs an org owner to create it and the App to be
+granted Members:read) would have left nobody able to approve until both had happened. Now the
+configured logins stay curators throughout, and the list can be emptied once the team is trusted.
 """
 from __future__ import annotations
 
@@ -87,15 +92,32 @@ class GitHubTeamCurators(CuratorRegistry):
         return set(logins)
 
 
+class CombinedCurators(CuratorRegistry):
+    """Anyone in any of ``registries``. A team that cannot be read adds nobody; the rest stand."""
+
+    def __init__(self, *registries: CuratorRegistry) -> None:
+        self._registries = registries
+
+    def members(self) -> set[str]:
+        out: set[str] = set()
+        for registry in self._registries:
+            out |= registry.members()
+        return out
+
+
 def make_curator_registry(
     *,
     team: str | None,
     config_logins: Iterable[str],
     bot_client_provider: Callable[[], GitHubClient | None],
 ) -> CuratorRegistry:
-    """Pick the backend: a GitHub Team if ``team`` ('org/slug') is set, else the config list."""
+    """The configured logins, plus the members of ``team`` ('org/slug') when one is set."""
+    configured = ConfigCurators(config_logins)
     if team:
         org, _, slug = team.partition("/")
         if org and slug:
-            return GitHubTeamCurators(bot_client_provider, org, slug)
-    return ConfigCurators(config_logins)
+            team_registry = GitHubTeamCurators(bot_client_provider, org, slug)
+            if not configured.members():
+                return team_registry
+            return CombinedCurators(configured, team_registry)
+    return configured

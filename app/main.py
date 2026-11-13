@@ -534,7 +534,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         # can substitute a fake for it the way it substitutes the request-scoped clients.
         app.state.bot_client_provider = bot_provider
 
-        # Curator whitelist: a GitHub Team if WPSUBMIT_CURATOR_TEAM is set, else the config list.
+        # Curators: the configured list, plus a GitHub team's members when one is set.
         app.state.curators = make_curator_registry(
             team=settings.curator_team,
             config_logins=settings.curators,

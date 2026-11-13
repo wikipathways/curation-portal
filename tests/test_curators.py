@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import timedelta
 
 from app.curators import (
+    CombinedCurators,
     ConfigCurators,
     GitHubTeamCurators,
     make_curator_registry,
@@ -94,3 +95,21 @@ def test_github_error_is_raised_type():
         pass
     else:  # pragma: no cover
         raise AssertionError("expected GitHubError")
+
+
+def test_a_team_adds_to_the_configured_curators_rather_than_replacing_them():
+    gh = FakeGitHubClient(team_members={"wikipathways/curators": ["bob"]})
+    reg = make_curator_registry(
+        team="wikipathways/curators", config_logins=["alice"], bot_client_provider=lambda: gh
+    )
+    assert isinstance(reg, CombinedCurators)
+    assert reg.members() == {"alice", "bob"}
+    assert reg.is_curator("alice") and reg.is_curator("bob")
+
+
+def test_configured_curators_stand_when_the_team_cannot_be_read():
+    gh = FakeGitHubClient(fail_on={"list_team_members"})
+    reg = make_curator_registry(
+        team="wikipathways/curators", config_logins=["alice"], bot_client_provider=lambda: gh
+    )
+    assert reg.members() == {"alice"}

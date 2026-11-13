@@ -188,11 +188,11 @@ class Settings(BaseSettings):
     submit_rate_limit: int = 10
     submit_rate_window_minutes: int = 60
 
-    # Curator whitelist (~20 people, design §4.5). Only these may approve-that-merges.
-    # Preferred: resolve from a GitHub Team, WPSUBMIT_CURATOR_TEAM='org/team-slug' (issue #9) —
-    # curator management then happens on GitHub, not in a redeploy (needs the App's org
-    # Members:read permission). If unset, falls back to the static WPSUBMIT_CURATORS list
-    # (JSON, e.g. '["alice","bob"]'), which is also used for tests / local dev.
+    # Curator whitelist (~20 people, design §4.5). Only these may approve.
+    # PORTAL_CURATORS is a JSON list ('["alice","bob"]'). PORTAL_CURATOR_TEAM='org/team-slug'
+    # (issue #9) adds that team's members, so curator management can move to GitHub; the two add
+    # up, so setting a team never drops anyone listed. Resolving a team needs the App's org
+    # Members:read permission; a team that cannot be read adds nobody.
     curator_team: str | None = None
     curators: list[str] = []
 
