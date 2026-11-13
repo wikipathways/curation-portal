@@ -1367,3 +1367,11 @@ def test_text_responses_are_compressed(client):
 def test_small_responses_are_not_compressed(client):
     r = client.get("/health", headers={"Accept-Encoding": "gzip"})
     assert "content-encoding" not in r.headers
+
+
+def test_github_clients_share_one_connection_pool_but_not_a_token():
+    a = HttpGitHubClient("token-a")
+    b = HttpGitHubClient("token-b", identity="bot")
+    assert a._client._transport is b._client._transport
+    assert a._client.headers["Authorization"] == "Bearer token-a"
+    assert b._client.headers["Authorization"] == "Bearer token-b"

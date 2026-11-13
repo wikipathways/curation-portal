@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import base64
 import logging
+import threading
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
@@ -1056,6 +1057,27 @@ class FakeGitHubClient(GitHubClient):
         return None
 
 
+_shared_transport: httpx.HTTPTransport | None = None
+_shared_transport_lock = threading.Lock()
+
+
+def _github_transport() -> httpx.HTTPTransport:
+    """One connection pool for every client this process makes to the GitHub API.
+
+    A client is made per request (each carries its caller's token), and each used to open its
+    own pool: a fresh TCP and TLS handshake to api.github.com for every page, and a pool left
+    for the garbage collector. The token travels in each client's headers, never in the
+    transport, so sharing the connections shares nothing between identities.
+    """
+    global _shared_transport
+    with _shared_transport_lock:
+        if _shared_transport is None:
+            _shared_transport = httpx.HTTPTransport(
+                limits=httpx.Limits(max_connections=50, max_keepalive_connections=10)
+            )
+        return _shared_transport
+
+
 @dataclass
 class HttpGitHubClient(GitHubClient):
     """Real client over the GitHub REST API (httpx). Not exercised by the unit suite.
@@ -1075,7 +1097,7 @@ class HttpGitHubClient(GitHubClient):
     def __post_init__(self) -> None:
         self._client = httpx.Client(
             base_url=self.base_url,
-            transport=self.transport,
+            transport=self.transport or _github_transport(),
             headers={
                 "Authorization": f"Bearer {self.token}",
                 "Accept": "application/vnd.github+json",
