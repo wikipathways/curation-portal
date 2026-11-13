@@ -5,6 +5,18 @@ Repaired copies of GitHub Actions workflows belonging to
 staged here so they can be reviewed and then opened as a pull request against that
 repository.
 
+> [!note] **In sync with the live repository as of 2026-11-13.** All four files under
+> `.github/workflows/` are byte-identical to `wikipathways/sandbox-wp-db` at `main` `c96ff6f`
+> (same git blob ids). The last gap was 3A's `PUBLISHED_ASSETS_BASE_URL` step, applied there on
+> 2026-08-21 and copied back here. The live repository also runs `2_after_pr_processed.yml`,
+> `3b_rejected_pull_request.yml` and two scheduled workflows that were never staged here. Check
+> again before relying on this: `git hash-object <file>` against
+> `gh api repos/wikipathways/sandbox-wp-db/contents/.github/workflows --jq '.[]|"\(.name) \(.sha)"'`.
+>
+> Most of the notes below were written while the target was `marvinm2/sandbox-wp-db`, before the
+> repository moved to the `wikipathways` organisation on 2026-08-20. They are kept as the record
+> of why each change was made.
+
 > [!warning] **Staged is not installed, and the gap has already cost a publication.**
 > On 2026-08-13, PR #37 published correctly and was then labelled `publish failed` because
 > `gh pr close` cannot close a pull request somebody merged by hand. That failure was diagnosed
@@ -95,7 +107,7 @@ target layout (`.github/workflows/...`) so the files can be copied across verbat
 > appears, and the dashboard's pipeline panel goes quietly empty because a missing draft is the
 > ordinary case. Apply the *changes* to the fork's copies; do not replace the files.
 
-The three files:
+The four files:
 
 - `.github/workflows/1_on_pull_request.yml` — the PR processor. Two one-line fixes on the
   new-contributor path, two on the data-node test, a fix for the data-node counts, and one
@@ -106,6 +118,8 @@ The three files:
   `sandbox-wp.gh.io` and `sandbox-wp-assets`, announces the WPID on the PR, and closes it.
 - `.github/workflows/pr_label_dispatcher.yml` — turns the `accepted` / `rejected` /
   `resubmitted` labels into runs of 3A / 3B / workflow 1.
+- `.github/workflows/on_gpml_change.yml` — regenerates a pathway's derived files when its GPML
+  changes on `main` by a direct push.
 
 `labels.md` lists the two labels that have to be created before 3A can use them.
 

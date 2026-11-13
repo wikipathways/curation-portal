@@ -211,6 +211,7 @@ jobs:
         env:
           OLD_PREFIX: ${{ steps.get_wpid.outputs.old_prefix }}
           WPID: ${{ steps.get_wpid.outputs.wpid }}
+          PUBLISHED_ASSETS_BASE_URL: ${{ vars.PUBLISHED_ASSETS_BASE_URL }}
         run: |
           set -euo pipefail
 
@@ -235,6 +236,21 @@ jobs:
             # than the draft one.
             sed -i "s/${OLD_PREFIX}/${WPID}/g" "_pathways/${new_file}"
             cp "_pathways/${new_file}" "../sandbox-wp-db/pathways/${WPID}/${new_file}"
+
+            # Where this pathway's generated files are actually served from. A pathway this
+            # pipeline publishes lives in this deployment's own asset store, not on the host
+            # the layout defaults to, so without the key its diagram and all six download
+            # links 404 -- which is what every pathway published here has done so far.
+            # Applied after the copy above, so the content repository keeps a neutral page
+            # and only the site gets a value true of this deployment alone. Empty variable,
+            # no key, previous behaviour.
+            if [ -n "${PUBLISHED_ASSETS_BASE_URL:-}" ] &&
+               ! grep -q '^assets_base_url:' "_pathways/${new_file}"; then
+              # Line 1 is the opening front-matter fence; Jekyll does not care about key
+              # order, and appending after it leaves every nested value untouched.
+              sed -i "1a assets_base_url: ${PUBLISHED_ASSETS_BASE_URL}" "_pathways/${new_file}"
+              echo "assets_base_url=${PUBLISHED_ASSETS_BASE_URL} on _pathways/${new_file}"
+            fi
             MD_COUNT=$((MD_COUNT + 1))
           done < <(find _drafts -type f -name "${OLD_PREFIX}.md")
 
