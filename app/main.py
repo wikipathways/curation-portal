@@ -31,6 +31,7 @@ from fastapi import (
     FastAPI,
     Form,
     HTTPException,
+    Query,
     Request,
     UploadFile,
 )
@@ -1758,8 +1759,27 @@ def build_app(settings: Settings | None = None) -> FastAPI:
     # -- Curation dashboard (MVP-4) --------------------------------------------------------
 
     @app.get("/api/reviews", response_model=list[ReviewSummary])
-    def list_reviews(request: Request, status: ReviewStatus = ReviewStatus.OPEN):
-        return [_summary(r) for r in _curation(request).list_queue(status=status)]
+    def list_reviews(
+        request: Request,
+        response: Response,
+        status: ReviewStatus = ReviewStatus.OPEN,
+        limit: int = Query(100, ge=1, le=500),
+        offset: int = Query(0, ge=0),
+    ):
+        """One page of a status's reviews, oldest first; ``X-Total-Count`` says how many exist.
+
+        Paged because a closed or published list only grows, and every row costs a summary. The
+        default page is larger than any live queue so far, so an existing caller that reads one
+        page still sees everything open.
+        """
+        curation = _curation(request)
+        response.headers["X-Total-Count"] = str(
+            curation.status_counts().get(status.value, 0)
+        )
+        return [
+            _summary(r)
+            for r in curation.list_queue(status=status, limit=limit, offset=offset)
+        ]
 
     @app.get("/api/reviews/{pr_number}", response_model=ReviewDetail)
     def get_review(request: Request, pr_number: int):

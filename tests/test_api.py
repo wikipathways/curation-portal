@@ -1375,3 +1375,21 @@ def test_github_clients_share_one_connection_pool_but_not_a_token():
     assert a._client._transport is b._client._transport
     assert a._client.headers["Authorization"] == "Bearer token-a"
     assert b._client.headers["Authorization"] == "Bearer token-b"
+
+
+def test_review_list_pages_and_reports_the_total(tmp_path):
+    from app.models import Review
+
+    app, _ = _authed_app(tmp_path)
+    with TestClient(app) as c:
+        with app.state.session_factory() as s:
+            for n in range(1, 6):
+                s.add(Review(pr_number=n, submitter="alice", kind="new"))
+            s.commit()
+        first = c.get("/api/reviews?limit=2")
+        assert first.headers["x-total-count"] == "5"
+        assert [r["pr_number"] for r in first.json()] == [1, 2]
+        rest = c.get("/api/reviews?limit=2&offset=4").json()
+        assert [r["pr_number"] for r in rest] == [5]
+        assert c.get("/api/reviews?limit=0").status_code == 422
+        assert c.get("/api/reviews?limit=501").status_code == 422

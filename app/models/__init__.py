@@ -105,6 +105,7 @@ class Review(Base):
     status: Mapped[ReviewStatus] = mapped_column(
         Enum(ReviewStatus, native_enum=False, length=24),
         default=ReviewStatus.OPEN,
+        index=True,
     )
     #: The PR's head branch. In pipeline mode the branch name carries a timestamp, so it can no
     #: longer be derived from the WPID — a revise has to look it up here.
