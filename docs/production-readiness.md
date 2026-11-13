@@ -49,7 +49,9 @@ repository's own workflows are recommendations for its maintainers, not portal w
    account) must be installed on `wikipathways-database`, which needs an org owner, and should be
    transferred to the org. Curators are a three-name environment list today, while production
    merges come mostly from `egonw`, `DeniseSl22` and `khanspers`. A `wikipathways` team for
-   `CURATOR_TEAM` needs an org owner too, and the App needs Members: read to resolve it.
+   `CURATOR_TEAM` needs an org owner too, and the App needs Members: read to resolve it. Since
+   2026-11-13 the team adds to the `CURATORS` list instead of replacing it, so it can be set
+   before it exists and the list emptied once it resolves.
 5. **Production workflow 1: disable it, or fix it.** The portal does not need it in direct mode.
    It also carries **security weaknesses**: it runs on `pull_request_target` with a write token
    against an unprotected `main`, and it passes contributor-controlled pull-request content into
