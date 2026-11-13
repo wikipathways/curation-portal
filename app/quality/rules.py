@@ -9,6 +9,7 @@ The rules come from three places, and saying which is which is the point of the 
    ``wikipathways-database``, and the live deployment targets a repository that runs its own
    numbered workflows and has no ``pr-preview.yml``. So the richest ruleset in the tree has never
    run on a real submission. About half of it needs only the uploaded file, and that half is here.
+   (``mvp1/`` itself was removed on 2026-11-13; it is in the history up to commit ``e96386d``.)
 3. **The target repository's own ``testing`` job** (``docs/sandbox-pipeline.md`` §1) — title
    length, description length, and whether any data nodes changed. Its verdicts are written into
    the pull request *description*, which workflow 1 overwrites on every run and which this app

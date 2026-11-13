@@ -2,8 +2,9 @@
 
 Before this there were three, and they disagreed. ``app.submit.gpml.validate_gpml`` had two
 outcomes (raise, or return); ``app.review.checklist`` had four states; ``mvp1/validate_pathway.py``
-had three severities and a worst-wins rollup. The target repository's own ``testing`` job has a
-fourth vocabulary again ("PASS" / "REVIEW REQUIRED"). A submitter could pass the first, be warned
+had three severities and a worst-wins rollup (removed 2026-11-13; see commit ``e96386d``). The
+target repository's own ``testing`` job has a fourth vocabulary again ("PASS" / "REVIEW
+REQUIRED"). A submitter could pass the first, be warned
 by the second, and be sent back by the third, with nothing tying the three answers together.
 
 The severities here are ``mvp1``'s three, plus the two it does not need:

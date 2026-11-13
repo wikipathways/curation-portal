@@ -9,6 +9,7 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 tests/
-mvp1/pathways/
-fork-staging/
+sandbox-workflows/
+demo/
+docs/
 *.egg-info/
