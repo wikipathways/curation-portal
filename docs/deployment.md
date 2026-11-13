@@ -6,10 +6,17 @@ authoritative cluster docs live at `/mnt/gluster/documentation/` on `tgx1` — r
 and `operations/infrastructure-guide.md` before deploying; this file is the service-specific
 recipe.
 
-> Status (2026-08-21): deployed and live. The canonical hostname is
-> **`curation.wikipathways.org`**; `upload.wikipathways.org` was the original name and is still
-> routed to the same service, because every pull request comment the app has posted links to it
-> absolutely. One Let's Encrypt certificate covers both.
+> Status (2026-11-13): deployed and live, pointed at `wikipathways/sandbox-wp-db` in pipeline
+> mode. The canonical hostname is **`curation.wikipathways.org`**; `upload.wikipathways.org` was
+> the original name and is still routed to the same service, because every pull request comment
+> the app has posted links to it absolutely. One Let's Encrypt certificate covers both. The
+> cluster's `services/wikipathways-submit.md` records what is running now.
+
+**Variable names.** Every setting is read as `PORTAL_<NAME>` first and `WPSUBMIT_<NAME>` second,
+and every Docker secret as `portal_<name>` or `wpsubmit_<name>` (`app/config.py`,
+`docker-entrypoint.sh`). The live service still uses the `WPSUBMIT_` / `wpsubmit_` names
+throughout, so the commands below do too. Renaming is optional and can happen one variable at a
+time.
 
 ## Hostname and DNS
 
@@ -56,8 +63,17 @@ ghcr.io/marvinm2/wikipathways-submit:latest
 ghcr.io/marvinm2/wikipathways-submit:<sha>
 ```
 
-Make the GHCR package **public** once (so the cluster pulls without auth), or deploy with
-`--with-registry-auth`. `.github/workflows/ci.yml` runs ruff + pytest on every push/PR.
+The package is public, so the cluster pulls without credentials. Pushing needs the
+`GHCR_USER` / `GHCR_TOKEN` secrets on the repository (a classic PAT, since the workflow's own
+token cannot write a package owned by a user); without them the image is built but not pushed.
+`.github/workflows/ci.yml` runs ruff and pytest on every push and pull request.
+
+CI passes the commit as the `REVISION` build argument, so the image carries it as its
+`org.opencontainers.image.revision` label and `GET /health` reports it:
+
+```bash
+curl -s https://curation.wikipathways.org/health   # {"status":"ok","revision":"<sha>"}
+```
 
 ## Datastore — deployed
 
@@ -115,9 +131,11 @@ docker secret create wpsubmit_app_key             ./wikipathways-submit-bot.priv
 
 The App private key stays a **path** (`WPSUBMIT_GITHUB_APP_PRIVATE_KEY_PATH`), never an env value.
 
-The entrypoint hydrates `WPSUBMIT_SESSION_SECRET`, `WPSUBMIT_GITHUB_OAUTH_CLIENT_SECRET`,
-`WPSUBMIT_GITHUB_WEBHOOK_SECRET`, `WPSUBMIT_TOKEN_ENCRYPTION_KEY`, and `WPSUBMIT_DATABASE_URL`
-from `/run/secrets/*`. The App private key stays a **path** (`WPSUBMIT_GITHUB_APP_PRIVATE_KEY_PATH`).
+The entrypoint fills the session secret, the OAuth client secret, the webhook secret, the token
+encryption key and the database URL from `/run/secrets/`, under either name
+(`portal_session_secret` → `PORTAL_SESSION_SECRET`, `wpsubmit_session_secret` →
+`WPSUBMIT_SESSION_SECRET`, and so on), unless the variable is already set. It runs
+`alembic upgrade head` when the database URL, under either name, is PostgreSQL.
 
 ## Deploy — stage 1, no router
 
@@ -143,7 +161,7 @@ docker service create \
   --env WPSUBMIT_DRAFTS_REPO=wikipathways/sandbox-wp.gh.io \
   --env WPSUBMIT_DRAFTS_SITE_BASE_URL=https://sandbox.wikipathways.org \
   --env WPSUBMIT_PUBLISH_MODE=pipeline \
-  --env WPSUBMIT_SUBMIT_IDENTITY=bot \
+  --env WPSUBMIT_SUBMIT_IDENTITY=fork \
   --env WPSUBMIT_REQUIRE_PREVIEW_CHECK=false \
   --env WPSUBMIT_APP_BASE_URL=https://curation.wikipathways.org \
   --env WPSUBMIT_OAUTH_REDIRECT_URI=https://curation.wikipathways.org/auth/callback \
@@ -153,10 +171,15 @@ docker service create \
   --env WPSUBMIT_GITHUB_APP_ID=<app-id> \
   --env WPSUBMIT_GITHUB_APP_INSTALLATION_ID=<installation-id> \
   --env WPSUBMIT_GITHUB_APP_PRIVATE_KEY_PATH=/run/secrets/wpsubmit_app_key \
-  --env WPSUBMIT_CURATOR_TEAM=wikipathways/curators \
+  --env WPSUBMIT_CURATORS='["<login>","<login>"]' \
   --with-registry-auth \
   ghcr.io/marvinm2/wikipathways-submit:latest
 ```
+
+Curators are the `WPSUBMIT_CURATORS` list. A GitHub team (`WPSUBMIT_CURATOR_TEAM=org/slug`) adds
+its members to that list rather than replacing it; no `wikipathways/curators` team exists yet, and
+reading one needs the App's organisation Members:read permission
+(`docs/github-app-setup.md`).
 
 `WPSUBMIT_REQUIRE_PREVIEW_CHECK=false` is not optional here. It defaults to true and gates on
 `pr-preview.yml`, which does not exist on `sandbox-wp-db` and never will — left on, every
@@ -290,7 +313,7 @@ Everything in the app is already built for this: `docker-entrypoint.sh` loads
 `/run/secrets/wpsubmit_webhook_secret` into `WPSUBMIT_GITHUB_WEBHOOK_SECRET`, and
 `POST /webhooks/github` verifies HMAC-SHA256 over the raw body. **The only missing piece is the
 secret itself.** Until it exists the endpoint answers **503** and nothing is lost — but nothing
-is heard either, so a pull request closed outside the app sits in the queue until its TTL.
+is heard either, and every change made on GitHub waits for the background loop's next pass.
 
 Confirm the current state before and after:
 
@@ -303,6 +326,8 @@ curl -s -o /dev/null -w '%{http_code}\n' -X POST https://upload.wikipathways.org
 200 there would mean the signature check is not running.
 
 ### 1. Generate the secret on the node
+
+Done on the live service in August 2026; kept for a rebuild.
 
 This one differs from the other four: GitHub needs the same value, so unlike the session key or
 the Fernet key it cannot be write-only. Generate it once on tgx1, keep it on screen long enough
@@ -349,11 +374,12 @@ owns it. GitHub → **Settings → Developer settings → GitHub Apps → wikipa
 | Webhook URL | `https://curation.wikipathways.org/webhooks/github` |
 | Webhook secret | the string from step 1 |
 
-Then **Permissions & events → Subscribe to events → Pull requests** ✔.
-
-One subscription covers everything the handler uses: it acts on the `closed` action (release the
-lock, finalise the reservation, terminalise the review) and on `labeled` / `unlabeled`, which are
-how a curator applying the target repo's own labels on GitHub stays in step with the dashboard.
+Then **Permissions & events → Subscribe to events**: Pull request, Issue comment, Pull request
+review, Pull request review comment, Workflow run and Push (all six subscribed on the live App
+since 2026-11-12). What each one does is in `docs/github-app-setup.md`. Only `pull_request`
+changes a review's state directly; the others mark a review due so the background loop re-checks
+it at once, so a missing subscription costs at most one loop interval
+(`PORTAL_BACKGROUND_INTERVAL_SECONDS`, 60 s), never a lost state change.
 
 ### 4. Verify
 
@@ -383,28 +409,48 @@ queue without anyone touching the dashboard. That is the whole point of the feat
 
 ## Update
 
+**1. Dump the database first.** Migrations run at startup, so the dump is the way back:
+
 ```bash
-docker service update --image ghcr.io/marvinm2/wikipathways-submit:latest wikipathways-submit
+ssh tgx1 'docker service scale -d cronjobs_wikipathways-submit-backup=1'
+ssh tgx1 'docker service logs --raw cronjobs_wikipathways-submit-backup | tail -1'  # "backup ok: <name>"
+ssh tgx1 'docker service scale -d cronjobs_wikipathways-submit-backup=0'
 ```
 
-That form is a **no-op** when the service spec holds a bare tag — Swarm compares the spec string,
-sees no change, and keeps the old task running while printing success. Deploy by digest:
+The nightly job and the restore steps are in the cluster's `services/wikipathways-submit.md`
+("Backups").
+
+**2. Deploy by digest.** `docker service update --image …:latest` is a **no-op** when the spec
+already holds that tag: Swarm compares the spec string, sees no change, keeps the old task and
+prints success. CI tags every image with its commit as well, so resolve the digest of the commit
+you mean to ship:
 
 ```bash
-DIG=$(ssh tgx1 "docker pull -q ghcr.io/marvinm2/wikipathways-submit:latest >/dev/null; \
-  docker image inspect ghcr.io/marvinm2/wikipathways-submit:latest --format '{{index .RepoDigests 0}}'")
+SHA=<commit on main>
+DIG=$(ssh tgx1 "docker pull -q ghcr.io/marvinm2/wikipathways-submit:$SHA >/dev/null; \
+  docker image inspect ghcr.io/marvinm2/wikipathways-submit:$SHA --format '{{index .RepoDigests 0}}'")
 ssh tgx1 docker service update --image "$DIG" wikipathways-submit
 ```
 
-Confirm by something version-specific the app serves — the `?v=` on `app.css`/`app.js`, or a new
-route in `/openapi.json` — not by the update command's output.
+Record the previous digest first (`docker service inspect wikipathways-submit --format
+'{{.Spec.TaskTemplate.ContainerSpec.Image}}'`); rolling back is the same command with it. Every
+migration so far is additive, so roll the image back on its own and never run
+`alembic downgrade`.
+
+**3. Check it.** `GET /health` must report the commit you shipped. Then check something the change
+itself serves: a route in `/openapi.json`, the `?v=` on `app.css` / `app.js`, or the behaviour
+that changed. The update command's output proves nothing.
+
+**4. Update the cluster docs** (`services/wikipathways-submit.md`, the registry row), as the
+cluster's `AGENTS.md` requires after every change.
 
 ## Reminders
 
 - **No node pinning** — the image is on GHCR and state is in Postgres, so the task can schedule on
   either node.
-- The GitHub App must be installed on the content repo with contents RW, pull_requests RW,
-  issues RW, and (for the curator team) org Members:read — see `docs/github-app-setup.md`.
+- The GitHub App must be installed on the content repo with contents, pull requests and issues
+  read and write, Actions read, and (for a curator team) org Members:read, and subscribed to the
+  six events listed in `docs/github-app-setup.md`.
 - Register the OAuth App callback + the App webhook URL against the deployed host.
-- Update the cluster's `services/service-registry.md` and add `services/wikipathways-submit.md`
-  after the first real deploy.
+- Update the cluster's `services/service-registry.md` row and `services/wikipathways-submit.md`
+  after every deploy.

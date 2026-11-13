@@ -1,129 +1,140 @@
 # GitHub App (bot) setup
 
-The app uses **two GitHub identities on purpose** (scaffolding-plan §3):
+The portal acts on GitHub as **two identities, on purpose**:
 
-- **Per-user OAuth** (`docs/oauth-setup.md`) — pushes the branch and opens the PR *as the
-  submitter*, so authorship is real.
-- **GitHub App (bot)** — this doc — performs the privileged, cross-cutting actions the user
-  token must not: **merging** on curator approval (so it can satisfy branch protection and is
-  never tied to one curator's personal token) and posting the **read-only mirror comment** on
-  the PR. It is also the stable identity future webhooks (issue #8) authenticate against, and it
-  can supply the **WPID-floor read** (issue #3) when no `WPSUBMIT_GITHUB_TOKEN` is set.
+- **Per-user OAuth** ([`oauth-setup.md`](oauth-setup.md)) pushes the branch and opens the pull
+  request *as the submitter*, so authorship is real.
+- **The GitHub App** (this doc) does what must not be tied to one person's token: it applies the
+  `accepted` / `rejected` labels (pipeline mode) or merges (direct mode) when a curator approves,
+  posts and edits the portal's comments, reads pull requests, conversations and workflow runs for
+  the background loop, and receives webhooks. It also pushes the branch itself when a submitter's
+  fork cannot be used.
 
-Until the App is configured, `POST /api/reviews/{n}/approve` returns **503** (there is no bot to
-merge as), and mirror comments are simply skipped (they are best-effort).
+Without it, approve and reject return **503**, comments are skipped and the background loop does
+not start. Submitting still works.
 
-> Local-only project: register the App under **your own** GitHub account and install it on your
-> **fork** of `wikipathways-database`. Do not register anything under the `wikipathways` org yet.
+The deployment at curation.wikipathways.org uses `wikipathways-submit-bot-dev` (App ID 4403728,
+owned by the `marvinm2` account), installed on the `wikipathways` organisation as installation
+149425545 with "Only select repositories". Registering a fresh App is only needed for a new
+deployment or a local test target.
 
-## 1. Register the GitHub App
+## 1. Register the App
 
-GitHub → **Settings → Developer settings → GitHub Apps → New GitHub App**
-(<https://github.com/settings/apps>).
+GitHub → **Settings → Developer settings → GitHub Apps → New GitHub App**.
 
 | Field | Value |
 |---|---|
-| GitHub App name | `wikipathways-submit-bot (dev)` |
-| Homepage URL | `http://localhost:8000` |
-| Webhook — Active | ✔ (see **Webhooks** below) |
+| Homepage URL | the portal's public URL |
+| Webhook: Active | yes |
 | Webhook URL | `https://<host>/webhooks/github` |
-| Webhook secret | a random string; set it as `WPSUBMIT_GITHUB_WEBHOOK_SECRET` |
+| Webhook secret | a random string; it becomes `PORTAL_GITHUB_WEBHOOK_SECRET` |
 
-**Repository permissions** (least privilege for what the bot does):
-
-| Permission | Access | Why |
-|---|---|---|
-| Contents | Read and write | read the tree for the WPID floor; the bot merge writes to `main` |
-| Pull requests | Read and write | merge PRs on approval |
-| Issues | Read and write | post/update the read-only mirror comment (PR comments are issue comments) |
-
-**Organization permissions** (only if you resolve curators from a GitHub Team — issue #9):
+**Repository permissions:**
 
 | Permission | Access | Why |
 |---|---|---|
-| Members | Read-only | list the curator team's members (`WPSUBMIT_CURATOR_TEAM`) |
+| Contents | Read and write | read pathway files and the WPID floor; push a branch when a fork cannot be used; merge in direct mode; the `push` event |
+| Pull requests | Read and write | read pull requests and their files, open them as the bot, merge in direct mode; the review events |
+| Issues | Read and write | comments and labels (pull request comments and labels are issue API calls); the `issue_comment` event |
+| Actions | Read-only | workflow runs and their artifacts; needed to subscribe to `workflow_run` |
+| Metadata | Read-only | mandatory |
 
-Create the App, then:
+**Organization permissions**, only when curators come from a GitHub team:
 
-1. **Generate a private key** → downloads a `.pem`. Keep it out of the repo.
-2. Note the **App ID** (numeric, on the App's page).
-3. **Install** the App (left sidebar → *Install App*) on your fork of `wikipathways-database`,
-   then open the installation and copy the **Installation ID** from its URL
-   (`.../installations/<INSTALLATION_ID>`).
+| Permission | Access | Why |
+|---|---|---|
+| Members | Read-only | list the curator team (`PORTAL_CURATOR_TEAM`) |
 
-## 2. Configure the app
+**Subscribe to events:** Pull request, Issue comment, Pull request review, Pull request review
+comment, Workflow run, Push. Each one shows up only once the matching permission above is
+granted.
 
-Env vars (all `WPSUBMIT_` prefixed — see `app/config.py`). **Prefer the key-file path over an
-inline PEM** so the key can be a mounted Docker secret, never an env value in process listings:
+Then:
 
-```bash
-WPSUBMIT_GITHUB_APP_ID=123456
-WPSUBMIT_GITHUB_APP_INSTALLATION_ID=78901234
-WPSUBMIT_GITHUB_APP_PRIVATE_KEY_PATH=/run/secrets/wpsubmit_app_key   # mounted .pem
-# or, for quick local testing only, the PEM contents inline:
-# WPSUBMIT_GITHUB_APP_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
-```
+1. **Generate a private key.** It downloads a `.pem`; keep it out of the repository.
+2. Note the **App ID** from the App's page.
+3. **Install** the App on the content repository only, and copy the **installation ID** from the
+   installation's URL (`.../installations/<id>`).
 
-All three of App ID + installation ID + a key (path or inline) must be present, or the bot stays
-disabled and approve routes 503.
+## 2. Configure the portal
 
-## Webhooks (issue #8)
-
-So a PR closed or merged **outside** the app still frees the pathway lock and finalises the
-WPID, the App sends webhooks to `POST /webhooks/github`:
-
-- **Subscribe to:** *Pull requests* events. On a `pull_request` event with `action: closed`,
-  the app releases the lock, promotes the reservation to MERGED (if `merged: true`) or returns
-  the WPID to the pool (if closed unmerged), and moves the review to a terminal state. Delivery
-  is idempotent (a duplicate, or the webhook for a merge the app itself performed, is a no-op).
-- **Secret:** every request is verified with HMAC-SHA256 over the raw body against
-  `WPSUBMIT_GITHUB_WEBHOOK_SECRET` (`X-Hub-Signature-256`); a bad/absent signature is rejected
-  401, and an unconfigured secret makes the endpoint 503. Store it as a Docker secret.
-- Locks and reservations also auto-expire by TTL (`WPSUBMIT_PATHWAY_LOCK_TTL_DAYS` default 3,
-  `WPSUBMIT_WPID_RESERVATION_TTL_DAYS` default 14) — the webhook just makes the common case
-  prompt instead of waiting for the TTL. Tune the TTLs against real submitter behaviour.
-
-## Curator whitelist (issue #9)
-
-Who may approve-that-merges is resolved from a **GitHub Team** (the chosen mechanism):
+Every variable is read as `PORTAL_*` first and `WPSUBMIT_*` second (the prefix the service was
+first deployed with; see `app/config.py`). Prefer a key-file path over an inline PEM, so the key
+is a mounted Docker secret and never an environment value:
 
 ```bash
-WPSUBMIT_CURATOR_TEAM=wikipathways/curators   # org/team-slug
+PORTAL_GITHUB_APP_ID=123456
+PORTAL_GITHUB_APP_INSTALLATION_ID=78901234
+PORTAL_GITHUB_APP_PRIVATE_KEY_PATH=/run/secrets/portal_app_key
+# local testing only:
+# PORTAL_GITHUB_APP_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
 ```
 
-Membership is fetched via the bot (needs the org **Members: read** permission above) and cached
-for 5 minutes; add or remove a curator by changing team membership on GitHub — no redeploy.
-Resolution is **fail-closed**: if GitHub can't be reached and nothing is cached, nobody is a
-curator (a stale cache is preferred over locking everyone out). If `WPSUBMIT_CURATOR_TEAM` is
-unset, the app falls back to the static `WPSUBMIT_CURATORS` JSON list (used for tests / local dev
-without the bot).
+All three (App ID, installation ID, a key) must be present, or the App stays off.
 
-## 3. On the cluster (secret handling)
+## Webhooks
 
-Per cluster conventions, the private key is a **Docker secret**, never in the repo or an env var:
+`POST /webhooks/github` verifies every delivery with HMAC-SHA256 over the raw body
+(`X-Hub-Signature-256`) against `PORTAL_GITHUB_WEBHOOK_SECRET`: a missing or wrong signature is
+401, and no secret configured is 503. A delivery whose `repository.full_name` is not
+`PORTAL_CONTENT_REPO` is acknowledged and ignored, since one App installation can cover several
+repositories. The handler acknowledges first and does the work in the background.
+
+| Event | What the portal does |
+|---|---|
+| `pull_request` | settles a closed review (published, merged or rejected), follows `accepted`/`rejected` labels applied on GitHub, sends a review back to open when its head moves after approval, and re-lists untracked pull requests |
+| `issue_comment`, `pull_request_review`, `pull_request_review_comment` | refreshes the review's conversation; a curator's "changes requested" review on GitHub becomes the portal's changes-requested state |
+| `workflow_run` | marks the review due, so the repository's verdicts are read without waiting for the loop |
+| `push` | marks open updates of a pathway whose GPML changed on the default branch, so an approval made against the old version is withdrawn |
+
+The background loop (`PORTAL_BACKGROUND_INTERVAL_SECONDS`, default 60) re-checks everything
+anyway, so a missed delivery delays a state change by a minute rather than losing it. Locks and
+WPID reservations also expire on their own after 14 days (`PORTAL_PATHWAY_LOCK_TTL_DAYS`,
+`PORTAL_WPID_RESERVATION_TTL_DAYS`).
+
+## Curators
 
 ```bash
-docker secret create wpsubmit_app_key ./wikipathways-submit-bot.private-key.pem
-# then in the service definition:
-#   --secret wpsubmit_app_key
-#   -e WPSUBMIT_GITHUB_APP_PRIVATE_KEY_PATH=/run/secrets/wpsubmit_app_key
+PORTAL_CURATORS='["alice","bob"]'            # JSON list of GitHub logins
+PORTAL_CURATOR_TEAM=wikipathways/curators    # optional: org/team-slug
 ```
 
-## How the code authenticates (two-legged)
+The two **add up**. A team's members are fetched through the App (organisation **Members:
+read**) and cached for 5 minutes, so a curator is added or removed on GitHub without a redeploy.
+A team that cannot be read (it does not exist, the permission is missing, GitHub is down and
+nothing is cached) adds nobody, and the listed logins remain curators. That makes it safe to set
+the team before an organisation owner has created it, and to empty the list only once the team
+resolves.
+
+## 3. On the cluster
+
+The private key is a Docker secret:
+
+```bash
+docker secret create portal_app_key ./app.private-key.pem
+# service definition:
+#   --secret portal_app_key
+#   --env PORTAL_GITHUB_APP_PRIVATE_KEY_PATH=/run/secrets/portal_app_key
+```
+
+The live service still uses the original names (`wpsubmit_app_key`,
+`WPSUBMIT_GITHUB_APP_PRIVATE_KEY_PATH`), which keep working. See
+[`deployment.md`](deployment.md).
+
+## How the code authenticates
 
 `app/auth/github_app.py`:
 
 ```
-sign RS256 JWT with the App private key   (iss = App ID, exp ≤ 10 min)
+sign an RS256 JWT with the App's private key   (iss = App ID, exp ≤ 10 min)
       │
       ▼
-POST /app/installations/{id}/access_tokens  (Bearer <JWT>)  → installation token (~1h)
-      │  cached until ~60s before expiry
+POST /app/installations/{id}/access_tokens (Bearer <JWT>)  →  installation token (~1 h)
+      │  cached until about 60 s before it expires
       ▼
-HttpGitHubClient(installation_token)  ── merge_pull_request / upsert_issue_comment
+HttpGitHubClient(installation_token, identity="bot")
 ```
 
-`get_bot_client` (strict, used by approve → 503 if unconfigured) and `get_bot_optional` (used by
-the mirror-comment path → skipped if unconfigured) both build the client from
-`app.state.bot_app`. The installation token is minted per request and cached on the `GitHubApp`
-object across its short life.
+`get_bot_client` (strict: approve and reject return 503 without it) and `get_bot_optional`
+(comments are skipped without it) both build the client from `app.state.bot_app`. A 401 on the
+App's own token is reported as a server configuration problem (503), never as "sign in again".
