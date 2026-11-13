@@ -147,6 +147,11 @@ class Settings(BaseSettings):
     collection_repo: str = "wikipathways/wikipathways-collection"
     collection_branch: str = "main"
 
+    # The commit this image was built from, baked in by the Dockerfile (``REVISION`` build arg,
+    # set by CI to the pushed SHA) and reported by ``/health``. A digest alone names no commit,
+    # so this is how a deploy is checked against what was meant to ship. Empty outside an image.
+    revision: str = ""
+
     # Level for the `wpsubmit.*` loggers. INFO because the things logged at it are the ones that
     # explain a quiet decision after the fact — how long an expired lock was held, why a
     # submission fell back to the bot — and none of them fire per request.

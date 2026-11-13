@@ -48,6 +48,9 @@ jobs:
         with:
           context: .
           push: ${{ steps.creds.outputs.present == 'true' }}
+          # Reported by GET /health and stored as the image's revision label.
+          build-args: |
+            REVISION=${{ github.sha }}
           # Pinned to marvinm2 rather than github.repository_owner. This repository moved to
           # the wikipathways org on 2026-08-20, and deriving the namespace from the owner would
           # have silently started publishing to ghcr.io/wikipathways/..., which defaults to

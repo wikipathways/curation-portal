@@ -790,7 +790,12 @@ def build_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/health")
     def health() -> dict[str, str]:
-        return {"status": "ok"}
+        """Liveness, plus the commit the running image was built from (empty in development).
+
+        Deliberately touches neither the database nor GitHub: the container healthcheck polls it
+        every 30 seconds, and a slow dependency must not get a healthy process restarted.
+        """
+        return {"status": "ok", "revision": settings.revision or "unknown"}
 
     # -- Pages -----------------------------------------------------------------------------
 

@@ -4,7 +4,14 @@
 # templates/, static/, and migrations/ dirs resolve relative to /app.
 FROM python:3.12-slim
 
-ENV PYTHONUNBUFFERED=1 \
+# The commit being built; CI passes the pushed SHA. Read back by GET /health and the label, since
+# a digest alone does not say which commit an image holds.
+ARG REVISION=""
+LABEL org.opencontainers.image.revision=$REVISION \
+      org.opencontainers.image.source="https://github.com/wikipathways/curation-portal"
+
+ENV PORTAL_REVISION=$REVISION \
+    PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1
 

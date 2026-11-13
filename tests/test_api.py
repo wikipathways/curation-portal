@@ -78,7 +78,13 @@ def _authed_app(tmp_path, *, curators=(), fake=None, webhook_secret=None):
 
 
 def test_health(client):
-    assert client.get("/health").json() == {"status": "ok"}
+    assert client.get("/health").json() == {"status": "ok", "revision": "unknown"}
+
+
+def test_health_reports_the_build_revision(tmp_path):
+    settings = _settings(database_url=f"sqlite:///{tmp_path / 'r.db'}", revision="d183611")
+    with TestClient(build_app(settings)) as c:
+        assert c.get("/health").json() == {"status": "ok", "revision": "d183611"}
 
 
 def test_validate_good_gpml(client):
