@@ -44,3 +44,31 @@ def test_a_secret_carries_over_too(monkeypatch):
     monkeypatch.setenv("WPSUBMIT_SESSION_SECRET", "from-the-old-name")
 
     assert Settings(_env_file=None).session_secret == "from-the-old-name"
+
+
+def test_a_dotenv_file_with_the_legacy_prefix_is_read(tmp_path, monkeypatch):
+    """A .env written before the rename. Its lines used to be dropped silently."""
+    monkeypatch.delenv("PORTAL_CONTENT_REPO", raising=False)
+    monkeypatch.delenv("WPSUBMIT_CONTENT_REPO", raising=False)
+    env = tmp_path / ".env"
+    env.write_text("WPSUBMIT_CONTENT_REPO=legacy/from-dotenv\n")
+
+    assert Settings(_env_file=env).content_repo == "legacy/from-dotenv"
+
+
+def test_the_new_prefix_wins_inside_a_dotenv_file(tmp_path, monkeypatch):
+    monkeypatch.delenv("PORTAL_CONTENT_REPO", raising=False)
+    monkeypatch.delenv("WPSUBMIT_CONTENT_REPO", raising=False)
+    env = tmp_path / ".env"
+    env.write_text("WPSUBMIT_CONTENT_REPO=legacy/repo\nPORTAL_CONTENT_REPO=new/repo\n")
+
+    assert Settings(_env_file=env).content_repo == "new/repo"
+
+
+def test_no_env_file_reads_neither_prefix_from_one(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".env").write_text("WPSUBMIT_CONTENT_REPO=should/not-read\n")
+    monkeypatch.delenv("PORTAL_CONTENT_REPO", raising=False)
+    monkeypatch.delenv("WPSUBMIT_CONTENT_REPO", raising=False)
+
+    assert Settings(_env_file=None).content_repo != "should/not-read"

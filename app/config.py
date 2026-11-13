@@ -4,7 +4,12 @@ from __future__ import annotations
 import logging
 
 from pydantic import model_validator
-from pydantic_settings import BaseSettings, EnvSettingsSource, SettingsConfigDict
+from pydantic_settings import (
+    BaseSettings,
+    DotEnvSettingsSource,
+    EnvSettingsSource,
+    SettingsConfigDict,
+)
 
 #: The prefix this project was born with, kept readable indefinitely. The renames to
 #: ``pathway-portal`` (2026-08-05) and ``curation-portal`` (2026-08-21) would otherwise each have
@@ -42,6 +47,15 @@ class Settings(BaseSettings):
             env_settings,
             dotenv_settings,
             EnvSettingsSource(settings_cls, env_prefix=_LEGACY_ENV_PREFIX),
+            # The same fallback for a .env file. Without it a .env written with the old names
+            # (as every one written before the rename was) was read for PORTAL_* keys only, and
+            # its WPSUBMIT_* lines were dropped without a word. Follows the main .env source's
+            # file, so ``_env_file=None`` turns both off.
+            DotEnvSettingsSource(
+                settings_cls,
+                env_file=dotenv_settings.env_file,
+                env_prefix=_LEGACY_ENV_PREFIX,
+            ),
             file_secret_settings,
         )
 
