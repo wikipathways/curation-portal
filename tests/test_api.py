@@ -1342,3 +1342,28 @@ def test_adoption_is_refused_outside_pipeline_mode(tmp_path):
         adopt_foreign_prs=True,
     )
     assert settings.adopt_foreign_prs is False
+
+
+def test_versioned_static_files_are_cached_for_a_year(client):
+    r = client.get("/static/app.js?v=22")
+    assert r.status_code == 200
+    assert r.headers["cache-control"] == "public, max-age=31536000, immutable"
+
+
+def test_unversioned_static_files_are_revalidated(client):
+    r = client.get("/static/wikipathways-logo.svg")
+    assert r.status_code == 200
+    assert r.headers["cache-control"] == "no-cache"
+
+
+def test_text_responses_are_compressed(client):
+    r = client.get("/static/app.js?v=22", headers={"Accept-Encoding": "gzip"})
+    assert r.headers.get("content-encoding") == "gzip"
+    page = client.get("/", headers={"Accept-Encoding": "gzip"})
+    assert page.status_code == 200
+    assert page.headers.get("content-encoding") == "gzip"
+
+
+def test_small_responses_are_not_compressed(client):
+    r = client.get("/health", headers={"Accept-Encoding": "gzip"})
+    assert "content-encoding" not in r.headers

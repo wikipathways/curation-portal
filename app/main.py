@@ -45,6 +45,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
+from starlette.middleware.gzip import GZipMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
 from app.auth import GitHubApp, GithubOAuth, OAuthError, TokenCipher, TokenCipherError
@@ -108,6 +109,24 @@ from app.wpid.github_floor import github_wpid_floor
 
 _ROOT = Path(__file__).resolve().parent.parent
 templates = Jinja2Templates(directory=str(_ROOT / "templates"))
+
+
+class _VersionedStaticFiles(StaticFiles):
+    """Static files, cached for a year when the URL carries a version (``app.js?v=22``).
+
+    The templates bump ``?v=`` whenever a file changes, so a versioned URL never names stale
+    content and the browser need not ask again. An unversioned one (the logo) is revalidated
+    each time against its ETag, which costs a 304 rather than the file.
+    """
+
+    async def get_response(self, path: str, scope):
+        response = await super().get_response(path, scope)
+        if response.status_code in (200, 304):
+            versioned = b"v=" in scope.get("query_string", b"")
+            response.headers["Cache-Control"] = (
+                "public, max-age=31536000, immutable" if versioned else "no-cache"
+            )
+        return response
 
 
 def _age(value) -> str:
@@ -732,9 +751,13 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         https_only=settings.session_https_only,
         same_site="lax",
     )
+    # Pages and the API are text and compress five- to tenfold (the dashboard, the review page and
+    # app.js most of all). Nothing sent is a secret beside attacker-chosen text, which is the
+    # condition compression-oracle attacks need: the session lives in a cookie, not in a page.
+    app.add_middleware(GZipMiddleware, minimum_size=1000)
     app.mount(
         "/static",
-        StaticFiles(directory=str(_ROOT / "static"), check_dir=False),
+        _VersionedStaticFiles(directory=str(_ROOT / "static"), check_dir=False),
         name="static",
     )
 
