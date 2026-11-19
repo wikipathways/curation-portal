@@ -531,6 +531,66 @@ def _check_line_thickness(s: Subject) -> tuple[str, str] | None:
     return (Severity.PASS.value, "Every interaction declares a line thickness.")
 
 
+def _check_group_zorder(s: Subject) -> tuple[str, str] | None:
+    """A group none of whose members declares a ``ZOrder`` kills the repository's ``json-svg`` job.
+
+    Third of the measured pipeline killers, and the first outside the ``metadata`` job. Found on
+    `wikipathways/sandbox-wp-db` PR #87, 2026-11-19: a hand-built GPML with one complex (three
+    grouped data nodes) and no ``ZOrder`` anywhere. ``metadata`` passed; ``json-svg`` died in
+    ``gpml2pvjson`` (``toPvjson.ts``, ``getGroupDimensions``) with ``Got a non-finite value(s):
+    {"zIndex": null}``. With no JSON there is no draft, so ``commit-outputs`` is skipped and
+    workflow 3A later fails at ``get-wpid`` with "No draft file found".
+
+    Reproduced locally with the converter version the repository pins (4.1.13), one variable at
+    a time on that file: no ``ZOrder`` anywhere fails; ``ZOrder`` on the group members alone
+    converts; ``ZOrder`` on every element but one group member converts. So a group is fine as
+    soon as *one* member carries it, and an element outside any group never needs it. That is
+    the condition tested here, so a file the converter accepts is never reported.
+
+    Only plain groups. The same converter refuses a nested group outright ("Encountered nested
+    Group"), with or without ``ZOrder``, so a ``<Group>`` member contributes nothing here and
+    nesting is not this rule's question.
+    """
+    if s.tree is None:
+        return None  # an unreadable file is refused by ``gpml.readable`` before this runs
+    members: dict[str, list[ET.Element]] = {}
+    for el in s.tree.iter():
+        ref = el.get("GroupRef")
+        if ref:
+            members.setdefault(ref, []).append(el)
+    if not members:
+        return (Severity.PASS.value, "No grouped elements.")
+
+    def has_zorder(el: ET.Element) -> bool:
+        graphics = next((c for c in el if _localname(c.tag) == "Graphics"), None)
+        return graphics is not None and any(
+            _localname(name) == "ZOrder" for name in graphics.attrib
+        )
+
+    # Only groups with at least one non-<Group> member: a group holding nothing but other groups
+    # is the nested case above, which this rule leaves alone.
+    offenders = sorted(
+        gid
+        for gid, group in members.items()
+        if any(_localname(m.tag) != "Group" for m in group)
+        and not any(has_zorder(m) for m in group)
+    )
+    if offenders:
+        n = len(offenders)
+        named = []
+        for gid in offenders:
+            labels = [m.get("TextLabel") or m.get("GraphId") or "?" for m in members[gid]]
+            named.append(f"{gid} ({', '.join(labels[:4])}{', …' if len(labels) > 4 else ''})")
+        return (
+            Severity.FAIL.value,
+            f"{n} group{'' if n == 1 else 's'} where no member declares a ZOrder: "
+            f"{'; '.join(named)}. The repository's converter cannot place such a group and its "
+            "json-svg step fails, so no diagram or draft page is made and publishing fails later. "
+            "PathVisio always writes ZOrder; add it to the members' <Graphics>.",
+        )
+    return (Severity.PASS.value, "Every group has a stacking order.")
+
+
 def _check_drawable(s: Subject) -> tuple[str, str] | None:
     """Whether the app's own renderer could draw this file.
 
@@ -809,6 +869,7 @@ RULES: tuple[Rule, ...] = (
     Rule("render.drawable", "Renderable", _check_drawable, needs_text=False),
     Rule("gpml.board", "Pathway canvas", _check_board),
     Rule("gpml.line_thickness", "Interaction line thickness", _check_line_thickness),
+    Rule("gpml.group_zorder", "Group stacking order", _check_group_zorder),
     Rule("gpml.author", "Authors", _check_author),
     Rule("gpml.version", "Version", _check_version, predicts_repo=True),
     Rule("gpml.embedded_wpid", "Pathway identifier", _check_embedded_wpid),

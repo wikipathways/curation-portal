@@ -322,6 +322,62 @@ def test_a_pathway_with_no_interactions_at_all_passes_the_line_check():
     assert _severity(inspect_gpml(GOOD), "gpml.line_thickness") == Severity.PASS.value
 
 
+# ---- PR #87: a group none of whose members has a ZOrder --------------------------------------
+
+_GROUPED = """<?xml version="1.0" encoding="UTF-8"?>
+<Pathway xmlns="http://pathvisio.org/GPML/2013a" Name="Groups" Organism="Homo sapiens">
+  <Graphics BoardWidth="480.0" BoardHeight="440.0" />
+  <DataNode TextLabel="AHR" GraphId="d1" Type="GeneProduct" GroupRef="grp1">
+    <Graphics{z1} CenterX="100" CenterY="100" Width="80" Height="20" />
+  </DataNode>
+  <DataNode TextLabel="AIP" GraphId="d2" Type="GeneProduct" GroupRef="grp1">
+    <Graphics{z2} CenterX="100" CenterY="120" Width="80" Height="20" />
+  </DataNode>
+  <DataNode TextLabel="ARNT" GraphId="d3" Type="GeneProduct">
+    <Graphics CenterX="300" CenterY="100" Width="80" Height="20" />
+  </DataNode>
+  <Group GroupId="grp1" GraphId="g1" Style="Complex" />
+</Pathway>
+"""
+_Z = ' ZOrder="32768"'
+
+
+def test_a_group_with_no_member_zorder_fails():
+    """The json-svg crash on sandbox-wp-db PR #87, 2026-11-19 (`getGroupDimensions`)."""
+    finding = inspect_gpml(_GROUPED.format(z1="", z2="")).by_id("gpml.group_zorder")
+    assert finding.severity == Severity.FAIL.value
+    assert "grp1 (AHR, AIP)" in finding.detail  # names the group and its members
+
+
+def test_one_member_with_a_zorder_is_enough():
+    """Measured against gpml2pvjson 4.1.13: the converter needs one, not all. Reporting a file
+    it accepts would block a submitter for nothing."""
+    assert (
+        _severity(inspect_gpml(_GROUPED.format(z1=_Z, z2="")), "gpml.group_zorder")
+        == Severity.PASS.value
+    )
+
+
+def test_an_ungrouped_element_never_needs_a_zorder():
+    """ARNT carries none in every variant; the original WP5427 had none at all and converted."""
+    assert (
+        _severity(inspect_gpml(_GROUPED.format(z1=_Z, z2=_Z)), "gpml.group_zorder")
+        == Severity.PASS.value
+    )
+    assert _severity(inspect_gpml(GOOD), "gpml.group_zorder") == Severity.PASS.value
+
+
+def test_a_group_holding_only_groups_is_left_to_other_checks():
+    """gpml2pvjson refuses any nested group ("Encountered nested Group"), ZOrder or not, so the
+    ZOrder rule has nothing true to say about one and must not claim the fix is a ZOrder."""
+    text = _GROUPED.format(z1=_Z, z2=_Z).replace(
+        '<Group GroupId="grp1" GraphId="g1" Style="Complex" />',
+        '<Group GroupId="grp1" GraphId="g1" Style="Complex" GroupRef="outer" />\n'
+        '  <Group GroupId="outer" GraphId="g2" Style="Group" />',
+    )
+    assert _severity(inspect_gpml(text), "gpml.group_zorder") == Severity.PASS.value
+
+
 def test_the_demo_fixtures_would_survive_the_repositorys_metadata_job():
     """The three walkthrough files all carried this defect (issue #26), and the walkthrough is
     the thing most likely to be run against a real pipeline by someone learning the portal."""
