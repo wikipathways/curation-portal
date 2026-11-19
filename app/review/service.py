@@ -361,6 +361,14 @@ class ReviewStale(ReviewNotActionable):
     """
 
 
+class DraftNotReady(ReviewNotActionable):
+    """Pipeline mode: the repository has not built the draft page its publish workflow needs.
+
+    A subclass of ``ReviewNotActionable`` so every route that answers that with 409 and its
+    message answers this too.
+    """
+
+
 class PreviewNotReady(RuntimeError):
     """Approval attempted before the PR-preview CI workflow has completed successfully."""
 
@@ -1232,6 +1240,7 @@ class CurationService:
                     f"PR #{pr_number}: required checklist items are not all passed"
                 )
             wpid = review.wpid
+            kind = review.kind
             reviewed_head = review.head_sha
 
         # The commit the curator's page showed. A push the webhook already recorded moves
@@ -1281,6 +1290,7 @@ class CurationService:
                 )
 
         if self.is_pipeline_mode:
+            self._require_draft_page(pr_number, kind=kind, wpid=wpid)
             return self._approve_by_label(pr_number, curator)
 
         # Merge first; only mutate our state if GitHub accepts the merge. The sha guard closes
@@ -1309,6 +1319,37 @@ class CurationService:
     #: Kept so existing callers and tests keep working. In pipeline mode nothing merges, which is
     #: why the method worth calling is now ``approve``.
     approve_and_merge = approve
+
+    def _require_draft_page(self, pr_number: int, *, kind: str, wpid: int | None) -> None:
+        """Refuse an approval the repository's publish workflow is certain to fail.
+
+        Workflow 3A needs the draft page workflow 1 commits to the site repo; without it 3A stops
+        at ``get-wpid`` and the approval only buys a "publish failed" label. On PR #87
+        (2026-11-19) that happened because ``json-svg`` had failed, which the portal does not
+        watch. Asking for the file 3A asks for covers every cause, not just that one.
+
+        Only a definite "missing" refuses. When the site cannot be read the approval goes ahead:
+        3A's own failure is clean (nothing pushed, label removed) and a rate-limited read must
+        not block a curator.
+        """
+        if self._drafts is None:
+            return
+        slug = self._drafts.slug_for(kind=kind, wpid=wpid, pr_number=pr_number)
+        exists = self._drafts.draft_page_exists(slug)
+        if exists is None:
+            logger.warning(
+                "approve PR #%s: could not tell whether draft %s exists; approving anyway",
+                pr_number,
+                slug,
+            )
+            return
+        if not exists:
+            raise DraftNotReady(
+                f"PR #{pr_number} has no draft page yet ({slug}), and the repository's publish "
+                "workflow cannot run without one. Check the pull request's checks: if one failed "
+                "(json-svg, for example), the submitter has to fix the file and upload a "
+                "revision. If they finished only minutes ago, try again shortly."
+            )
 
     def _approve_by_label(self, pr_number: int, curator: str) -> Review:
         """Hand the PR to the target repo's own publish workflow by labelling it.

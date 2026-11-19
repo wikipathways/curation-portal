@@ -50,6 +50,7 @@ def _pipeline_app(tmp_path, *, curators=(), fake=None):
     return app
 
 
+
 @pytest.fixture
 def pipeline_client(tmp_path):
     app = _pipeline_app(tmp_path)
@@ -270,6 +271,72 @@ def _pass_every_required_item(client, pr: int) -> None:
                 f"/api/reviews/{pr}/checklist", data={"key": item["key"], "state": "pass"}
             )
             assert resp.status_code == 200, resp.text
+
+
+def _site_serving(tmp_path, status_for_draft):
+    """A real `DraftsReader` over a mock site; `_drafts/<slug>.md` answers `status_for_draft()`."""
+    from app.pipeline.drafts import DraftsReader
+
+    seen: list[tuple[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((request.method, request.url.path))
+        if request.url.path.endswith(".md") and "/_drafts/" in request.url.path:
+            return httpx.Response(status_for_draft())
+        return httpx.Response(404)
+
+    reader = DraftsReader(
+        repo="wikipathways/sandbox-wp.gh.io",
+        branch="main",
+        site_base_url="https://sandbox.wikipathways.org",
+        cache_dir=str(tmp_path / "drafts-cache"),
+        transport=httpx.MockTransport(handler),
+    )
+    return reader, seen
+
+
+@pytest.mark.real_draft_check
+def test_approval_waits_for_the_draft_page(tmp_path):
+    """sandbox-wp-db PR #87, 2026-11-19: json-svg failed, so no draft page was committed, and
+    the approval only bought 3A's "No draft file found". The portal now asks for that file."""
+    app = _pipeline_app(tmp_path, curators=["marvinm2"])
+    status = {"code": 404}
+    with TestClient(app) as client:
+        fake = app.state._fake
+        app.state.drafts, seen = _site_serving(tmp_path, lambda: status["code"])
+        pr = _submit(client)["pr_number"]
+        _login(client, "marvinm2")
+        _pass_every_required_item(client, pr)
+
+        refused = client.post(f"/api/reviews/{pr}/approve")
+        assert refused.status_code == 409, refused.text
+        assert "no draft page yet (WP0__PR1)" in refused.json()["detail"]
+        assert "accepted" not in fake.list_labels(REPO, pr)  # 3A was never started
+        assert client.get(f"/api/reviews/{pr}").json()["status"] == "open"
+        # The exact file 3A's `find _drafts -name "WP*__PR<n>.md"` looks for.
+        assert ("HEAD", "/wikipathways/sandbox-wp.gh.io/main/_drafts/WP0__PR1.md") in seen
+
+        status["code"] = 200  # workflow 1 is fixed and commits the draft
+        approved = client.post(f"/api/reviews/{pr}/approve")
+        assert approved.status_code == 200, approved.text
+        assert "accepted" in fake.list_labels(REPO, pr)
+
+
+@pytest.mark.real_draft_check
+def test_an_unreadable_site_does_not_block_approval(tmp_path):
+    """Only a definite 404 refuses. A rate-limited read (429 is routine on anonymous raw reads)
+    approves, because 3A's own failure is clean and a flaky read must not block a curator."""
+    app = _pipeline_app(tmp_path, curators=["marvinm2"])
+    with TestClient(app) as client:
+        fake = app.state._fake
+        app.state.drafts, _ = _site_serving(tmp_path, lambda: 429)
+        pr = _submit(client)["pr_number"]
+        _login(client, "marvinm2")
+        _pass_every_required_item(client, pr)
+
+        approved = client.post(f"/api/reviews/{pr}/approve")
+        assert approved.status_code == 200, approved.text
+        assert "accepted" in fake.list_labels(REPO, pr)
 
 
 def test_the_whole_lifecycle_from_submission_to_published(tmp_path):

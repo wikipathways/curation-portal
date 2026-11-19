@@ -54,3 +54,19 @@ class RecordingDrafts:
     def sweep(self, *, force: bool = False) -> int:
         self.sweeps += 1
         return 0
+
+
+@pytest.fixture(autouse=True)
+def _draft_pages_are_built(request, monkeypatch):
+    """Every pipeline draft page counts as built unless a test says otherwise.
+
+    ``CurationService.approve`` refuses in pipeline mode when the draft page workflow 3A needs is
+    missing, and the real check is a HEAD request to raw.githubusercontent.com. Nearly every
+    approval in the suite is about something else, and none of them should touch the network.
+    Mark a test ``@pytest.mark.real_draft_check`` to exercise the real method.
+    """
+    if request.node.get_closest_marker("real_draft_check"):
+        return
+    from app.pipeline.drafts import DraftsReader
+
+    monkeypatch.setattr(DraftsReader, "draft_page_exists", lambda self, slug: True)

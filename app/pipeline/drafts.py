@@ -285,6 +285,31 @@ class DraftsReader:
         self._write_cache(slug, payload)
         return self._artifacts(slug, payload)
 
+    def draft_page_exists(self, slug: str) -> bool | None:
+        """Is the draft page the publish workflow needs there? None when that cannot be told.
+
+        Workflow 3A starts with ``find _drafts -name "WP*__PR<n>.md"`` in the site repo and
+        stops at ``get-wpid`` ("No draft file found") when there is none — which is what happens
+        whenever workflow 1's ``json-svg`` job fails, because ``commit-outputs`` is then skipped
+        (sandbox-wp-db PR #87, 2026-11-19). So this asks for exactly that file.
+
+        Never cached, unlike ``fetch``: it is asked once, at the moment of approval, and a stale
+        "missing" would refuse a draft that has since been written. Only a 404 is an answer;
+        anything else (a 429 from the anonymous rate limit, a timeout) is None, so a flaky read
+        never blocks a curator on its own.
+        """
+        if not _SLUG_RE.fullmatch(slug or ""):
+            return None
+        try:
+            resp = self._client.head(self._raw_url(f"_drafts/{slug}.md"))
+        except Exception:  # noqa: BLE001 - transport trouble says nothing about the file
+            return None
+        if resp.status_code == 404:
+            return False
+        if resp.is_success:
+            return True
+        return None
+
     def _fetch_remote(self, slug: str) -> dict:
         datanodes = self._get(f"_data/drafts/{slug}-datanodes.tsv")
         bibliography = self._get(f"_data/drafts/{slug}-bibliography.tsv")

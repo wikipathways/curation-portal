@@ -53,3 +53,6 @@ extend-immutable-calls = ["fastapi.Depends", "fastapi.Form", "fastapi.File", "fa
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+markers = [
+    "real_draft_check: use DraftsReader.draft_page_exists as written instead of the conftest stub",
+]
