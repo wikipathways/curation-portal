@@ -89,6 +89,7 @@ from app.review.status import (
     presentation,
     queue_tabs,
 )
+from app.security import SecurityHeadersMiddleware, settings_site_host
 from app.submit import (
     InvalidGpml,
     NoPendingSubmission,
@@ -113,9 +114,9 @@ templates = Jinja2Templates(directory=str(_ROOT / "templates"))
 
 
 class _VersionedStaticFiles(StaticFiles):
-    """Static files, cached for a year when the URL carries a version (``app.js?v=22``).
+    """Static files, cached for a year when the URL carries a version (``app.js?v=<hash>``).
 
-    The templates bump ``?v=`` whenever a file changes, so a versioned URL never names stale
+    ``static_url`` puts a content hash in ``?v=``, so a versioned URL never names stale
     content and the browser need not ask again. An unversioned one (the logo) is revalidated
     each time against its ETag, which costs a 304 rather than the file.
     """
@@ -160,6 +161,30 @@ def _age(value) -> str:
 
 
 templates.env.filters["age"] = _age
+
+
+_STATIC_DIR = _ROOT / "static"
+_STATIC_VERSIONS: dict[str, str] = {}
+
+
+def static_url(name: str) -> str:
+    """``/static/<name>?v=<content hash>``: the version changes exactly when the file does.
+
+    Replaces the hand-bumped ``?v=22``, which every change to app.js or app.css had to remember
+    and which several branches editing assets at once would all bump to the same number. The hash
+    is computed once per process; a deploy is a new process.
+    """
+    version = _STATIC_VERSIONS.get(name)
+    if version is None:
+        try:
+            digest = hashlib.sha1((_STATIC_DIR / name).read_bytes()).hexdigest()[:8]
+        except OSError:
+            digest = "0"
+        version = _STATIC_VERSIONS[name] = digest
+    return f"/static/{name}?v={version}"
+
+
+templates.env.globals["static_url"] = static_url
 
 # Serve preview SVGs with script execution disabled (SVGs can carry <script>): a strict CSP plus
 # the sandbox directive neutralises them even if a viewer opens the URL directly.
@@ -745,7 +770,16 @@ def build_app(settings: Settings | None = None) -> FastAPI:
                 "local preview render failed for PR #%s", pr_number, exc_info=True
             )
 
-    app = FastAPI(title="curation-portal", version="0.0.1", lifespan=lifespan)
+    # Swagger moves to /api/docs so /docs can be the user documentation; /openapi.json stays where
+    # the deploy check (docs/deployment.md) reads it.
+    app = FastAPI(
+        title="curation-portal",
+        version="0.0.1",
+        lifespan=lifespan,
+        docs_url="/api/docs",
+        redoc_url=None,
+    )
+    app.add_middleware(SecurityHeadersMiddleware, site_host=settings_site_host(settings))
     app.add_middleware(
         SessionMiddleware,
         secret_key=settings.session_secret,

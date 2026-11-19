@@ -1406,4 +1406,8 @@
       })
       .catch(function () { btn.disabled = false; toast('Could not reach the server. Try again.', 'error'); });
   });
+
+  // Shared helpers for the other scripts (viewer.js, refresh.js, tour.js), which load after this
+  // one: one toast region, one error vocabulary, one CSRF-carrying POST.
+  window.WP = { toast: toast, describeError: describeError, postForm: postForm, PIPELINE_MODE: PIPELINE_MODE };
 })();

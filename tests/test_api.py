@@ -1345,7 +1345,7 @@ def test_adoption_is_refused_outside_pipeline_mode(tmp_path):
 
 
 def test_versioned_static_files_are_cached_for_a_year(client):
-    r = client.get("/static/app.js?v=22")
+    r = client.get("/static/app.js?v=1")
     assert r.status_code == 200
     assert r.headers["cache-control"] == "public, max-age=31536000, immutable"
 
@@ -1357,7 +1357,7 @@ def test_unversioned_static_files_are_revalidated(client):
 
 
 def test_text_responses_are_compressed(client):
-    r = client.get("/static/app.js?v=22", headers={"Accept-Encoding": "gzip"})
+    r = client.get("/static/app.js?v=1", headers={"Accept-Encoding": "gzip"})
     assert r.headers.get("content-encoding") == "gzip"
     page = client.get("/", headers={"Accept-Encoding": "gzip"})
     assert page.status_code == 200

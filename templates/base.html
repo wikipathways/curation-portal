@@ -5,7 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}WikiPathways Curation Portal{% endblock %}</title>
   <meta name="description" content="Submit and curate WikiPathways pathways through pull requests, without touching git.">
-  <link rel="stylesheet" href="/static/app.css?v=22">
+  <link rel="stylesheet" href="{{ static_url('app.css') }}">
+  <link rel="stylesheet" href="{{ static_url('viewer.css') }}">
+  <link rel="stylesheet" href="{{ static_url('tour.css') }}">
 </head>
 {# The client has to know whether approving merges or hands the pull request to the repository:
    otherwise the button says "Merging…" on a target that never merges anything. #}
@@ -62,7 +64,10 @@
 
   <div id="toast-region" class="toast-region" aria-live="polite"></div>
 
-  <script src="/static/app.js?v=22"></script>
+  <script src="{{ static_url('app.js') }}"></script>
+  <script src="{{ static_url('viewer.js') }}"></script>
+  <script src="{{ static_url('refresh.js') }}"></script>
+  <script src="{{ static_url('tour.js') }}"></script>
   {% block script %}{% endblock %}
 </body>
 </html>
