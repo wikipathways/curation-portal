@@ -50,9 +50,11 @@ def test_every_item_starts_pending_with_hints():
     # does run, and its hint says how the description measures against what the repository asks.
     assert _item(cl, "description_ok")["suggested"] == "pending"
     assert _item(cl, "description_ok")["hint"]
-    # "Interactions are connected" and the render cannot be read from parsed annotation: no hint.
-    for key in ("interactions_connected", "render_ok"):
-        assert (_item(cl, key)["suggested"], _item(cl, key)["hint"]) == (None, "")
+    # The render cannot be read from parsed annotation: no hint.
+    assert (_item(cl, "render_ok")["suggested"], _item(cl, "render_ok")["hint"]) == (None, "")
+    # A pathway with no interactions has none to connect: a suggestion of N/A, still unanswered.
+    inter = _item(cl, "interactions_connected")
+    assert (inter["suggested"], inter["hint"]) == ("na", "No interactions in this pathway.")
     # No references suggests pending, not na (issue #27): the repository asks for at least one.
     refs = _item(cl, "references_valid")
     assert refs["suggested"] == "pending"

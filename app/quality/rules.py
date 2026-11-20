@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import re
 import xml.etree.ElementTree as ET
+from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
@@ -109,6 +110,10 @@ _MIN_TITLE_CHARS = 10
 _MIN_DESCRIPTION_WORDS = 15
 _EDIT_MAX_WORD_DIFF = 3
 _EDIT_MAX_CHAR_DIFF = 10
+
+#: How many loose interactions a note describes before it counts the rest. Each takes a clause
+#: ("the arrow from ARNT ends near NQO1"), so fewer than ``_MAX_NAMED``.
+_MAX_LOOSE_NAMED = 3
 
 #: How many offending labels a note names before it gives up and counts. Six is what
 #: ``app.review.checklist`` has always shown; keeping it means the note wording does not change
@@ -692,6 +697,123 @@ def _relative_annotation(s: Subject, nodes: list, unmapped: list[str]) -> tuple[
     )
 
 
+def _end_key(end: object) -> tuple[str, str, str]:
+    """What identifies one loose end across two versions of a pathway.
+
+    The interaction's GraphId and which end. An interaction with no GraphId (a hand-built file)
+    has nothing stable to match on, so the label its other end is attached to stands in.
+    """
+    gid = getattr(end, "interaction", "") or ""
+    return (gid, getattr(end, "end", "") or "", "" if gid else getattr(end, "attached", "") or "")
+
+
+def _loose_phrase(ends: list) -> str:
+    """One interaction's loose ends in words: "the arrow from ARNT ends near NQO1"."""
+    by_role = {getattr(e, "end", ""): e for e in ends}
+    first = ends[0]
+    gid = getattr(first, "interaction", "") or ""
+    name = f"the arrow {gid}" if gid else "an arrow"
+    source, target = by_role.get("source"), by_role.get("target")
+    if source is not None and target is not None:
+        a, b = getattr(source, "near", ""), getattr(target, "near", "")
+        if a and b and a != b:
+            return f"{name} is attached at neither end, between {a} and {b}"
+        return f"{name} is attached at neither end" + (f", near {a or b}" if a or b else "")
+    if target is not None:
+        attached, near = getattr(target, "attached", ""), getattr(target, "near", "")
+        subject = f"the arrow from {attached}" if attached else name
+        return f"{subject} ends near {near}" if near else f"{subject} ends on nothing"
+    attached, near = getattr(first, "attached", ""), getattr(first, "near", "")
+    subject = f"the arrow to {attached}" if attached else name
+    return f"{subject} starts near {near}" if near else f"{subject} starts on nothing"
+
+
+def _loose_phrases(ends: list) -> str:
+    """Up to ``_MAX_LOOSE_NAMED`` interactions described, the rest counted."""
+    groups: list[list] = []
+    by_gid: dict[str, list] = {}
+    for e in ends:
+        gid = getattr(e, "interaction", "") or ""
+        if gid and gid in by_gid:
+            by_gid[gid].append(e)
+            continue
+        group = [e]
+        groups.append(group)
+        if gid:
+            by_gid[gid] = group
+    shown = "; ".join(_loose_phrase(g) for g in groups[:_MAX_LOOSE_NAMED])
+    more = len(groups) - _MAX_LOOSE_NAMED
+    return shown + (f"; and {more} more interaction{'' if more == 1 else 's'}" if more > 0 else "")
+
+
+def _ends_word(n: int) -> str:
+    return f"{n} interaction end{'' if n == 1 else 's'} {'is' if n == 1 else 'are'}"
+
+
+def _check_interactions_connected(s: Subject) -> tuple[str, str] | None:
+    """Every interaction attached at both ends: what the viewer's "Show unconnected line ends"
+    shows, asked before anyone opens the viewer.
+
+    Found on `wikipathways/sandbox-wp-db` PR #93, 2026-11-20: an update added NQO1 and an arrow
+    from ARNT whose far end lay on NQO1 in the drawing but named no ``GraphRef``. The submit
+    form's pre-flight, every rule here and the repository's whole pipeline passed it; only the
+    legend of the portal's own viewer showed "Show unconnected line ends (1)". The repository's
+    reviewer checklist asks for exactly this ("Interactions are connected") and nothing answered
+    it.
+
+    Read from the parsed metadata (``app.preview.metadata`` lists the loose ends as it parses),
+    so it runs where only metadata is in hand: the checklist hint, and an update's base version,
+    which is never more than metadata here. ``warn`` because the pathway still publishes and
+    draws; the binding turns it into a suggested Fail, since the checklist item it answers is
+    required.
+
+    For an update only the ends this edit leaves loose count, matched by interaction and end:
+    a pathway that already had loose ends is not this edit's fault, the same reasoning
+    ``_relative_annotation`` applies to identifiers. They are mentioned all the same.
+    """
+    total = getattr(s.metadata, "interaction_count", None)
+    if not isinstance(total, int):
+        return None  # metadata cached before ends were counted: no claim either way
+    if not total:
+        return (Severity.NA.value, "No interactions in this pathway.")
+    loose = list(getattr(s.metadata, "loose_ends", []) or [])
+    old: list = []
+    if (
+        s.kind == "update"
+        and s.before is not None
+        and isinstance(getattr(s.before, "interaction_count", None), int)
+    ):
+        was = Counter(_end_key(e) for e in getattr(s.before, "loose_ends", []) or [])
+        new = []
+        for e in loose:
+            key = _end_key(e)
+            if was[key]:
+                was[key] -= 1
+                old.append(e)
+            else:
+                new.append(e)
+        loose = new
+    already = (
+        f" {_ends_word(len(old))} already loose in the version this edit replaces: "
+        f"{_loose_phrases(old)}. Worth fixing while you are at it."
+        if old
+        else ""
+    )
+    if loose:
+        return (
+            Severity.WARN.value,
+            f"{_ends_word(len(loose))} not attached to anything: {_loose_phrases(loose)}. In "
+            "the drawing it may look connected, but the pathway's data does not link the two, so "
+            "the interaction is lost to anyone analysing it. In PathVisio, drag the end onto the "
+            "node until the node is highlighted." + already,
+        )
+    if old:
+        return (Severity.PASS.value, "This edit leaves no new loose interaction ends." + already)
+    if total == 1:
+        return (Severity.PASS.value, "The interaction is attached at both ends.")
+    return (Severity.PASS.value, f"All {total} interactions are attached at both ends.")
+
+
 def _check_datanode_changes(s: Subject) -> tuple[str, str] | None:
     """The repository's third test: did any data nodes change?
 
@@ -1018,6 +1140,25 @@ RULES: tuple[Rule, ...] = (
             "ChEBI and so on) so it links out and can be used in analyses. For an update only "
             "the change counts: nodes left unannotated beyond those the pathway already had are "
             "a problem, the older ones are reported as worth a look."
+        ),
+    ),
+    Rule(
+        "content.interactions_connected",
+        "Connected interactions",
+        _check_interactions_connected,
+        needs_text=False,
+        # Loose ends suggest Fail rather than the default pending: the item is required and the
+        # finding is a fact about the file, not advice. Pass stays pass, and "no interactions"
+        # suggests N/A.
+        checklist=ChecklistBinding(
+            "interactions_connected", state_for={Severity.WARN.value: _FAIL}
+        ),
+        explain=(
+            "Every interaction should be attached at both ends, to a data node, label, shape, "
+            "group or an anchor on another interaction. An arrow whose end only lies near a node "
+            "looks connected in the drawing but is not linked in the data, so the interaction is "
+            "lost to anyone analysing the pathway. For an update only ends the edit leaves loose "
+            "count; older ones are mentioned. Graphical lines are not checked."
         ),
     ),
     Rule(

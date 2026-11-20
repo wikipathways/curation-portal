@@ -558,6 +558,13 @@
     this.danglingCount = num(this.graph.stats.dangling_ends) !== null ? this.graph.stats.dangling_ends : count;
   };
 
+  // The one switch for the loose-end marks, so the legend's checkbox and the change summary's
+  // "Show them" button (showEnds below) cannot disagree about whether they are on.
+  Viewer.prototype.setEnds = function (on) {
+    this.root.classList.toggle('viewer--ends', !!on);
+    this.root.querySelectorAll('.viewer__ends-toggle').forEach(function (c) { c.checked = !!on; });
+  };
+
   // ---------- view box ----------
   Viewer.prototype.isZoomed = function () {
     return !!(this.vb && this.fit && this.vb[2] < this.fit[2] * 0.999);
@@ -1106,7 +1113,7 @@
       t.appendChild(c);
       t.appendChild(el('span', null, 'Show unconnected line ends (' + this.danglingCount + ')'));
       box.appendChild(t);
-      c.addEventListener('change', function () { self.root.classList.toggle('viewer--ends', c.checked); });
+      c.addEventListener('change', function () { self.setEnds(c.checked); });
     }
     if (this.graph.legacy) {
       box.appendChild(el('p', 'viewer__legend-note',
@@ -1700,7 +1707,33 @@
     });
   });
 
-  window.WPViewer = { mountAll: mountAll, unmountAll: unmountAll, link: link };
+  // Turn on a viewer's "Show unconnected line ends" from outside it: the change summary's
+  // "Unconnected line ends: N" line. A lite or not-yet-mounted viewer is woken first, since the
+  // marks are drawn from the graph it loads.
+  function showEnds(target) {
+    var root = typeof target === 'string' ? document.getElementById(target) : target;
+    if (!root || !root.matches || !root.matches('[data-viewer]')) return Promise.resolve(false);
+    // Mounted with its pair, not alone: mountAll pairs whatever it mounts in one call.
+    if (!root.__wpViewer) mountAll(root.closest('[data-viewer-pair]') || root);
+    var v = root.__wpViewer;
+    if (!v) return Promise.resolve(false);
+    return v.activate().then(function (ok) {
+      if (!ok) return false;
+      v.setEnds(true);
+      v.say(v.danglingCount === 1 ? '1 unconnected line end marked.'
+        : (v.danglingCount || 0) + ' unconnected line ends marked.');
+      if (root.scrollIntoView) root.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      return true;
+    });
+  }
+
+  // Delegated, so the button needs no inline handler (CSP) and works on a card refresh.js swapped in.
+  document.addEventListener('click', function (e) {
+    var btn = e.target.closest && e.target.closest('[data-show-ends]');
+    if (btn) showEnds(btn.getAttribute('data-show-ends'));
+  });
+
+  window.WPViewer = { mountAll: mountAll, unmountAll: unmountAll, link: link, showEnds: showEnds };
 
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', function () { mountAll(document); });

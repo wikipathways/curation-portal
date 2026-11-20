@@ -326,6 +326,13 @@
       <p class="diff-summary__line"><strong>Title, description, references, tags:</strong> unchanged.</p>
       {% endif %}
     {% endif %}
+    {# Interaction ends on the new version that attach to nothing (content.interactions_connected).
+       The button turns on the after viewer's own "Show unconnected line ends" (viewer.js). #}
+    {% if r.preview.after_loose_ends %}
+    <p class="diff-summary__line diff-summary__line--ends"><strong>Unconnected line ends:</strong> {{ r.preview.after_loose_ends }}
+      <button type="button" class="btn btn--ghost btn--sm diff-summary__show-ends" data-show-ends="viewer-{{ r.pr_number }}-after">Show them</button>
+    </p>
+    {% endif %}
     {% if r.preview.diff.changed %}
     <ul class="diff-legend">
       {% for key, word in [('added', 'added'), ('removed', 'removed'), ('reannotated', 're-annotated'), ('relabelled', 'relabelled'), ('moved', 'moved')] %}
