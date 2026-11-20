@@ -406,6 +406,17 @@
     }
   }
 
+  // The toast after Approve. The response is the review (ReviewDetail): an update has its WPID
+  // already, so it is not told the repository assigns one.
+  function approvalMessage(review, pipeline) {
+    var r = review || {};
+    if (!pipeline) return 'Approved and merged.';
+    if (r.kind === 'update' && r.wpid) {
+      return 'Approved. The repository publishes it to WP' + r.wpid + ' from here.';
+    }
+    return 'Approved. The repository assigns the WPID and publishes it from here.';
+  }
+
   // /?wpid=WP554 opens the update form with that pathway filled in. A curator's change request
   // on an *update* has to send the submitter somewhere that works, and without this the link
   // would land them on the New pathway tab — the one thing that must not happen, since it would
@@ -727,13 +738,7 @@
             toast(describeError(res.status, res.body), 'error');
             return;
           }
-          // The response is the review (ReviewDetail): an update has its WPID already, so it is
-          // not told the repository assigns one.
-          var approved = res.body || {};
-          var isUpdate = approved.kind === 'update' && approved.wpid;
-          toast(!PIPELINE_MODE ? 'Approved and merged.'
-            : isUpdate ? 'Approved. The repository publishes it to WP' + approved.wpid + ' from here.'
-            : 'Approved. The repository assigns the WPID and publishes it from here.', 'success');
+          toast(approvalMessage(res.body, PIPELINE_MODE), 'success');
           refreshCard(card2);
         })
         .catch(function () {
