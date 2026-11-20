@@ -31,16 +31,17 @@
   <li><a href="/static/examples/example-pathway-revision.gpml" download>example-pathway-revision.gpml</a>, the same pathway, revised</li>
 </ul>
 <p>
-  Choosing one in the submit form shows the checks without sending anything. The only remark
-  you should see is about the missing Author, which the examples leave out on purpose: the
-  portal fills in your name.
+  Choosing one in the submit form shows the checks without sending anything to GitHub. The only
+  remark you should see is about the missing Author, which the examples leave out on purpose:
+  the portal fills in your name. Please do not submit an example: it would open a real pull
+  request on <code>{{ repo }}</code>.
 </p>
 
 <h3>The short version</h3>
 <ol>
   <li>Sign in and choose your file on the <a href="/">Submit</a> page. The portal checks it
     straight away and tells you what, if anything, is worth fixing.</li>
-  <li>Submit. A pull request opens in your name and appears under
+  <li>Submit. A pull request opens{% if submit_identity != 'bot' %} in your name{% endif %} and appears under
     <a href="/dashboard?mine=1">My submissions</a>.</li>
   <li>A curator reviews the drawn pathway and works through a checklist. They may ask you for
     changes, which you answer by uploading a corrected file.</li>

@@ -39,7 +39,7 @@
         <li><a href="#{{ id }}">{{ title }}</a></li>
         {% endfor %}
       </ol>
-      <p class="docs-toc__tour"><a href="/?tour=1" data-tour-start>Take the tour</a></p>
+      {% if login %}<p class="docs-toc__tour"><a href="/?tour=1" data-tour-start>Take the tour</a></p>{% endif %}
     </nav>
 
     <div class="docs__body">

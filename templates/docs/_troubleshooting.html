@@ -52,6 +52,7 @@
     &rsaquo; Settings &rsaquo; Applications</a> and sign in once more to authorise it afresh.
   </dd>
 
+  {% if submit_identity == 'fork' %}
   <dt id="troubleshooting-stale-fork">"GitHub did not accept the change" right after the repository changed</dt>
   <dd>
     Before each submission the portal brings your fork up to date with the repository. GitHub can
@@ -60,6 +61,7 @@
     behind and the submission can fail. Open your fork on GitHub, press <em>Sync fork</em> and
     then <em>Update branch</em>, and submit again.
   </dd>
+  {% endif %}
 
   <dt>"This pathway is checked out by …"</dt>
   <dd>

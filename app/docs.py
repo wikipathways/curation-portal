@@ -151,6 +151,10 @@ def docs_context(settings) -> dict:
         "checklist_items": _checklist(),
         "statuses": _statuses(pipeline_mode),
         "labels": _labels(settings) if pipeline_mode else [],
+        # Who opens the pull request: "fork" (the submitter's fork), "bot" (the app's account) or
+        # "user" (the submitter, straight on the repository). The prose about forks, and whether
+        # the pull request is the submitter's own, depends on it.
+        "submit_identity": settings.submit_identity,
     }
 
 

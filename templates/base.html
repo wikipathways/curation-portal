@@ -64,8 +64,10 @@
          it already did, once the portal was pointed at the sandbox. #}
       <p>A portal for uploading, updating, and reviewing pathways. Opens pull requests on <a href="https://github.com/{{ repo }}">{{ repo }}</a>.</p>
       {# The tour link goes to the submit page's tour unless the current page has one of its own,
-         which tour.js decides; without JavaScript it still lands somewhere sensible. #}
-      <p class="site-footer__help"><a href="/docs">Help</a> &middot; <a href="/?tour=1" data-tour-start>Take the tour</a></p>
+         which tour.js decides; without JavaScript it still lands somewhere sensible. Signed in
+         only: signed out, the submit form and the review actions are not on the page, and the
+         tour would come down to one step pointing at this footer's Help link. #}
+      <p class="site-footer__help"><a href="/docs">Help</a>{% if login %} &middot; <a href="/?tour=1" data-tour-start>Take the tour</a>{% endif %}</p>
     </footer>
   </div>
 

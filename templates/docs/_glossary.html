@@ -40,9 +40,11 @@
   <dd>A proposed change to the repository, open for review. The portal opens one for every
     submission.</dd>
 
+  {% if submit_identity == 'fork' %}
   <dt>Fork</dt>
   <dd>Your own copy of the repository on GitHub. The portal uses it to hold your submission until
     it is reviewed.</dd>
+  {% endif %}
 
   <dt>Branch</dt>
   <dd>A named line of changes inside a repository. Each submission gets its own.</dd>

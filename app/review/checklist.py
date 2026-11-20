@@ -205,7 +205,10 @@ CURATION_CHECKLIST: list[ChecklistItemDef] = [
         relevant_for_update=_rel_references,
         help=(
             "Open each listed reference and check that it exists and supports the pathway. "
-            "Never ticked automatically: the portal can count references, not read them."
+            "The portal can count references in the file but not read them, so the file alone "
+            "never ticks this. Where the repository's own processing runs, it is ticked once "
+            "that processing has resolved every reference the file declares, and marked as a "
+            "problem when some did not resolve."
         ),
     ),
     ChecklistItemDef(
