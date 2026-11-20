@@ -178,13 +178,19 @@ def resolve_write_target(
         # pull request's diff runs from the merge base. Five of 26 production forks had diverged
         # (measured 2026-11-11). The bot pushes to the content repo instead; a failed comparison
         # proceeds, because the file-list guard at approval still catches the result.
+        #
+        # A fork that is *behind* is the other half of the same problem. The sync in
+        # ``ensure_fork`` is best effort, and GitHub refuses it once an upstream commit touches
+        # a workflow file (the OAuth token carries no ``workflow`` scope), so the branch would
+        # be cut from the fork's stale head and the pull request diffed against an old base:
+        # sandbox #89 showed an edit of WP5429 as a brand-new file. Same remedy.
         try:
-            ahead = user_client.fork_ahead_by(content_repo, fork, base_branch)
+            ahead, behind = user_client.fork_divergence(content_repo, fork, base_branch)
         except CredentialsRejected:
             raise
         except Exception:  # noqa: BLE001
             logger.warning("could not compare %s with %s", fork, content_repo, exc_info=True)
-            ahead = 0
+            ahead, behind = 0, 0
         if ahead and bot_client is not None:
             logger.warning(
                 "%s is %d commit(s) ahead of %s; pushing %s's submission as the bot so the pull "
@@ -193,6 +199,17 @@ def resolve_write_target(
                 ahead,
                 content_repo,
                 submitter,
+            )
+            return same_repo_target(bot_client, content_repo, identity="bot")
+        if behind and bot_client is not None:
+            logger.warning(
+                "%s is %d commit(s) behind %s and could not be synced; pushing %s's submission "
+                "as the bot so the pull request is cut from the current %s",
+                fork,
+                behind,
+                content_repo,
+                submitter,
+                base_branch,
             )
             return same_repo_target(bot_client, content_repo, identity="bot")
         logger.info("submission by %s will be pushed to their fork %s", submitter, fork)

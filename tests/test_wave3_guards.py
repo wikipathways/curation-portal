@@ -204,6 +204,54 @@ def test_a_diverged_fork_is_not_branched_from():
     assert target.identity == "fork"
 
 
+def test_a_fork_that_could_not_be_synced_is_not_branched_from():
+    # Sandbox #89 (2026-11-19): the sync was refused (an upstream commit touched a workflow file),
+    # the branch was cut from the fork's months-old main, and an edit read as a new file.
+    repo = "wikipathways/wikipathways-database"
+    user = FakeGitHubClient(login="alice", fork_can_sync=False)
+    bot = FakeGitHubClient(login="wikipathways-bot")
+    user.branches[(repo, "main")] = "upstream-head"
+    user.branches[("alice/wikipathways-database", "main")] = "august-head"
+
+    target = resolve_write_target(
+        identity="fork", user_client=user, bot_client=bot, content_repo=repo, submitter="alice"
+    )
+    assert target.identity == "bot" and target.client is bot
+
+    # Level again (synced by hand): back to the submitter's own fork.
+    user.branches[("alice/wikipathways-database", "main")] = "upstream-head"
+    target = resolve_write_target(
+        identity="fork", user_client=user, bot_client=bot, content_repo=repo, submitter="alice"
+    )
+    assert target.identity == "fork"
+
+
+def test_a_stale_fork_without_a_bot_still_submits_from_the_fork():
+    user = FakeGitHubClient(login="alice")
+    user.fork_behind["alice/wikipathways-database"] = 7
+    target = resolve_write_target(
+        identity="fork",
+        user_client=user,
+        bot_client=None,
+        content_repo="wikipathways/wikipathways-database",
+        submitter="alice",
+    )
+    assert target.identity == "fork"
+
+
+def test_http_divergence_reads_both_counts():
+    import httpx
+
+    from app.github import HttpGitHubClient
+
+    def handler(request):
+        assert request.url.path.endswith("/compare/main...alice:main")
+        return httpx.Response(200, json={"ahead_by": 0, "behind_by": 7})
+
+    client = HttpGitHubClient(token="t", transport=httpx.MockTransport(handler))
+    assert client.fork_divergence("o/r", "alice/r", "main") == (0, 7)
+
+
 def test_the_update_tab_offers_the_current_version(tmp_path):
     app, current, _fake, repo = _app(tmp_path)
     with TestClient(app) as c:

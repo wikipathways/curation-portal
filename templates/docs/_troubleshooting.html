@@ -53,13 +53,14 @@
   </dd>
 
   {% if submit_identity == 'fork' %}
-  <dt id="troubleshooting-stale-fork">"GitHub did not accept the change" right after the repository changed</dt>
+  <dt id="troubleshooting-stale-fork">Your submission was opened by the portal's bot account</dt>
   <dd>
     Before each submission the portal brings your fork up to date with the repository. GitHub can
     refuse that update when the repository's recent changes include its own automation files,
-    because changing those needs a permission the portal does not ask for. Your fork is then left
-    behind and the submission can fail. Open your fork on GitHub, press <em>Sync fork</em> and
-    then <em>Update branch</em>, and submit again.
+    because changing those needs a permission the portal does not ask for. Rather than file your
+    pathway against an out-of-date copy, the portal then opens the pull request from its bot
+    account, with you named as the author of the change. To go back to submitting from your own
+    fork, open the fork on GitHub, press <em>Sync fork</em> and then <em>Update branch</em>.
   </dd>
   {% endif %}
 

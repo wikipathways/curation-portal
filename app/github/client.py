@@ -222,6 +222,19 @@ class GitHubClient(ABC):
         commits into the pull request (production #120 carried a stray file that way).
         """
 
+    def fork_divergence(self, repo: str, fork: str, branch: str) -> tuple[int, int]:
+        """``(ahead, behind)``: commits ``fork``'s ``branch`` has that ``repo``'s lacks, and the
+        reverse, from one comparison.
+
+        *Behind* is the stale fork: the sync before every submission is best effort, and GitHub
+        refuses it outright once an upstream commit touches ``.github/workflows`` (422, the
+        OAuth token has no ``workflow`` scope). The branch is then cut from the fork's old head,
+        and the pull request's diff runs against a months-old base (sandbox #89, 2026-11-19:
+        an edit of WP5429 showed the whole file as new). Concrete, not abstract, so a client
+        that only knows ``fork_ahead_by`` still answers with ``behind`` unknown (0).
+        """
+        return self.fork_ahead_by(repo, fork, branch), 0
+
     @abstractmethod
     def ensure_fork(self, repo: str) -> str:
         """Return ``owner/name`` of the acting user's fork of ``repo``, creating it if absent.
@@ -535,6 +548,9 @@ class FakeGitHubClient(GitHubClient):
         self.comment_authors: dict[str, str] = {}
         #: fork -> commits it has that its parent lacks (``fork_ahead_by``).
         self.fork_ahead: dict[str, int] = {}
+        #: fork -> commits its parent has that it lacks (``fork_divergence``), when a test wants
+        #: to state it rather than have it derived from ``branches``.
+        self.fork_behind: dict[str, int] = {}
         #: PR number -> review verdicts and line comments a test seeds for ``list_conversation``.
         self.pr_reviews: dict[int, list[ConversationItem]] = {}
         #: Where each branch was cut from. ``branches`` moves with every commit, so this is the
@@ -607,6 +623,18 @@ class FakeGitHubClient(GitHubClient):
     def fork_ahead_by(self, repo: str, fork: str, branch: str) -> int:
         self._maybe_fail("fork_ahead_by")
         return self.fork_ahead.get(fork, 0)
+
+    def fork_divergence(self, repo: str, fork: str, branch: str) -> tuple[int, int]:
+        self._maybe_fail("fork_divergence")
+        ahead = self.fork_ahead.get(fork, 0)
+        if fork in self.fork_behind:
+            return ahead, self.fork_behind[fork]
+        # Derived, not only seeded: a fork whose own branch points somewhere other than the
+        # parent's after ``ensure_fork`` is exactly what a refused sync leaves behind
+        # (``fork_can_sync=False`` with a fork branch seeded at an old commit).
+        mine, theirs = self.branches.get((fork, branch)), self.branches.get((repo, branch))
+        behind = 1 if (mine and theirs and mine != theirs and not ahead) else 0
+        return ahead, behind
 
     def ensure_fork(self, repo: str) -> str:
         self._maybe_fail("ensure_fork")
@@ -1155,6 +1183,13 @@ class HttpGitHubClient(GitHubClient):
         resp = self._client.get(f"/repos/{repo}/compare/{branch}...{owner}:{branch}")
         self._raise_for(resp, f"fork_ahead_by({fork})")
         return int((resp.json() or {}).get("ahead_by") or 0)
+
+    def fork_divergence(self, repo: str, fork: str, branch: str) -> tuple[int, int]:
+        owner = fork.split("/", 1)[0]
+        resp = self._client.get(f"/repos/{repo}/compare/{branch}...{owner}:{branch}")
+        self._raise_for(resp, f"fork_divergence({fork})")
+        body = resp.json() or {}
+        return int(body.get("ahead_by") or 0), int(body.get("behind_by") or 0)
 
     def ensure_fork(self, repo: str) -> str:
         """POST the fork, then wait until it is actually readable.

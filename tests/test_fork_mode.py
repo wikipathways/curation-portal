@@ -139,30 +139,30 @@ def test_the_branch_is_cut_from_the_forks_own_head():
     assert user.pull_meta[result.pr_number]["base"] == "main"
 
 
-def test_a_fork_that_could_not_be_synced_still_submits_as_the_submitter():
-    """The regression test for issue #29, and the one the previous fake could not express.
+def test_a_fork_that_could_not_be_synced_submits_through_the_bot():
+    """A fork left behind by a refused sync goes to the bot, cut from the current main.
 
-    A fork of a fork cannot be synced: `merge-upstream` aims at the network source and a direct
-    ref update is refused. So the fork stays behind, and the content repo's head is a commit it
-    does not hold — readable through the shared network, but **not a legal ref target**. Cutting
-    from it there is refused with 404, which sends a submission that should have been the
-    submitter's own down the bot fallback.
+    This test used to pin the opposite (issue #29): stay the submitter's own pull request, cut
+    from the fork's own head, on the reasoning that a pull request's diff only shows the file
+    changed. That holds for the *file list*, not for the diff of the file: the comparison runs
+    from the merge base, so an update shows every upstream change since the fork's old head as
+    part of the edit, and the repository's own checks compare against that base too. Sandbox
+    #89 (2026-11-19) edited WP5429, published after the fork's August head, and showed it as a
+    new file; the node and description checks compared against nothing. Decided 2026-11-20 that
+    a correct review beats the submitter-owned pull request; the commit still names them, and
+    the docs tell them how to sync the fork to get their own pull requests back.
 
-    Cutting from the fork's own head is legal on any topology, which is what this pins. The
-    assertion that matters is `identity == "fork"`: a bot fallback here would still produce a
-    working pull request, so a test that only checked the submission succeeded would pass while
-    the feature was broken — which is exactly how this survived unnoticed.
+    The cut-from-the-fork's-own-head rule in ``base_repo`` still stands for a fork that is level.
     """
     user = _user_client(fork_can_sync=False)
+    bot = _user_client()
     # The fork holds only its own, older commit. The upstream head is nowhere in it.
     user.branches[(FORK, "main")] = "stale-fork-head"
-    target = _fork_target(user)
-    assert target.identity == "fork", "precondition: fork mode resolved"
-
-    result = _service(user, target).submit_new_pathway(gpml=GOOD_GPML, submitter="alice")
-
-    assert user.branch_bases[(FORK, result.branch)] == "stale-fork-head"
-    assert result.head_repo == FORK, "must stay the submitter's own PR, not fall back to the bot"
+    target = resolve_write_target(
+        identity="fork", user_client=user, bot_client=bot, content_repo=REPO, submitter="alice"
+    )
+    assert target.identity == "bot"
+    assert target.branch_repo == REPO
 
 
 def test_the_fake_refuses_a_ref_at_a_commit_the_repo_does_not_hold():
