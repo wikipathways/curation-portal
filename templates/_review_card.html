@@ -544,13 +544,16 @@
 
   {# The publish workflow is the one part of the loop this app does not control. When it does not
      announce a WPID — or fails outright and someone publishes by hand — this is how the review
-     still reaches a truthful terminal state. #}
-  {% if is_curator and r.awaiting_wpid %}
+     still reaches a truthful terminal state. A fallback only: normally the WPID arrives by itself
+     a minute after the publish run, so the form appears once that has visibly not happened
+     (r.record_wpid, app/review/tracker.py wpid_fallback_due). #}
+  {% if is_curator and r.record_wpid %}
   <div class="publish-panel">
     <h3>Record the published WPID</h3>
     <p class="publish-panel__hint">
-      Once <code>{{ repo }}</code> has published this pathway, put the identifier it assigned here.
-      That closes the review out and is what the dashboard shows from then on.
+      The WPID normally arrives here by itself shortly after the publish workflow runs, and for
+      this pathway it has not. If <code>{{ repo }}</code> did publish it, put the identifier it
+      assigned here. That closes the review out and is what the dashboard shows from then on.
     </p>
     <label class="visually-hidden" for="published-wpid-{{ r.pr_number }}">Assigned WPID</label>
     <input type="text" id="published-wpid-{{ r.pr_number }}" class="published-wpid" placeholder="WP5678" autocomplete="off" inputmode="numeric">

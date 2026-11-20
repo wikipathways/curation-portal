@@ -93,7 +93,7 @@ from app.review.status import (
     presentation,
     queue_tabs,
 )
-from app.review.tracker import publish_pending, publish_stages
+from app.review.tracker import publish_pending, publish_stages, wpid_fallback_due
 from app.security import SecurityHeadersMiddleware, settings_site_host
 from app.submit import (
     InvalidGpml,
@@ -1088,6 +1088,14 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             "actionable": r.status.value in ACTIONABLE,
             "decidable": r.status.value in DECIDABLE,
             "awaiting_wpid": r.status.value in AWAITING_WPID,
+            # The hand-recording form, only once the automatic path has visibly failed (the
+            # announcement normally brings the WPID a minute after the publish run). Direct mode
+            # has no announcement to wait for, so it keeps the form wherever a WPID is awaited.
+            "record_wpid": r.status.value in AWAITING_WPID
+            and (
+                not settings.is_pipeline_mode
+                or wpid_fallback_due(r, r.pipeline_run)
+            ),
             "preview": preview,
             # Parsed curation metadata (data nodes, references, description, ontology tags,
             # submitter note) cached at render time — a cheap disk read, None if not rendered.

@@ -166,3 +166,47 @@ def publish_pending(review, pipeline_run: dict | None, now: datetime | None = No
 
 #: How long after the latest stage the tracker counts as still moving.
 PENDING_WINDOW_SECONDS = 30 * 60
+
+
+#: How long after the publish workflow started the portal waits for its announcement before
+#: offering the hand-recording form. The workflow takes about a minute and the marker comment
+#: arrives with it; ten minutes past that, the automatic path has visibly not delivered.
+WPID_FALLBACK_AFTER_SECONDS = 10 * 60
+
+
+def wpid_fallback_due(review, pipeline_run: dict | None, now: datetime | None = None) -> bool:
+    """Whether to offer the form that records a published WPID by hand.
+
+    Not in the normal flow: the WPID arrives by itself from the repository's announcement a
+    minute or so after the publish run, and a box asking for it before then reads as a step the
+    curator has to take. Offered only once the automatic path has visibly failed:
+
+    - the review is ``publish_failed``; or
+    - it is ``approved``, the publish workflow that started after the approval has completed,
+      and no WPID has arrived ``WPID_FALLBACK_AFTER_SECONDS`` after that run started.
+
+    Reads only what the review row already records (``pipeline_run["publish"]`` is written by
+    the background loop), so a page load costs no GitHub call. Same notion of "our run" as
+    ``publish_stages``: one that started before the approval belongs to another pathway.
+    """
+    status = _status_value(review)
+    if status == "publish_failed":
+        return True
+    # Still ``approved`` is "still no WPID": the announcement moves the review to published.
+    if status != "approved":
+        return False
+    approved_at = _when(getattr(review, "approved_at", None))
+    if approved_at is None:
+        return False
+    publish = (pipeline_run or {}).get("publish") or {}
+    if not publish:
+        return False
+    run_at = _when(publish.get("created_at"))
+    if run_at is not None and run_at < approved_at.replace(microsecond=0):
+        return False
+    completed = publish.get("status") == "completed" or publish.get("conclusion") is not None
+    if not completed:
+        return False
+    now = now or datetime.now(UTC)
+    started = max(run_at or approved_at, approved_at)
+    return (now - started).total_seconds() >= WPID_FALLBACK_AFTER_SECONDS

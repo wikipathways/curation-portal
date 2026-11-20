@@ -92,7 +92,10 @@
 {% if pipeline_mode %}
 <h3>Recording a WPID by hand</h3>
 <p>
-  An approved submission whose publication never reported back offers a
+  Normally there is nothing to do: the repository announces the WPID it assigned a minute or so
+  after its publish workflow runs, and the review becomes <em>Published</em> by itself. Only when
+  that visibly fails (the review says <em>Not published</em>, or the publish workflow finished
+  ten minutes ago and no WPID has arrived) does the review offer a
   <em>Record the published WPID</em> box. Once you have confirmed on GitHub or {{ site_host or 'the site' }}
   which identifier the repository assigned, enter it there to close the review.
 </p>
