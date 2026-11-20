@@ -173,9 +173,16 @@
     <div class="review-card__fresh">
       {# Not a live region: it is rewritten every minute by the timer. A Refresh press is
          announced once, by refresh.js. #}
+      {# A finished review is not re-checked, so "Checked …" would only grow older; it says when
+         it finished instead. A <time data-ago>, like the tracker's: refresh.js keeps the wording
+         current and the ETag leaves it out. #}
+      {% if r.outcome_at %}
+      <span class="review-card__outcome">{{ r.status_label }} <time datetime="{{ r.outcome_at.isoformat() }}" data-ago>{{ r.outcome_at | ago }}</time></span>
+      {% else %}
       <span class="review-card__checked">
         {%- if r.checked_at %}Checked {{ r.checked_at | ago }}{% elif r.actionable or r.awaiting_wpid %}Checking with GitHub{% endif -%}
       </span>
+      {% endif %}
       <button type="button" class="btn btn--ghost btn--sm review-card__refresh" data-refresh-card data-tour="refresh" aria-label="Refresh this review">Refresh</button>
     </div>
     {# Carries its label rather than being a bare glyph. This is the route to the page where the

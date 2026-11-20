@@ -389,7 +389,9 @@
             var a = document.activeElement;
             if (now !== el || !a || a === document.body || a === btn) btn.focus({ preventScroll: true });
           }
-          var span = now && now.querySelector && now.querySelector('.review-card__checked');
+          // A finished review says when it finished instead of when it was checked.
+          var span = now && now.querySelector &&
+            now.querySelector('.review-card__checked, .review-card__outcome');
           announce('Review refreshed.' + (span && span.textContent.trim() ? ' ' + span.textContent.trim() + '.' : ''));
         })
         .catch(function () {

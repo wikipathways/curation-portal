@@ -1111,11 +1111,27 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             # When the background loop last compared this review with GitHub ("Checked 2 min
             # ago" on the card). None while a re-check is due.
             "checked_at": r.last_checked_at,
+            # When a finished review finished ("Published 4 min ago"), shown in place of
+            # "Checked …", which a finished review is never re-checked to move. None while live.
+            "outcome_at": _outcome_at(r),
             # Accepted -> publish workflow -> published -> site live (C4). Empty before approval.
             "tracker": publish_stages(r, r.pipeline_run),
             # Seconds until the card asks for itself again; 0 means it does not (C3).
             "poll_after": _poll_after(r),
         }
+
+    def _outcome_at(r):
+        """When a terminal review reached its outcome: the publication or merge time where one
+        is recorded, else the row's last change (a rejection or close records no time of its
+        own). None for a review still in progress."""
+        status = r.status.value
+        if status not in ("published", "merged", "rejected", "closed"):
+            return None
+        when = {"published": r.published_at, "merged": r.merged_at}.get(status) or r.updated_at
+        # SQLite hands back naive datetimes; the browser would read a naive ISO string as local.
+        if when is not None and when.tzinfo is None:
+            when = when.replace(tzinfo=UTC)
+        return when
 
     def _poll_after(r) -> int:
         """How soon a card's own refresh should ask again, from what could change and how fast.

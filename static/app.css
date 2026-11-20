@@ -1608,7 +1608,7 @@ a.pager__step:hover { background: var(--surface); border-color: var(--moss); }
 .page-head { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
 .review-card__fresh { margin-left: auto; display: inline-flex; align-items: center; gap: 0.5rem; }
 .review-card__fresh + .review-card__expand { margin-left: 0; }
-.review-card__checked { color: var(--ink-faint); font-size: 0.8rem; white-space: nowrap; }
+.review-card__checked, .review-card__outcome { color: var(--ink-faint); font-size: 0.8rem; white-space: nowrap; }
 .review-card[aria-busy="true"] .review-card__refresh { opacity: 0.6; cursor: progress; }
 .review-moved { margin: 0 0 1rem; padding: 0.7rem 0.9rem; border: 1px dashed var(--line-strong); border-radius: var(--radius-m); background: var(--surface-2); color: var(--ink-muted); font-size: 0.9rem; }
 
