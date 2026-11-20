@@ -157,3 +157,70 @@ def test_the_lookup_needs_a_session(tmp_path):
 
     with TestClient(build_app(settings)) as c:
         assert c.get("/api/pathways/5636").status_code == 401
+
+
+# The next three are states the open-pull-request scan only leaves behind when it failed open (no
+# bot client, or a GitHub error), so the lock and the review can disagree. The lookup still has to
+# say what the route does.
+
+
+def test_a_lock_the_caller_holds_on_someone_elses_review_does_not_refuse(tmp_path):
+    """``acquire`` refreshes the caller's own lock without scanning, so the upload goes through:
+    the lookup must not say it is refused, least of all by the caller's own lock."""
+    app, current, fake = _app(tmp_path)
+    with TestClient(app) as c:
+        app.state.bot_client_provider = lambda: fake
+        pr = _upload(c).json()["pr_number"]
+        with app.state.session_factory() as s:
+            s.get(Review, pr).submitter = "bob"  # alice still holds the lock
+            s.commit()
+
+        assert c.get("/api/pathways/5636").json()["open_review"] is None
+        assert _upload(c).status_code == 201
+
+
+def test_a_foreign_lock_names_its_own_pull_request_not_the_reviews(tmp_path):
+    app, current, fake = _app(tmp_path)
+    with TestClient(app) as c:
+        app.state.bot_client_provider = lambda: fake
+        pr = _upload(c).json()["pr_number"]
+        with app.state.session_factory() as s:
+            lock = s.get(PathwayLock, 5636)
+            lock.held_by, lock.pr_number = "bob", pr + 100
+            s.commit()
+
+        for user in ("alice", "carol"):  # the review's submitter, and a stranger
+            current["user"] = user
+            o = c.get("/api/pathways/5636").json()["open_review"]
+            assert o == {
+                "pr_number": pr + 100,
+                "kind": None,
+                "status": None,
+                "status_label": None,
+                "yours": False,
+                "submitter": "bob",
+                "held_by": "bob",
+                "outcome": "locked",
+            }
+            refused = _upload(c)
+            assert refused.status_code == 409
+            assert refused.json()["detail"]["held_by"] == "bob"
+
+
+def test_a_lock_with_no_review_and_no_pull_request_yet_refuses(tmp_path):
+    app, current, fake = _app(tmp_path)
+    with TestClient(app) as c:
+        app.state.bot_client_provider = lambda: fake
+        with app.state.session_factory() as s:
+            now = utcnow()
+            s.add(PathwayLock(wpid=5636, held_by="bob", acquired_at=now,
+                              expires_at=now + timedelta(days=1), pr_number=None))
+            s.commit()
+
+        o = c.get("/api/pathways/5636").json()["open_review"]
+        assert o["outcome"] == "locked"
+        assert o["pr_number"] is None and o["status"] is None
+        assert o["submitter"] == "bob" and o["held_by"] == "bob"
+        refused = _upload(c)
+        assert refused.status_code == 409
+        assert refused.json()["detail"]["held_by"] == "bob"

@@ -2137,38 +2137,56 @@ def build_app(settings: Settings | None = None) -> FastAPI:
     def _open_review_on(request: Request, wpid: int, login: str) -> OpenReview | None:
         """The edit of this pathway already under review, and what an update upload would do.
 
-        Mirrors the update route rather than restating it: ``_update_precheck`` refuses while the
-        live review is past the point of taking a commit, and ``PathwayLockRegistry.acquire``
-        refuses while someone else holds the pathway; otherwise the submitter's own pull request
-        takes the upload as a new version (``own_pr``). Someone else's actionable review is
-        refused too, by the lock or, once that has expired, by the open-pull-request scan, which
-        finds their pull request. Reads the database only; no GitHub call.
+        Mirrors the update route rather than restating it, in the route's order:
+        ``_update_precheck`` refuses while the live review is past the point of taking a commit;
+        ``PathwayLockRegistry.acquire`` refuses while someone else holds the pathway, and refreshes
+        a lock the caller holds without scanning; otherwise the submitter's own pull request takes
+        the upload as a new version (``own_pr``), and someone else's actionable review is refused
+        by the open-pull-request scan, which finds their pull request. Reads the database only; no
+        GitHub call.
         """
         review = _curation(request).find_open_review_for_pathway(wpid)
         lock = request.app.state.locks.live(wpid)
-        if review is None and (lock is None or lock.held_by == login):
-            return None
+
+        def described(r, outcome: str, held_by: str | None = None) -> OpenReview:
+            return OpenReview(
+                pr_number=r.pr_number,
+                kind=r.kind,
+                status=r.status.value,
+                status_label=presentation(r.status.value).label,
+                yours=r.submitter == login,
+                submitter=r.submitter,
+                held_by=held_by,
+                outcome=outcome,
+            )
+
         if review is not None and review.status.value not in ACTIONABLE:
-            outcome = "wait"
-        elif lock is not None and lock.held_by != login:
-            outcome = "locked"
-        elif review is not None and review.submitter == login:
-            outcome = "revise"
-        else:
-            outcome = "locked"
-        return OpenReview(
-            pr_number=review.pr_number if review is not None else lock.pr_number,
-            kind=review.kind if review is not None else None,
-            status=review.status.value if review is not None else None,
-            status_label=(
-                presentation(review.status.value).label if review is not None else None
-            ),
-            yours=review is not None and review.submitter == login,
-            submitter=review.submitter if review is not None else lock.held_by,
-            # Who the refusal would name: the lock's holder when the lock is what refuses.
-            held_by=lock.held_by if outcome == "locked" and lock is not None else None,
-            outcome=outcome,
-        )
+            return described(review, "wait")
+        if lock is not None and lock.held_by != login:
+            # The lock refuses, so the message names its holder and its pull request. The review
+            # describes that edit only when it is the holder's own; when the scan failed open the
+            # two can disagree, and the review's pull request would be credited to the holder.
+            if (
+                review is not None
+                and review.submitter == lock.held_by
+                and lock.pr_number in (None, review.pr_number)
+            ):
+                return described(review, "locked", held_by=lock.held_by)
+            return OpenReview(
+                pr_number=lock.pr_number,
+                submitter=lock.held_by,
+                held_by=lock.held_by,
+                outcome="locked",
+            )
+        if review is None:
+            return None
+        if review.submitter == login:
+            return described(review, "revise")
+        if lock is not None:
+            # The caller holds the lock: ``acquire`` refreshes it without the scan, so the upload
+            # is not refused here.
+            return None
+        return described(review, "locked")
 
     # -- Curation dashboard (MVP-4) --------------------------------------------------------
 
