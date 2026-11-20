@@ -78,13 +78,21 @@ def refresh_stale_renders(
         try:
             if not preview.needs_rerender(pr):
                 continue
+            # Before either source: a redraw from disk that fails (or leaves no current stamp)
+            # would otherwise be tried again, and logged again, on every tick.
+            if backoff.get(pr, 0.0) > now:
+                continue
             if preview.source_path(pr, "after") is not None:
-                if preview.rerender_from_source(pr) is not None:
+                if (
+                    preview.rerender_from_source(pr) is not None
+                    and not preview.needs_rerender(pr)
+                ):
                     done += 1
+                    backoff.pop(pr, None)
+                else:
+                    backoff[pr] = now + _RETRY_AFTER_SECONDS
                 continue
             if github is None or fetched >= budget or not review.head_sha:
-                continue
-            if backoff.get(pr, 0.0) > now:
                 continue
             fetched += 1
             if _rerender_from_github(preview, github, review, content_repo, default_branch):

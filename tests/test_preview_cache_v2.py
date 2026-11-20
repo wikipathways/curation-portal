@@ -65,6 +65,81 @@ def test_rev_changes_with_the_drawing_and_only_then(tmp_path):
     assert svc.stamp(5)["rev"] != first
 
 
+def test_rev_changes_when_only_the_graph_does(tmp_path):
+    # A re-annotated Xref leaves the picture alone but changes the graph the viewer reads the
+    # identifier and link from. The graph is served immutable under ?rev=, so the rev must move.
+    svc = _svc(tmp_path)
+    svc.render_local(5, 5429, after_gpml=NEW, before_gpml=NEW)
+    svg = svc.svg_path(5, "after").read_bytes()
+    graph, rev = svc.graph(5, "after"), svc.stamp(5)["rev"]
+    reannotated = NEW.replace(b'ID="ENSG00000106546"', b'ID="ENSG00000999999"', 1)
+    assert reannotated != NEW
+    svc.render_local(5, 5429, after_gpml=reannotated)
+    assert svc.svg_path(5, "after").read_bytes() == svg  # same picture...
+    assert svc.graph(5, "after") != graph  # ...different graph...
+    assert svc.stamp(5)["rev"] != rev  # ...so a different URL
+    # An edited comment, likewise.
+    rev = svc.stamp(5)["rev"]
+    svc.render_local(5, 5429, after_gpml=reannotated.replace(
+        b"Ligand-activated basic", b"Ligand-activated, basic", 1))
+    assert svc.stamp(5)["rev"] != rev
+
+
+def test_concurrent_renders_of_one_pull_request_stay_consistent(tmp_path):
+    # The backfill thread and a request thread can render the same PR at once. Neither may fail
+    # a side it drew, and the stamp's rev must describe the files left on disk.
+    import threading
+
+    from app.preview.service import PreviewService
+
+    svc = _svc(tmp_path)
+    errors: list[BaseException] = []
+    states = []
+
+    def worker(gpml: bytes) -> None:
+        try:
+            for _ in range(5):
+                states.append(svc.render_local(40, 5429, after_gpml=gpml, before_gpml=NEW))
+        except BaseException as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    threads = [threading.Thread(target=worker, args=(g,)) for g in (NEW, REV, NEW, REV)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert not errors
+    assert all(s.status == "ready" and s.has_after for s in states)
+    out = tmp_path / "cache" / "40"
+    assert svc.stamp(40)["rev"] == PreviewService._rev(out)
+    assert not list(out.glob(".*.tmp"))
+
+
+def test_atomic_writes_to_one_path_from_two_threads_never_collide(tmp_path):
+    import threading
+
+    from app.preview.service import _write_atomic
+
+    target = tmp_path / "x.svg"
+    errors: list[BaseException] = []
+
+    def worker(data: bytes) -> None:
+        try:
+            for _ in range(300):
+                _write_atomic(target, data)
+        except BaseException as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    threads = [threading.Thread(target=worker, args=(b,)) for b in (b"a" * 4096, b"b" * 4096)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert not errors
+    assert target.read_bytes() in (b"a" * 4096, b"b" * 4096)
+    assert [p.name for p in tmp_path.iterdir()] == ["x.svg"]
+
+
 def test_a_2021_file_draws_instead_of_rendering_blank(tmp_path):
     svc = _svc(tmp_path)
     assert svc.render_local(8, 0, after_gpml=ZOO21).status == "ready"
@@ -291,6 +366,39 @@ def test_backfill_backs_off_a_review_it_cannot_fetch_and_never_raises(tmp_path):
                                  default_branch="main") == 0
     # No GitHub client: only disk redraws happen.
     assert refresh_stale_renders(svc, sf, None, content_repo="o/r", default_branch="main") == 0
+
+
+def test_backfill_backs_off_a_disk_redraw_that_does_not_take(tmp_path):
+    # A redraw from disk that fails, or leaves the stamp old, must wait like a failed fetch
+    # rather than run (and log) again on every tick.
+    sf = _session_factory(tmp_path)
+    svc = _svc(tmp_path)
+    _add(sf, pr_number=8, wpid=5429, head_sha="h8")
+    svc.render_local(8, 5429, after_gpml=REV)
+    st = svc.stamp(8)
+    st["renderer"] = 1
+    (tmp_path / "cache" / "8" / "render.json").write_text(json.dumps(st))
+
+    calls = []
+
+    def broken(pr):
+        calls.append(pr)
+        raise RecursionError("deep")
+
+    svc.rerender_from_source = broken
+    for _ in range(3):
+        assert refresh_stale_renders(svc, sf, None, content_repo="o/r",
+                                     default_branch="main") == 0
+    assert calls == [8]
+
+    # A redraw that returns but leaves no current stamp counts as failed too.
+    calls.clear()
+    svc._backfill_backoff.clear()
+    svc.rerender_from_source = lambda pr: calls.append(pr) or object()
+    for _ in range(3):
+        assert refresh_stale_renders(svc, sf, None, content_repo="o/r",
+                                     default_branch="main") == 0
+    assert calls == [8]
 
 
 # -- routes ------------------------------------------------------------------------------------

@@ -24,6 +24,8 @@ import hashlib
 import json
 import os
 import shutil
+import tempfile
+import threading
 import time
 from collections.abc import Container, Iterator
 from dataclasses import dataclass
@@ -44,10 +46,37 @@ def _write_atomic(path: Path, data: bytes) -> None:
 
     Matters once a drawing is served as immutable under its ``?rev=``: a browser that caught a
     half-written SVG would keep it for a year.
+
+    Each write gets its own temporary name: two renders of one pull request at once (the
+    backfill thread and a request thread) sharing one would replace each other's half-written
+    file, and one ``os.replace`` would then find nothing to move.
     """
-    tmp = path.with_name(f".{path.name}.tmp")
-    tmp.write_bytes(data)
-    os.replace(tmp, path)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+#: Every file served under a ``?rev=`` URL, and so cached as immutable: the rev must change
+#: whenever any of them does. A graph can change with the picture unchanged (a re-annotated Xref,
+#: an edited comment), and the viewer reads the identifier and link from the graph.
+_REV_FILES = (
+    "before.svg", "after.svg",
+    "before-graph.json", "after-graph.json",
+    "before-nodes.json", "after-nodes.json",
+    "diff.json",
+)
+
+#: Renders of one pull request are serialised on one of these, picked by number. A fixed set, so
+#: the locks never grow with the number of reviews; two numbers sharing a lock only wait.
+_RENDER_LOCKS = tuple(threading.Lock() for _ in range(64))
 
 #: How often the orphan sweep may run. It walks the cache directory and stats each entry, which
 #: is cheap but pointless to repeat: nothing it collects appears faster than reviews terminalise.
@@ -105,7 +134,33 @@ class PreviewService:
         ``before_gpml=None`` on an update that was rendered before (a revision) keeps comparing
         against the base it was first drawn with, which is on disk: the revise route does not
         fetch the base again, and dropping the comparison there lost the diff on every revision.
+
+        One render per pull request at a time: the backfill thread and a request thread can both
+        reach here for the same number, and interleaved writes would leave a stamp whose ``rev``
+        describes files other than the ones on disk, which are then served as immutable.
         """
+        with _RENDER_LOCKS[pr_number % len(_RENDER_LOCKS)]:
+            return self._render_local(
+                pr_number,
+                wpid,
+                after_gpml=after_gpml,
+                before_gpml=before_gpml,
+                submitter_note=submitter_note,
+                origin=origin,
+                head_sha=head_sha,
+            )
+
+    def _render_local(
+        self,
+        pr_number: int,
+        wpid: int,
+        *,
+        after_gpml: bytes,
+        before_gpml: bytes | None,
+        submitter_note: str | None,
+        origin: str,
+        head_sha: str | None,
+    ) -> PreviewState:
         out = self._cache_dir / str(pr_number)
         out.mkdir(parents=True, exist_ok=True)
         # 0 means "no id yet": a new pathway in pipeline mode.
@@ -116,7 +171,6 @@ class PreviewService:
         drawn_nodes: dict[str, list[dict]] = {}
         counts: dict[str, int | None] = {"before": None, "after": None}
         dialect: str | None = None
-        svgs: dict[str, bytes] = {}
         for side, gpml in (("before", before_gpml), ("after", after_gpml)):
             if gpml is None:
                 continue
@@ -140,7 +194,6 @@ class PreviewService:
             if side == "after" or dialect is None:
                 dialect = result.dialect
             drawn_nodes[side] = [h.as_dict() for h in result.hotspots]
-            svgs[side] = result.svg
             try:
                 _write_atomic(out / f"{side}.svg", result.svg)
             except OSError:
@@ -149,8 +202,8 @@ class PreviewService:
             # drawing they belong to, so a side that failed to render has nothing stale left
             # pointing at nothing.
             try:
-                (out / f"{side}-nodes.json").write_text(
-                    json.dumps(drawn_nodes[side]), encoding="utf-8"
+                _write_atomic(
+                    out / f"{side}-nodes.json", json.dumps(drawn_nodes[side]).encode("utf-8")
                 )
                 _write_atomic(
                     out / f"{side}-graph.json", json.dumps(result.graph).encode("utf-8")
@@ -183,12 +236,9 @@ class PreviewService:
             out,
             {
                 "renderer": RENDERER_VERSION,
-                # Changes whenever either drawing does, so a URL carrying it can be cached for
-                # good; the page always asks for the current one.
-                "rev": hashlib.sha256(
-                    b"%d|" % RENDERER_VERSION
-                    + svgs.get("before", b"") + b"|" + svgs.get("after", b"")
-                ).hexdigest()[:12],
+                # Changes whenever anything served under it does, so a URL carrying it can be
+                # cached for good; the page always asks for the current one.
+                "rev": self._rev(out),
                 "head_sha": head_sha,
                 "origin": origin,
                 "target_wpid": target_wpid,
@@ -203,6 +253,25 @@ class PreviewService:
             has_before=rendered["before"],
             has_after=rendered["after"],
         )
+
+    @staticmethod
+    def _rev(out: Path) -> str:
+        """A short hash of every file served under ``?rev=``, read back from disk.
+
+        Read back rather than collected while writing, so it describes what a browser will
+        actually get, including a side cleared by this render. Each file is framed by its name
+        and length, so moving bytes from one file to another changes it too.
+        """
+        h = hashlib.sha256(b"renderer %d\n" % RENDERER_VERSION)
+        for name in _REV_FILES:
+            try:
+                data = (out / name).read_bytes()
+            except OSError:
+                h.update(b"%s -\n" % name.encode())
+                continue
+            h.update(b"%s %d\n" % (name.encode(), len(data)))
+            h.update(data)
+        return h.hexdigest()[:12]
 
     @staticmethod
     def _clear_side(out: Path, side: str) -> None:
@@ -342,7 +411,7 @@ class PreviewService:
                 data["meta"] = diff_metadata(
                     parse_curation_metadata(before_gpml), parse_curation_metadata(after_gpml)
                 )
-            path.write_text(json.dumps(data), encoding="utf-8")
+            _write_atomic(path, json.dumps(data).encode("utf-8"))
         except OSError:
             pass  # the summary is an enhancement; never fail a render on it
 
@@ -365,7 +434,7 @@ class PreviewService:
         try:
             data = parse_curation_metadata(after_gpml).as_dict()
             data["submitter_note"] = (submitter_note or "").strip()
-            (out / "metadata.json").write_text(json.dumps(data), encoding="utf-8")
+            _write_atomic(out / "metadata.json", json.dumps(data).encode("utf-8"))
         except (OSError, ValueError):
             pass  # the panel is cosmetic; never fail the write path on it
 
@@ -415,7 +484,7 @@ class PreviewService:
                 origin=origin,
                 target_wpid=target_wpid,
             )
-            (out / "quality.json").write_text(json.dumps(report.as_dict()), encoding="utf-8")
+            _write_atomic(out / "quality.json", json.dumps(report.as_dict()).encode("utf-8"))
         except (OSError, ValueError):
             pass  # the panel is an aid; never fail a render on it
 
