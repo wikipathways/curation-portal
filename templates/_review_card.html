@@ -326,11 +326,18 @@
       <p class="diff-summary__line"><strong>Title, description, references, tags:</strong> unchanged.</p>
       {% endif %}
     {% endif %}
-    {# Interaction ends on the new version that attach to nothing (content.interactions_connected).
-       The button turns on the after viewer's own "Show unconnected line ends" (viewer.js). #}
-    {% if r.preview.after_loose_ends %}
-    <p class="diff-summary__line diff-summary__line--ends"><strong>Unconnected line ends:</strong> {{ r.preview.after_loose_ends }}
-      <button type="button" class="btn btn--ghost btn--sm diff-summary__show-ends" data-show-ends="viewer-{{ r.pr_number }}-after">Show them</button>
+    {# Interaction ends on the new version that attach to nothing (content.interactions_connected),
+       and how many of them this edit adds: the checklist only holds the edit to those. The button
+       turns on the after viewer's own "Show unconnected line ends" (viewer.js). #}
+    {% set ends = r.preview.after_loose_ends %}
+    {% if ends and ends.total %}
+    <p class="diff-summary__line diff-summary__line--ends"><strong>Unconnected line ends:</strong> {{ ends.total }}
+      {%- if ends.new is not none and ends.new < ends.total %}
+        {%- if ends.new == 0 %} ({{ 'it was' if ends.total == 1 else 'all were' }} already in the published version)
+        {%- else %} ({{ ends.new }} new, {{ ends.total - ends.new }} already in the published version)
+        {%- endif %}
+      {%- endif %}
+      <button type="button" class="btn btn--ghost btn--sm diff-summary__show-ends" data-show-ends="viewer-{{ r.pr_number }}-after" aria-label="Show them: the unconnected line ends on the new version">Show them</button>
     </p>
     {% endif %}
     {% if r.preview.diff.changed %}

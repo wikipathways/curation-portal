@@ -1010,13 +1010,23 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             "meta": diff.get("meta") if isinstance(diff.get("meta"), dict) else None,
         }
 
-    def _loose_end_count(metadata: dict | None) -> int | None:
+    def _loose_end_count(metadata: dict | None) -> dict | None:
         """How many interaction ends on the after side attach to nothing, from the metadata
-        sidecar, or None for a cache written before they were counted."""
+        sidecar, and how many of them the version an update replaces did not have (``new``,
+        None when the sidecar holds no base). None for a cache written before they were counted.
+        """
         if not isinstance(metadata, dict) or not isinstance(metadata.get("interaction_count"), int):
             return None
         ends = metadata.get("loose_ends")
-        return len(ends) if isinstance(ends, list) else None
+        if not isinstance(ends, list):
+            return None
+        before = metadata.get("before_loose_ends")
+        new = None
+        if isinstance(before, list):
+            from app.quality import split_loose_ends
+
+            new = len(split_loose_ends(ends, before)[0])
+        return {"total": len(ends), "new": new}
 
     def _review_view(request: Request, r) -> dict:
         """The per-review dict the templates consume (design §4.5) — enriched beyond the API model.

@@ -701,10 +701,33 @@ def _end_key(end: object) -> tuple[str, str, str]:
     """What identifies one loose end across two versions of a pathway.
 
     The interaction's GraphId and which end. An interaction with no GraphId (a hand-built file)
-    has nothing stable to match on, so the label its other end is attached to stands in.
+    has nothing stable to match on, so the label its other end is attached to stands in. Takes a
+    ``LooseEnd`` or the dict a cached metadata sidecar holds.
     """
-    gid = getattr(end, "interaction", "") or ""
-    return (gid, getattr(end, "end", "") or "", "" if gid else getattr(end, "attached", "") or "")
+
+    def get(name: str) -> str:
+        v = end.get(name) if isinstance(end, dict) else getattr(end, name, "")
+        return v if isinstance(v, str) else ""
+
+    gid = get("interaction")
+    return (gid, get("end"), "" if gid else get("attached"))
+
+
+def split_loose_ends(after: list, before: list) -> tuple[list, list]:
+    """An update's loose ends, as (new, already there): ``after``'s ends that ``before`` did not
+    have, and those it did. Matched by interaction and end (``_end_key``), each of ``before``'s
+    ends answering for one of ``after``'s at most. ``LooseEnd``s or sidecar dicts."""
+    was = Counter(_end_key(e) for e in before)
+    new: list = []
+    old: list = []
+    for e in after:
+        key = _end_key(e)
+        if was[key]:
+            was[key] -= 1
+            old.append(e)
+        else:
+            new.append(e)
+    return new, old
 
 
 def _loose_phrase(ends: list) -> str:
@@ -783,20 +806,19 @@ def _check_interactions_connected(s: Subject) -> tuple[str, str] | None:
         and s.before is not None
         and isinstance(getattr(s.before, "interaction_count", None), int)
     ):
-        was = Counter(_end_key(e) for e in getattr(s.before, "loose_ends", []) or [])
-        new = []
-        for e in loose:
-            key = _end_key(e)
-            if was[key]:
-                was[key] -= 1
-                old.append(e)
-            else:
-                new.append(e)
-        loose = new
+        loose, old = split_loose_ends(loose, list(getattr(s.before, "loose_ends", []) or []))
     already = (
         f" {_ends_word(len(old))} already loose in the version this edit replaces: "
         f"{_loose_phrases(old)}. Worth fixing while you are at it."
         if old
+        else ""
+    )
+    # An update graded without its base (the submit form's pre-flight has only the file): every
+    # loose end counts here, though the review, which has the base, passes those already there.
+    unknown_base = (
+        " Without the published version to compare against, this check cannot tell which were "
+        "there before; only ends this edit adds count."
+        if s.kind == "update" and not isinstance(getattr(s.before, "interaction_count", None), int)
         else ""
     )
     if loose:
@@ -805,7 +827,7 @@ def _check_interactions_connected(s: Subject) -> tuple[str, str] | None:
             f"{_ends_word(len(loose))} not attached to anything: {_loose_phrases(loose)}. In "
             "the drawing it may look connected, but the pathway's data does not link the two, so "
             "the interaction is lost to anyone analysing it. In PathVisio, drag the end onto the "
-            "node until the node is highlighted." + already,
+            "node until the node is highlighted." + already + unknown_base,
         )
     if old:
         return (Severity.PASS.value, "This edit leaves no new loose interaction ends." + already)

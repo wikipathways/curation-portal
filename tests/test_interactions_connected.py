@@ -88,15 +88,62 @@ def test_the_fixed_upload_passes():
     )
 
 
+#: Ends on things the renderer does not draw, which no fixture has: a data node, label or shape
+#: without placeable ``<Graphics>``, a state without them, a state on such a node, an anchor on a
+#: line too short to draw. (name, body, loose ends expected)
+_UNDRAWN = [
+    (
+        "node without Graphics",
+        '<DataNode TextLabel="D" GraphId="d" Type="GeneProduct"/>'
+        + _line("Interaction", "i1", 'X="140" Y="100" GraphRef="a"', 'X="300" Y="50" GraphRef="d"'),
+        1,
+    ),
+    (
+        "label without a width",
+        '<Label TextLabel="L" GraphId="l">'
+        '<Graphics CenterX="300" CenterY="50" Height="20"/></Label>'
+        + _line("Interaction", "i1", 'X="140" Y="100" GraphRef="a"', 'X="300" Y="50" GraphRef="l"'),
+        1,
+    ),
+    (
+        "states placed and not",
+        '<State GraphRef="b" GraphId="s1" TextLabel="P"><Graphics RelX="1" RelY="0" Width="10" '
+        'Height="10"/></State><State GraphRef="b" GraphId="s2" TextLabel="P"/>'
+        '<State GraphRef="nowhere" GraphId="s3" TextLabel="P"><Graphics RelX="1" RelY="0" '
+        'Width="10" Height="10"/></State>'
+        + "".join(
+            _line(
+                "Interaction", f"i{k}", 'X="140" Y="100" GraphRef="a"',
+                f'X="440" Y="100" GraphRef="s{k}"',
+            )
+            for k in (1, 2, 3)
+        ),
+        2,
+    ),
+    (
+        "anchor on a one-point line",
+        '<Interaction GraphId="short"><Graphics><Point X="1" Y="1"/>'
+        '<Anchor GraphId="anc" Position="0.5"/></Graphics></Interaction>'
+        + _line("Interaction", "i1", 'X="140" Y="100" GraphRef="a"', 'X="1" Y="1" GraphRef="anc"'),
+        1,
+    ),
+]
+
+
 def test_the_count_agrees_with_the_viewer_legend():
     # The viewer's "Show unconnected line ends (N)" reads the renderer's count; the rule must
     # never say a different number about the same file.
-    for path in sorted(FIXTURES.glob("*.gpml")):
-        if path.name.startswith("hostile"):
-            continue
-        data = path.read_bytes()
+    cases = [
+        (path.name, path.read_bytes(), None)
+        for path in sorted(FIXTURES.glob("*.gpml"))
+        if not path.name.startswith("hostile")
+    ] + [(name, _gpml_2013a(body).encode(), n) for name, body, n in _UNDRAWN]
+    for name, data, expected in cases:
         stats = render_gpml_full(data).graph["stats"]
-        assert len(parse_curation_metadata(data).loose_ends) == stats["dangling_ends"], path.name
+        loose = len(parse_curation_metadata(data).loose_ends)
+        assert loose == stats["dangling_ends"], name
+        if expected is not None:
+            assert loose == expected, name
 
 
 def test_an_end_on_an_anchor_or_a_group_is_attached():
@@ -132,6 +179,73 @@ def test_the_free_start_of_an_arrow_is_named_by_where_it_points():
     )
     f = _finding(_gpml_2013a(body))
     assert "the arrow to B starts near C" in f.detail
+
+
+def test_an_unfinished_arrow_is_not_said_to_end_near_a_distant_node():
+    # A short arrow out of A that stops right beside A: B, 210px off, is not where it points.
+    stub = _line("Interaction", "i1", 'X="140" Y="100" GraphRef="a"', 'X="150" Y="100"')
+    f = _finding(_gpml_2013a(stub))
+    assert "the arrow from A ends on nothing" in f.detail
+    assert "near B" not in f.detail
+    # Dropped short of B's box by 25px is near it; by 45px is not.
+    short = _line("Interaction", "i1", 'X="140" Y="100" GraphRef="a"', 'X="335" Y="100"')
+    assert "the arrow from A ends near B" in _finding(_gpml_2013a(short)).detail
+    shorter = _line("Interaction", "i1", 'X="140" Y="100" GraphRef="a"', 'X="315" Y="100"')
+    assert "the arrow from A ends on nothing" in _finding(_gpml_2013a(shorter)).detail
+
+
+_NOISY_LABEL = (
+    '<Label TextLabel="Line one | col&#10;line two @octocat, and a good deal more besides" '
+    'GraphId="lab"><Graphics CenterX="400" CenterY="400" Width="300" Height="60"/></Label>'
+)
+
+
+def test_a_label_is_named_on_one_line_and_cut_short():
+    body = _NOISY_LABEL + _line(
+        "Interaction", "i1", 'X="140" Y="100" GraphRef="a"', 'X="400" Y="400"'
+    )
+    (end,) = parse_curation_metadata(_gpml_2013a(body)).loose_ends
+    assert end.near == "Line one | col line two @octocat, and a\u2026"
+    assert len(end.near) <= 40
+
+
+def test_a_label_in_the_hint_cannot_break_the_mirror_table_or_ping_anyone():
+    from app.review.service import render_mirror_comment
+
+    body = _NOISY_LABEL + _line(
+        "Interaction", "i1", 'X="140" Y="100" GraphRef="a"', 'X="400" Y="400"'
+    )
+    meta = parse_curation_metadata(_gpml_2013a(body))
+
+    class _Review:
+        pr_number = 3
+        wpid_str = "WP0001"
+        kind = "new"
+        submitter = "bob"
+        assigned_curator = None
+        submitter_note = ""
+        approved_by = None
+        decision_note = None
+        checklist = build_checklist(metadata=meta, kind="new")
+
+        class status:
+            value = "open"
+
+    _Review.checklist[[i["key"] for i in _Review.checklist].index("interactions_connected")][
+        "note"
+    ] = "Asked @octocat |\nabout it; mail a@b.org"
+    comment = render_mirror_comment(
+        _Review(), "wikipathways/sandbox-wp-db", quality=inspect_gpml(_gpml_2013a(body))
+    )
+    row = next(x for x in comment.splitlines() if x.startswith("| Interactions are connected"))
+    assert "@octocat" not in comment
+    assert "@\u200boctocat" in row
+    assert "Line one \\| col line two" in row
+    assert "Asked @\u200boctocat \\| about it; mail a@b.org" in row  # an address is not a mention
+    # Header, rule and one row per item: the label opened no extra column or row.
+    table = [x for x in comment.splitlines() if x.startswith("| ") and "Notes" not in x]
+    cells = [len(re.split(r"(?<!\\)\|", x)) for x in table[: len(_Review.checklist)]]
+    assert set(cells) == {5}
 
 
 def test_an_arrow_attached_at_neither_end_and_the_count_beyond_three():
@@ -284,16 +398,33 @@ def test_the_hint_on_an_update_follows_the_edit_and_pipeline_mode_keeps_it():
 # ---- where it shows ----------------------------------------------------------------------------
 
 
-def _update_app(tmp_path):
+def _update_app(tmp_path, base: bytes | None = None):
     settings = _settings(database_url=f"sqlite:///{tmp_path / 'reg.db'}")
     repo, branch = settings.content_repo, settings.default_branch
     path = f"{repo}#pathways/WP5430/WP5430.gpml"
     fake = FakeGitHubClient(
         default_branches={f"{repo}#{branch}": "basesha"},
         existing_files={path: "oldsha"},
-        existing_contents={path: _before().decode()},
+        existing_contents={path: (base or _before()).decode()},
     )
     return _authed_app(tmp_path, curators=["curator"], fake=fake)
+
+
+def _upload(c, current, gpml: bytes) -> int:
+    current["user"] = "alice"
+    r = c.post(
+        "/api/pathways/5430/update",
+        files={"file": ("rev.gpml", io.BytesIO(gpml), "application/xml")},
+    )
+    assert r.status_code == 201, r.text
+    return r.json()["pr_number"]
+
+
+def _ends_line(page: str) -> str:
+    page = re.sub(r"\s+", " ", page)
+    m = re.search(r"<strong>Unconnected line ends:</strong>(.*?)<button", page)
+    assert m, "no 'Unconnected line ends' line on the card"
+    return m.group(1).strip()
 
 
 def test_the_preflight_shows_it_as_worth_a_look(tmp_path):
@@ -309,6 +440,23 @@ def test_the_preflight_shows_it_as_worth_a_look(tmp_path):
     f = next(x for x in r.json()["quality"]["findings"] if x["id"] == RULE)
     assert f["severity"] == "warn"
     assert "the arrow from ARNT ends near NQO1" in f["detail"]
+    # The form has the file but not the published version, which the review will compare
+    # against: it says so rather than contradict the review over ends that were there before.
+    assert f["detail"].endswith(
+        "Without the published version to compare against, this check cannot tell which were "
+        "there before; only ends this edit adds count."
+    )
+
+
+def test_the_preflight_for_a_new_pathway_does_not_mention_a_published_version(tmp_path):
+    app, _ = _authed_app(tmp_path)
+    with TestClient(app) as c:
+        r = c.post(
+            "/api/validate", files={"file": ("p.gpml", io.BytesIO(DANGLING), "application/xml")}
+        )
+    f = next(x for x in r.json()["quality"]["findings"] if x["id"] == RULE)
+    assert f["severity"] == "warn"
+    assert "published version" not in f["detail"]
 
 
 def test_an_update_card_counts_the_loose_ends_and_offers_to_show_them(tmp_path):
@@ -325,8 +473,9 @@ def test_an_update_card_counts_the_loose_ends_and_offers_to_show_them(tmp_path):
         page = re.sub(r"\s+", " ", c.get(f"/dashboard/{pr}").text)
         review = c.get(f"/api/reviews/{pr}").json()
 
-    assert "<strong>Unconnected line ends:</strong> 1" in page
+    assert _ends_line(page) == "1"  # new, so nothing to add
     assert f'data-show-ends="viewer-{pr}-after"' in page
+    assert 'aria-label="Show them: the unconnected line ends on the new version"' in page
     assert f'id="viewer-{pr}-after"' in page
     # The checklist the curator works from carries the same finding, as a suggestion.
     item = _item(review["checklist"])
@@ -355,3 +504,107 @@ def test_the_viewer_exposes_show_ends_without_inline_handlers():
     card = (Path(__file__).parent.parent / "templates" / "_review_card.html").read_text()
     line = next(x for x in card.splitlines() if "data-show-ends" in x)
     assert not re.search(r"\son[a-z]+=", line)
+
+
+def test_an_update_card_says_when_the_loose_ends_were_there_before(tmp_path):
+    # The published version already has the loose ARNT arrow and the edit leaves it: the
+    # checklist suggests Pass, and the card must not read as if this edit made it.
+    app, current = _update_app(tmp_path, base=DANGLING)
+    with TestClient(app) as c:
+        pr = _upload(c, current, DANGLING)
+        _login(c, "curator")
+        page = c.get(f"/dashboard/{pr}").text
+        review = c.get(f"/api/reviews/{pr}").json()
+    assert _ends_line(page) == "1 (it was already in the published version)"
+    assert _item(review["checklist"])["suggested"] == "pass"
+
+
+def test_an_update_card_separates_new_loose_ends_from_old_ones(tmp_path):
+    # The edit keeps the old loose arrow and detaches CYP1A1 from i003: one new, one old.
+    detached = DANGLING.replace(
+        b'GraphRef="d006" RelX="0.0" RelY="-1.0"', b'RelX="0.0" RelY="-1.0"'
+    )
+    assert detached != DANGLING
+    app, current = _update_app(tmp_path, base=DANGLING)
+    with TestClient(app) as c:
+        pr = _upload(c, current, detached)
+        _login(c, "curator")
+        page = c.get(f"/dashboard/{pr}").text
+    assert _ends_line(page) == "2 (1 new, 1 already in the published version)"
+
+
+def test_a_re_upload_re_derives_the_hint_and_keeps_the_curators_answer(tmp_path):
+    # The update route reuses the pull request, so `register` re-merges the checklist with the
+    # base metadata it re-reads: the fix must turn the suggestion round, and what the curator
+    # answered by hand must survive it.
+    app, current = _update_app(tmp_path)
+    with TestClient(app) as c:
+        pr = _upload(c, current, DANGLING)
+        first = _item(c.get(f"/api/reviews/{pr}").json()["checklist"])
+        assert (first["state"], first["suggested"]) == ("pending", "fail")
+        current["user"] = "curator"
+        r = c.post(
+            f"/api/reviews/{pr}/checklist",
+            data={"key": "interactions_connected", "state": "fail", "note": "NQO1 arrow loose"},
+        )
+        assert r.status_code == 200, r.text
+
+        assert _upload(c, current, FIXED) == pr
+        after = _item(c.get(f"/api/reviews/{pr}").json()["checklist"])
+        _login(c, "curator")
+        page = c.get(f"/dashboard/{pr}").text
+    assert after["suggested"] == "pass"
+    assert after["hint"] == "All 7 interactions are attached at both ends."
+    assert (after["state"], after["note"]) == ("fail", "NQO1 arrow loose")
+    assert "Unconnected line ends" not in page
+
+
+def test_an_adopted_pull_request_gets_the_hint_and_re_derives_it_on_a_new_commit(
+    session_factory, tmp_path
+):
+    from app.curators import ConfigCurators
+    from app.preview import PreviewService
+    from app.review.adoption import AdoptionService
+    from app.review.service import CurationService
+
+    repo, path = "wikipathways/sandbox-wp-db", "pathways/WP5430/WP5430.gpml"
+    gh = FakeGitHubClient()
+    gh.existing_contents[(repo, path)] = _before().decode()
+    gh.seed_foreign_pr(
+        repo,
+        93,
+        author="contributor",
+        title="Contribution: Update WP5430",
+        head_branch="WP5430_contributor_20261120-101500",
+        head_sha="a" * 40,
+        files=[(path, "modified", DANGLING.decode())],
+    )
+    previews = PreviewService(cache_dir=tmp_path / "preview-cache")
+    curation = CurationService(
+        session_factory,
+        gh,
+        repo=repo,
+        curators=ConfigCurators({"curator"}),
+        previews=previews,
+        publish_mode="pipeline",
+    )
+    svc = AdoptionService(
+        github=gh,
+        previews=previews,
+        curation=curation,
+        content_repo=repo,
+        default_branch="main",
+    )
+
+    assert svc.adopt(93).adopted
+    item = _item(curation.get(93).checklist)
+    assert (item["state"], item["suggested"]) == ("pending", "fail")
+    assert "the arrow from ARNT ends near NQO1" in item["hint"]
+    curation.set_checklist_item(93, "interactions_connected", "fail", "the NQO1 arrow")
+
+    gh.pull_meta[93]["head_sha"] = "b" * 40
+    gh.commit_contents[(repo, "b" * 40, path)] = FIXED.decode()
+    assert svc.adopt(93).refreshed
+    item = _item(curation.get(93).checklist)
+    assert item["suggested"] == "pass"
+    assert (item["state"], item["note"]) == ("fail", "the NQO1 arrow")

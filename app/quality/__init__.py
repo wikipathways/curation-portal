@@ -6,8 +6,15 @@ in ``app/`` should reach past it into ``rules``.
 """
 from __future__ import annotations
 
-from app.quality.report import EMPTY, Finding, QualityReport, Severity, worst
-from app.quality.rules import RULES, Subject, build_subject, checklist_keys, evaluate
+from app.quality.report import EMPTY, Finding, QualityReport, Severity, table_cell, worst
+from app.quality.rules import (
+    RULES,
+    Subject,
+    build_subject,
+    checklist_keys,
+    evaluate,
+    split_loose_ends,
+)
 
 __all__ = [
     "EMPTY",
@@ -23,6 +30,8 @@ __all__ = [
     "evaluate",
     "inspect_gpml",
     "inspect_metadata",
+    "split_loose_ends",
+    "table_cell",
     "worst",
 ]
 

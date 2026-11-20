@@ -21,6 +21,7 @@ from app.curators import CuratorRegistry
 from app.github import GitHubClient, GitHubError
 from app.locks import PathwayLockRegistry
 from app.models import Review, ReviewStatus, utcnow
+from app.quality import table_cell
 from app.review.audit import as_actor, default_actor
 from app.review.checklist import (
     ChecklistState,
@@ -242,8 +243,12 @@ def render_mirror_comment(
         req = " (required)" if item.get("required") else ""
         state = _PLAIN_STATE.get(item.get("state", "pending"), item.get("state", "pending"))
         # The curator's own note, then what the automation found. The hint is labelled as such
-        # so a GitHub reader cannot take "Suggests Pass" for the state column's answer.
-        notes = [f"_{text}_" for text in (item.get("note") or "", hint_text(item)) if text]
+        # so a GitHub reader cannot take "Suggests Pass" for the state column's answer. Both are
+        # escaped for the table: a hint quotes labels from the submitted file, which can hold a
+        # line break, a "|" or an @handle.
+        notes = [
+            f"_{table_cell(text)}_" for text in (item.get("note") or "", hint_text(item)) if text
+        ]
         lines.append(f"| {item['label']}{req} | {state} | {' '.join(notes)} |")
     if quality is not None and quality.findings:
         lines += ["", quality.to_markdown(heading="What the portal measured")]
