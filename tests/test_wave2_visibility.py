@@ -191,11 +191,24 @@ def test_a_finished_workflow_marks_the_review_with_its_head_due(tmp_path):
         assert _last_checked(app, pr) is None
 
 
-def test_a_workflow_that_has_not_finished_is_ignored(tmp_path):
-    app, _ = _authed_app(tmp_path, webhook_secret="whsec")
+def test_a_workflow_that_starts_marks_its_review_due_too(tmp_path):
+    """``requested`` used to be ignored. The publish tracker shows the publish workflow running,
+    which is only known if the loop looks while it runs, so a start is news as well."""
+    app, current = _authed_app(tmp_path, webhook_secret="whsec")
     with TestClient(app) as c:
-        r = _hook(c, "workflow_run", {"action": "requested", "workflow_run": {}})
-        assert r.json()["ignored"] == "action:requested"
+        current["user"] = "bob"
+        pr = _submit(c)
+        app.state.worker.tick(github=app.state._fake)
+        with app.state.session_factory() as s:
+            head = s.get(Review, pr).head_sha
+        r = _hook(
+            c,
+            "workflow_run",
+            {"action": "requested", "workflow_run": {"head_sha": head, "pull_requests": []}},
+        )
+        assert r.json()["marked"] == 1
+        r = _hook(c, "workflow_run", {"action": "deleted", "workflow_run": {}})
+        assert r.json()["ignored"] == "action:deleted"
 
 
 # -- a change request made on GitHub -------------------------------------------------------

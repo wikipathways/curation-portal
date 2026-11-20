@@ -480,7 +480,9 @@ def test_the_repositorys_own_artifacts_are_shown_when_it_produced_any(tmp_path, 
         from app.pipeline.drafts import DraftArtifacts
 
         slug = f"WP0__PR{pr}"
-        app.state.drafts.fetch = lambda s: DraftArtifacts(  # type: ignore[assignment]
+        # The page reads the disk copy the background loop keeps (`cached`); the loop reads
+        # `fetch`. Both stand in for the site here.
+        app.state.drafts.cached = app.state.drafts.fetch = lambda s: DraftArtifacts(  # type: ignore[assignment]
             slug=slug,
             available=True,
             datanodes=[{"Label": "IRS1", "Identifier": "3667"}],
@@ -542,7 +544,8 @@ def test_a_publish_failure_still_offers_the_curator_something_to_do(tmp_path):
         _pass_every_required_item(client, pr)
         client.post(f"/api/reviews/{pr}/approve")
         fake.simulate_3a(REPO, pr, wpid=None)
-        client.get("/dashboard?status=publish_failed")
+        # The loop notices the close; pages no longer reconcile on load.
+        app.state.worker.tick(github=fake)
 
         page = client.get(f"/dashboard/{pr}").text
 
@@ -651,6 +654,7 @@ def test_a_publish_workflow_that_never_started_is_visible_on_the_card(tmp_path):
         client.post(f"/api/reviews/{pr}/approve")
         # Approved, and the repository's publish workflow died without announcing anything.
         fake.record_workflow_run(REPO, "3a_approved_pull_request.yml", conclusion="failure")
+        app.state.worker.tick(github=fake)
         page = client.get(f"/dashboard/{pr}").text
 
     assert "The last publish run in" in page
@@ -689,6 +693,7 @@ def test_the_repositorys_own_verdict_is_shown_beside_the_apps_prediction(tmp_pat
             ' "description": "review", "nodes": "review"} -->'
         )
         fake.record_workflow_run(REPO, "1_on_pull_request.yml", conclusion="success")
+        app.state.worker.tick(github=fake)
         page = client.get(f"/dashboard/{pr}").text
 
     assert f"{REPO} said: review required" in page

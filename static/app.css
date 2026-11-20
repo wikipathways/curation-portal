@@ -1654,3 +1654,36 @@ a.pager__step:hover { background: var(--surface); border-color: var(--moss); }
 .db-checks__test { font-family: var(--font-mono); font-size: 0.78rem; color: var(--ink-muted); }
 
 .consent { margin: 0.2rem 0 0.8rem; font-size: 0.82rem; color: var(--ink-muted); }
+
+/* ---------- refresh, freshness and the publish tracker (refresh.js, _publish_tracker.html) ---------- */
+.page-head { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
+.review-card__fresh { margin-left: auto; display: inline-flex; align-items: center; gap: 0.5rem; }
+.review-card__fresh + .review-card__expand { margin-left: 0; }
+.review-card__checked { color: var(--ink-faint); font-size: 0.8rem; white-space: nowrap; }
+.review-card[aria-busy="true"] .review-card__refresh { opacity: 0.6; cursor: progress; }
+.review-moved { margin: 0 0 1rem; padding: 0.7rem 0.9rem; border: 1px dashed var(--line-strong); border-radius: var(--radius-m); background: var(--surface-2); color: var(--ink-muted); font-size: 0.9rem; }
+
+.tracker { margin: 0 0 1.1rem; padding: 0.7rem 0.9rem; border: 1px solid var(--line); border-radius: var(--radius-m); background: var(--surface); }
+.tracker__title { margin: 0 0 0.5rem; font-size: 0.95rem; }
+.tracker__stages { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.35rem; }
+.tracker__stage { display: grid; grid-template-columns: 1.4rem 9rem 6.5rem 1fr; align-items: baseline; gap: 0.5rem; font-size: 0.88rem; }
+.tracker__mark { display: inline-flex; justify-content: center; width: 1.2rem; height: 1.2rem; border-radius: 50%; font-size: 0.75rem; line-height: 1.2rem; border: 1.5px solid var(--line-strong); color: var(--ink-muted); }
+.tracker__label { font-weight: 600; }
+.tracker__state { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.03em; color: var(--ink-muted); }
+.tracker__detail { color: var(--ink-muted); overflow-wrap: anywhere; }
+.tracker__detail time { margin-left: 0.3rem; color: var(--ink-faint); }
+.tracker__detail a { margin-left: 0.4rem; }
+.tracker__stage--done .tracker__mark { background: var(--wp-green-tint); border-color: var(--wp-green); color: var(--wp-green-strong); }
+.tracker__stage--active .tracker__mark { background: var(--moss-tint); border-color: var(--moss); color: var(--moss); border-style: dashed; }
+.tracker__stage--failed .tracker__mark { background: var(--brick-tint); border-color: var(--brick); color: var(--brick); }
+.tracker__stage--unknown .tracker__mark { background: var(--amber-tint); border-color: var(--amber); color: var(--amber); }
+.tracker__stage--failed .tracker__state { color: var(--brick); }
+.tracker__stage--active .tracker__state { color: var(--moss); }
+@media (max-width: 640px) {
+  .tracker__stage { grid-template-columns: 1.4rem 1fr auto; }
+  .tracker__detail { grid-column: 2 / -1; }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .tracker__stage--active .tracker__mark { animation: tracker-pulse 1.6s ease-in-out infinite; }
+}
+@keyframes tracker-pulse { 50% { opacity: 0.45; } }

@@ -3,7 +3,11 @@
 {% from "_review_card.html" import review_card with context %}
 
 {% block content %}
-<h1>{% if mine %}Your submissions{% elif assigned %}Assigned to you{% else %}Curation queue{% endif %}</h1>
+<div class="page-head">
+  <h1>{% if mine %}Your submissions{% elif assigned %}Assigned to you{% else %}Curation queue{% endif %}</h1>
+  {# Re-reads this page and swaps it in without a reload, keeping the scroll position (refresh.js). #}
+  {% if login %}<button type="button" class="btn btn--ghost btn--sm" data-refresh-page>Refresh</button>{% endif %}
+</div>
 <p class="lede">
   {% if mine %}Every pathway you have submitted through this portal, in whatever state it reached.
   {% elif assigned %}Every review you lead that is not finished yet, whatever state it is in.
@@ -80,7 +84,10 @@
       {% endif %}
     </div>
   {% else %}
-    <div class="review-list">
+    {# data-queue-status: a card whose status leaves this tab after an action collapses with
+       "Moved to …" instead of sitting in the wrong list. Empty on Mine and Assigned, which
+       show every state. #}
+    <div class="review-list" data-queue-status="{{ status or '' }}">
       {% for r in reviews %}
         {{ review_card(r, is_curator, curators) }}
       {% endfor %}

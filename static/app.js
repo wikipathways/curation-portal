@@ -624,6 +624,17 @@
 
   document.querySelectorAll('.review-card').forEach(recomputeApprove);
 
+  // After an action, redraw just this card from the server (refresh.js) rather than reloading
+  // the page: the scroll position, the other cards and the diagram's zoom all stay put. Falls
+  // back to a reload only if the card cannot be fetched, so the page never shows a stale state.
+  function refreshCard(card) {
+    if (window.WPRefresh && card && card.isConnected) {
+      return window.WPRefresh.card(card).catch(function () { location.reload(); });
+    }
+    location.reload();
+    return Promise.resolve();
+  }
+
   document.addEventListener('click', function (e) {
     var chip = e.target.closest('.chip-btn');
     if (chip) {
@@ -674,7 +685,7 @@
           toast(PIPELINE_MODE
             ? 'Approved. The repository assigns the WPID and publishes it from here.'
             : 'Approved and merged.', 'success');
-          setTimeout(function () { location.reload(); }, 700);
+          refreshCard(card2);
         })
         .catch(function () {
           approveBtn.disabled = false;
@@ -712,7 +723,7 @@
             return;
           }
           toast('Submission rejected.', 'success');
-          setTimeout(function () { location.reload(); }, 700);
+          refreshCard(cardJ);
         })
         .catch(function () {
           rejectSend.disabled = false;
@@ -744,7 +755,7 @@
             return;
           }
           toast('Recorded as WP' + digits + '.', 'success');
-          setTimeout(function () { location.reload(); }, 700);
+          refreshCard(cardW);
         })
         .catch(function () {
           recordBtn.disabled = false;
@@ -769,7 +780,7 @@
         .then(function (res) {
           if (res.ok) {
             toast('Revision committed onto pull request #' + res.body.pr_number + '.', 'success');
-            setTimeout(function () { location.reload(); }, 900);
+            refreshCard(cardR);
             return;
           }
           // 422 carries the per-reason validation list; anything else has a plain detail string.
@@ -800,7 +811,7 @@
           sendBtn.textContent = 'Send request';
           if (!res.ok) { toast(describeError(res.status, res.body), 'error'); return; }
           toast('Changes requested.', 'success');
-          setTimeout(function () { location.reload(); }, 600);
+          refreshCard(card3);
         })
         .catch(function () {
           sendBtn.disabled = false;
@@ -1382,6 +1393,12 @@
           : people + (people === 1 ? ' comment' : ' comments') + ' from people' +
             (items.length > people ? ', and ' + (items.length - people) + ' from bots, folded.' : '.');
         items.forEach(function (i) { list.appendChild(conversationEntry(i)); });
+        // A cached copy past its minute is answered at once and re-read on the server; ask
+        // again once, shortly, to show the fresh one.
+        if (res.body.stale && !section.hasAttribute('data-refetched')) {
+          section.setAttribute('data-refetched', '');
+          setTimeout(function () { loadConversation(section); }, 2000);
+        }
       })
       .catch(function () { status.textContent = 'Could not load the conversation. Reload to try again.'; });
   }

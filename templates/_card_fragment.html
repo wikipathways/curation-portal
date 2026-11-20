@@ -1,0 +1,5 @@
+{# One review card on its own, for /dashboard/{pr}/card (refresh.js swaps it in place).
+   Imported `with context` for the same reason as on the two pages: the macro reads the
+   page context (login, repo, pipeline_mode, site_host). #}
+{% from "_review_card.html" import review_card with context %}
+{{ review_card(review, is_curator, curators, expanded=expanded) }}
