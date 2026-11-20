@@ -32,7 +32,7 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from app.preview.diff import diff_metadata, diff_nodes
+from app.preview.diff import DIFF_VERSION, diff_edges, diff_metadata, diff_nodes
 from app.preview.metadata import parse_curation_metadata
 from app.preview.render import RENDERER_VERSION, RenderError, render_gpml_full
 
@@ -169,6 +169,7 @@ class PreviewService:
             before_gpml = self._cached_before(out, target_wpid)
         rendered: dict[str, bool] = {"before": False, "after": False}
         drawn_nodes: dict[str, list[dict]] = {}
+        drawn_edges: dict[str, list[dict]] = {}
         counts: dict[str, int | None] = {"before": None, "after": None}
         dialect: str | None = None
         for side, gpml in (("before", before_gpml), ("after", after_gpml)):
@@ -194,6 +195,8 @@ class PreviewService:
             if side == "after" or dialect is None:
                 dialect = result.dialect
             drawn_nodes[side] = [h.as_dict() for h in result.hotspots]
+            edges = result.graph.get("edges") if isinstance(result.graph, dict) else None
+            drawn_edges[side] = edges if isinstance(edges, list) else []
             try:
                 _write_atomic(out / f"{side}.svg", result.svg)
             except OSError:
@@ -211,7 +214,9 @@ class PreviewService:
             except OSError:
                 pass  # the overlay is an enhancement; never fail a render on it
             rendered[side] = True
-        self._write_diff(out, drawn_nodes, before_gpml=before_gpml, after_gpml=after_gpml)
+        self._write_diff(
+            out, drawn_nodes, before_gpml=before_gpml, after_gpml=after_gpml, edges=drawn_edges
+        )
         self._write_metadata(out, after_gpml, submitter_note, before_gpml=before_gpml)
         drawn = rendered["before"] or rendered["after"]
         # The one moment the renderer's verdict is in hand for free. ``app.quality`` will not run
@@ -236,6 +241,9 @@ class PreviewService:
             out,
             {
                 "renderer": RENDERER_VERSION,
+                # Which comparison wrote diff.json (app.preview.diff.DIFF_VERSION): a newer one
+                # redraws this from disk, so an older cache gains what the comparison now covers.
+                "diff": DIFF_VERSION,
                 # Changes whenever anything served under it does, so a URL carrying it can be
                 # cached for good; the page always asks for the current one.
                 "rev": self._rev(out),
@@ -320,12 +328,23 @@ class PreviewService:
         return data if isinstance(data, dict) else None
 
     def needs_rerender(self, pr_number: int) -> bool:
-        """True when nothing current is cached: no stamp, or one from an older renderer."""
+        """True when nothing current is cached: no stamp, or one from an older renderer or an
+        older comparison (``DIFF_VERSION``).
+
+        The comparison is computed only when a render is written, so a cache whose ``diff.json``
+        predates what the comparison now covers (interactions, since ``DIFF_VERSION`` 2) would
+        keep the old answer until the pull request's next commit. Redrawing it is the one way to
+        bring it up to date, and since renderer 2 that is from the GPML on disk, with no GitHub
+        call (``app.preview.backfill``).
+        """
         stamp = self.stamp(pr_number)
         if stamp is None:
             return True
         try:
-            return int(stamp.get("renderer") or 0) < RENDERER_VERSION
+            return (
+                int(stamp.get("renderer") or 0) < RENDERER_VERSION
+                or int(stamp.get("diff") or 0) < DIFF_VERSION
+            )
         except (TypeError, ValueError):
             return True
 
@@ -392,8 +411,12 @@ class PreviewService:
         *,
         before_gpml: bytes | None = None,
         after_gpml: bytes | None = None,
+        edges: dict[str, list[dict]] | None = None,
     ) -> None:
         """Cache what changed between the two sides, or clear a stale one (best-effort).
+
+        ``edges`` is each side's ``graph["edges"]``; the interactions are compared when both are
+        there (``diff_edges``), so a caller without them still gets the node comparison.
 
         Only an update has two sides. A new pathway has nothing to compare against, and a
         re-upload that drops a side must not leave the previous comparison on disk claiming to
@@ -404,7 +427,12 @@ class PreviewService:
             path.unlink(missing_ok=True)
             return
         try:
-            data = diff_nodes(drawn["before"], drawn["after"]).as_dict()
+            nodes = diff_nodes(drawn["before"], drawn["after"])
+            if edges and "before" in edges and "after" in edges:
+                nodes.edges = diff_edges(
+                    edges["before"], edges["after"], nodes, drawn["before"], drawn["after"]
+                )
+            data = nodes.as_dict()
             if before_gpml and after_gpml:
                 # Title, description, references and tags: what a curator reads in the panels
                 # below, and could not tell had changed without comparing them by eye.

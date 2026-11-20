@@ -12,6 +12,7 @@ from app.quality.rules import (
     Subject,
     build_subject,
     checklist_keys,
+    description_change,
     evaluate,
     split_loose_ends,
 )
@@ -27,6 +28,7 @@ __all__ = [
     "build_subject",
     "checklist_keys",
     "checklist_result",
+    "description_change",
     "evaluate",
     "inspect_gpml",
     "inspect_metadata",

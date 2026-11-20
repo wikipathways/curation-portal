@@ -54,6 +54,12 @@
   // The badge drawn on a changed node, so the classification never rests on colour alone.
   var CHANGE_BADGE = { added: '+', removed: '−', reannotated: '≠', relabelled: 'T', moved: '↔' };
   var CHANGE_ORDER = ['added', 'removed', 'reannotated', 'relabelled', 'moved'];
+  // Interactions (diff.json's `edges`, contract K3). A retyped or reconnected line is drawn in the
+  // colour and outline of a changed node (TONE), and its own badge glyph says which change it is.
+  var EDGE_WORD = { added: 'added', removed: 'removed', retyped: 'retyped', reconnected: 'reconnected' };
+  var EDGE_BADGE = { added: '+', removed: '−', retyped: '≠', reconnected: '⤳' };
+  var EDGE_TONE = { added: 'added', removed: 'removed', retyped: 'reannotated', reconnected: 'reannotated' };
+  var EDGE_ORDER = ['added', 'removed', 'retyped', 'reconnected'];
   var GROUP_WORD = { complex: 'Complex', group: 'Group', none: 'Group (no outline)', pathway: 'Pathway group' };
 
   var mounted = [];
@@ -108,6 +114,30 @@
   }
 
   function num(v) { return typeof v === 'number' && isFinite(v) ? v : null; }
+
+  // The point halfway along a line's route, where its change badge sits.
+  function midway(points) {
+    var pts = (Array.isArray(points) ? points : []).filter(function (p) {
+      return p && num(p[0]) !== null && num(p[1]) !== null;
+    });
+    if (!pts.length) return null;
+    var total = 0, i;
+    for (i = 1; i < pts.length; i++) total += Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]);
+    var left = total / 2;
+    for (i = 1; i < pts.length; i++) {
+      var d = Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]);
+      if (d >= left && d > 0) {
+        var t = left / d;
+        return [pts[i - 1][0] + t * (pts[i][0] - pts[i - 1][0]), pts[i - 1][1] + t * (pts[i][1] - pts[i - 1][1])];
+      }
+      left -= d;
+    }
+    return pts[0];
+  }
+
+  function edgeLabel(e) {
+    return e.type_label || e.type || (e.kind === 'GraphicalLine' ? 'graphical line' : 'line');
+  }
 
   function validBox(b) {
     return Array.isArray(b) && b.length === 4 && b.every(function (v) { return num(v) !== null; })
@@ -519,6 +549,7 @@
       });
     }
     this.root.classList.add('viewer--diffed');
+    this.applyEdgeDiff(diff);
     nodes.forEach(function (n) {
       if (!CHANGE_WORD[n.__change]) return;
       var b = n.bbox, pad = 3;
@@ -537,6 +568,52 @@
       t.textContent = CHANGE_BADGE[n.__change];
       badge.appendChild(t);
       self.marks.appendChild(badge);
+    });
+  };
+
+  // Interactions, by id only: the index arrays never covered them, and a legacy graph has none.
+  // A diff without `edges` (a cache from before they were compared) marks nothing.
+  Viewer.prototype.applyEdgeDiff = function (diff) {
+    var self = this;
+    var side = this.side;
+    var other = side === 'before' ? 'after' : 'before';
+    var edges = diff.edges;
+    var ids = edges && edges[side];
+    if (!ids || typeof ids !== 'object' || this.graph.legacy) return;
+    this.graph.edges.forEach(function (e) {
+      var v = ids[e.id];
+      if (v == null) return;
+      var entry = typeof v === 'string' ? { change: v } : v;
+      e.__change = entry.change;
+      e.__was = entry.was;
+    });
+    if (Array.isArray(edges.pairs)) {
+      edges.pairs.forEach(function (p) {
+        if (p && p[side] && p[other]) self.counterpart[p[side]] = p[other];
+      });
+    }
+    this.graph.edges.forEach(function (e) {
+      if (!EDGE_WORD[e.__change]) return;
+      var pts = (Array.isArray(e.points) ? e.points : []).filter(function (p) {
+        return p && num(p[0]) !== null && num(p[1]) !== null;
+      });
+      if (pts.length < 2) return;
+      var tone = EDGE_TONE[e.__change];
+      self.marks.appendChild(svgEl('polyline', {
+        'class': 'viewer__emark viewer__emark--' + tone,
+        points: pts.map(function (p) { return p[0] + ',' + p[1]; }).join(' ')
+      }));
+      var mid = midway(pts);
+      var badge = svgEl('g', { 'class': 'viewer__badge viewer__badge--' + tone });
+      badge.appendChild(svgEl('circle', { cx: mid[0], cy: mid[1], r: 6 }));
+      var t = svgEl('text', {
+        x: mid[0], y: mid[1], 'text-anchor': 'middle', 'dominant-baseline': 'central', 'font-size': 8.4
+      });
+      t.textContent = EDGE_BADGE[e.__change];
+      badge.appendChild(t);
+      self.marks.appendChild(badge);
+      var drawn = self.els[e.id];
+      if (drawn) drawn.classList.add('is-' + e.__change);
     });
   };
 
@@ -933,6 +1010,11 @@
     var self = this;
     h.textContent = e.type_label ? e.type_label.charAt(0).toUpperCase() + e.type_label.slice(1)
       : (e.kind === 'GraphicalLine' ? 'Graphical line' : 'Interaction');
+    if (EDGE_WORD[e.__change]) {
+      h.appendChild(document.createTextNode(' '));
+      h.appendChild(el('span', 'node-panel__change node-panel__change--' + EDGE_TONE[e.__change],
+        EDGE_BADGE[e.__change] + ' ' + EDGE_WORD[e.__change]));
+    }
     labelRow(dl, 'Kind', e.kind === 'GraphicalLine' ? 'Graphical line (no biological meaning)' : 'Interaction');
     if (e.type && e.type !== e.type_label) labelRow(dl, 'Arrow', e.type);
     labelRow(dl, 'From', e.source ? this.linkButton(this.targetOf(e.source, e.source_edge), this.endName(e.source)) : 'Nothing: unconnected');
@@ -941,6 +1023,7 @@
       labelRow(dl, e.database || 'Identifier', e.identifier);
     }
     if (e.comment) labelRow(dl, 'Comment', e.comment);
+    if (e.__was && e.__was.type_label) labelRow(dl, 'Was', strike(e.__was.type_label));
     var onto = this.anchoredOn[e.id] || [];
     if (onto.length) {
       var ul = el('ul', 'node-panel__list');
@@ -1075,6 +1158,7 @@
     }
     if (this.diff) {
       var counts = tally(this.graph.nodes, function (n) { return CHANGE_WORD[n.__change] ? n.__change : null; });
+      var ecounts = tally(this.graph.edges, function (e) { return EDGE_WORD[e.__change] ? e.__change : null; });
       box.appendChild(el('p', 'viewer__legend-title', 'Changes on this side'));
       var ul = el('ul', 'diff-legend viewer__legend-diff');
       CHANGE_ORDER.forEach(function (k) {
@@ -1086,7 +1170,17 @@
         li.appendChild(document.createTextNode(CHANGE_BADGE[k] + ' ' + counts[k] + ' ' + CHANGE_WORD[k]));
         ul.appendChild(li);
       });
-      if (!ul.children.length) ul.appendChild(el('li', null, 'No data node changed on this side.'));
+      EDGE_ORDER.forEach(function (k) {
+        if (!ecounts[k]) return;
+        var li = el('li', 'diff-legend__item diff-legend__item--' + EDGE_TONE[k]);
+        var sw = el('span', 'diff-legend__swatch');
+        sw.setAttribute('aria-hidden', 'true');
+        li.appendChild(sw);
+        li.appendChild(document.createTextNode(EDGE_BADGE[k] + ' ' + ecounts[k]
+          + (ecounts[k] === 1 ? ' interaction ' : ' interactions ') + EDGE_WORD[k]));
+        ul.appendChild(li);
+      });
+      if (!ul.children.length) ul.appendChild(el('li', null, 'No data node or interaction changed on this side.'));
       box.appendChild(ul);
       if (counts.moved) {
         // Same switch as the one in the summary above the diagrams; both drive the card.
@@ -1101,9 +1195,7 @@
       }
     }
     section('Data nodes', tally(this.graph.nodes, function (n) { return n.type || 'Unknown'; }));
-    section('Interactions', tally(this.graph.edges, function (e) {
-      return e.type_label || e.type || (e.kind === 'GraphicalLine' ? 'graphical line' : 'line');
-    }));
+    section('Interactions', tally(this.graph.edges, edgeLabel));
     section('Groups', tally(this.graph.groups, function (g) { return g.style || 'group'; }), GROUP_WORD);
     if (this.danglingCount) {
       var t = el('label', 'viewer__legend-toggle');
@@ -1413,6 +1505,7 @@
       if (CHANGE_WORD[item.__change]) text += ' · ' + CHANGE_WORD[item.__change];
     } else if (hit.kind === 'edge') {
       text = (item.type_label || item.type || 'line') + ' ' + this.edgeEnds(item);
+      if (EDGE_WORD[item.__change]) text += ' · ' + EDGE_WORD[item.__change];
     } else if (hit.kind === 'group') {
       text = (GROUP_WORD[item.style] || 'Group') + ' of ' + (item.members || []).length;
     } else {
@@ -1560,7 +1653,7 @@
     try {
       this.each(src, function (v) {
         if (!v.svg) return;
-        var other = hit.kind === 'node' ? src.counterpart[hit.item.id] : null;
+        var other = hit.kind === 'node' || hit.kind === 'edge' ? src.counterpart[hit.item.id] : null;
         if (other && v.byId[other]) {
           v.select(other, { fromPair: true });
           var box = v.boxOf(v.byId[other]);
@@ -1579,9 +1672,11 @@
 
   // The change list in reading order across both sides: what changed on the "after" side, and
   // what was removed from the "before" side, which exists nowhere else. A changed node that has
-  // a counterpart is listed once, on the side where it now lives.
+  // a counterpart is listed once, on the side where it now lives. The interactions follow the
+  // nodes, by the same rule, in document order. Each entry carries the changed thing as `item`
+  // (and, for the nodes, as `node`, which is what callers read before interactions joined).
   Pair.prototype.rebuild = function () {
-    var items = [];
+    var items = [], lines = [];
     var card = this.viewers[0] && this.viewers[0].root.closest('.review-card');
     var hideMoved = !!(card && card.classList.contains('review-card--hide-moved'));
     this.viewers.forEach(function (v) {
@@ -1590,25 +1685,38 @@
         if (!CHANGE_WORD[n.__change]) return;
         if (hideMoved && n.__change === 'moved') return;
         if (v.side === 'before' && n.__change !== 'removed') return;
-        items.push({ viewer: v, node: n });
+        items.push({ viewer: v, kind: 'node', item: n, node: n });
+      });
+      v.graph.edges.forEach(function (e) {
+        if (!EDGE_WORD[e.__change]) return;
+        if (v.side === 'before' && e.__change !== 'removed') return;
+        lines.push({ viewer: v, kind: 'edge', item: e });
       });
     });
-    this.changes = readingOrder(items, function (it) { return it.node.bbox; });
+    this.changes = readingOrder(items, function (it) { return it.node.bbox; }).concat(lines);
     this.index = -1;
     this.viewers.forEach(function (v) { v.updateChangeButtons(); });
   };
 
   Pair.prototype.step = function (dir, from) {
     if (!this.changes.length) {
-      from.say('Nothing changed on the data nodes here.');
+      from.say('Nothing changed on the data nodes or interactions here.');
       return;
     }
     var len = this.changes.length;
     this.index = ((this.index + dir) % len + len) % len;
     var it = this.changes[this.index];
-    it.viewer.select(it.node.id, { panel: true, centre: true, focus: true });
-    it.viewer.say('Change ' + (this.index + 1) + ' of ' + len + ': '
-      + (it.node.label || '(unlabelled node)') + ', ' + CHANGE_WORD[it.node.__change]
+    var what;
+    if (it.kind === 'edge') {
+      // A line takes no focus of its own; the drawing it is in does, so N and P keep working.
+      it.viewer.select(it.item.id, { panel: true, centre: true });
+      try { it.viewer.canvas.focus({ preventScroll: true }); } catch (e) { it.viewer.canvas.focus(); }
+      what = edgeLabel(it.item) + ' ' + it.viewer.edgeEnds(it.item) + ', ' + EDGE_WORD[it.item.__change];
+    } else {
+      it.viewer.select(it.item.id, { panel: true, centre: true, focus: true });
+      what = (it.item.label || '(unlabelled node)') + ', ' + CHANGE_WORD[it.item.__change];
+    }
+    it.viewer.say('Change ' + (this.index + 1) + ' of ' + len + ': ' + what
       + (it.viewer.side === 'before' ? ' (before)' : ''));
   };
 

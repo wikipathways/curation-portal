@@ -14,12 +14,29 @@ The categories, in the order a curator cares about them:
 - **relabelled** — the same annotation under a different name.
 - **moved** — same node, different place. Usually noise, which is why the overlay can hide it.
 
+Interactions are compared the same way (``diff_edges``), over the ``edges`` of the graph sidecar
+the renderer writes beside each drawing: **added** / **removed**, **retyped** (the arrow changed,
+so the interaction now means something else) and **reconnected** (it now starts or ends somewhere
+else, including an end that was attached or let go). A line that only moved is not reported.
+
 Nothing here is a substitute for reading the GPML when it matters; it is a summary that tells a
 curator whether they need to.
+
+## diff.json (contract K3)
+
+``version`` stays 2, so a client written for it keeps working: ``before``/``after`` (index
+arrays), ``summary``, ``pairs`` and ``ids`` for the data nodes, and ``meta`` for title,
+description, references and tags. ``minor`` 1 adds ``edges``: ``summary`` (counts per change),
+``pairs`` (``{before, after, change}`` by element id) and ``before``/``after`` (each id's change;
+on the after side an object carrying ``was`` for a retyped interaction). A diff without ``edges``
+is a cache written before it, and reads as "interactions not compared", never as "unchanged".
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
+
+from app.quality import description_change
 
 # Two nodes are in the same place unless their centres differ by more than this many GPML user
 # units. A node box is typically 20-25 units tall, so this is well inside "did not move" while
@@ -29,6 +46,19 @@ _MOVE_TOLERANCE = 2.0
 # Every classification the client knows how to colour. Kept here rather than in the template for
 # the same reason ReviewStatus labels live in app/review/status.py: one list to add to.
 CHANGES = ("added", "removed", "reannotated", "relabelled", "moved", "unchanged")
+
+#: The same for interactions, in the order the card names them.
+EDGE_CHANGES = ("added", "removed", "retyped", "reconnected", "unchanged")
+
+#: Written into ``render.json`` as ``diff``. A cache stamped with less was compared by an older
+#: version of this module, and ``PreviewService.needs_rerender`` sends it back through the
+#: renderer (from the GPML on disk) so its ``diff.json`` gains what it lacks. 2: interactions.
+DIFF_VERSION = 2
+
+#: The ``data-id`` the renderer makes up for an element whose own id it cannot use
+#: (``app.preview.render._assign_ids``: a prefix such as ``g-`` or ``a-``, then ``auto<i>``).
+#: Matched whole, so a real id that merely contains "auto" (a group ``autocpx``) is not one.
+_AUTO_ID = re.compile(r"[a-z]+-auto\d+")
 
 
 @dataclass
@@ -51,8 +81,11 @@ class PathwayDiff:
     pairs: list[dict] = field(default_factory=list)
     ids: dict[str, dict] = field(default_factory=lambda: {"before": {}, "after": {}})
 
+    #: Interactions (``diff_edges``), or None when they were not compared.
+    edges: dict | None = None
+
     def as_dict(self) -> dict:
-        return {
+        out = {
             "version": 2,
             "before": self.before,
             "after": self.after,
@@ -60,6 +93,10 @@ class PathwayDiff:
             "pairs": self.pairs,
             "ids": self.ids,
         }
+        if self.edges is not None:
+            out["minor"] = 1
+            out["edges"] = self.edges
+        return out
 
 
 def _key_label(n: dict) -> tuple[str, str]:
@@ -82,8 +119,12 @@ def _pair_on(
     pairs: dict[int, int],
     *,
     require_all: bool = False,
+    key_after=None,
 ) -> None:
     """Pair still-unmatched nodes whose ``key`` agrees, in document order within each group.
+
+    ``key_after``, when given, is the key for the after side: an interaction's ends are named
+    differently on each side and only agree once translated (``diff_edges``).
 
     Two nodes can legitimately share a key — a pathway may carry the same gene twice — so the
     groups are zipped rather than required to be singletons. Zipping in document order is a
@@ -98,8 +139,9 @@ def _pair_on(
         if require_all and not all(k):
             continue
         groups_b.setdefault(k, []).append(i)
+    key_a = key_after or key
     for j in sorted(unmatched_a):
-        k = key(after[j])
+        k = key_a(after[j])
         if require_all and not all(k):
             continue
         groups_a.setdefault(k, []).append(j)
@@ -204,6 +246,131 @@ def diff_nodes(before: list[dict], after: list[dict]) -> PathwayDiff:
     )
 
 
+def _endpoint_keys(diff: PathwayDiff, before: list[dict], after: list[dict]):
+    """Two functions, one per side, turning a line's end (a ``data-id``) into something comparable
+    across the sides.
+
+    A data node's id is replaced by its pairing from ``diff_nodes``, so a line still counts as
+    attached to the same node when the node's GraphId was rewritten. A data node with no
+    counterpart (added or removed) gets a key only its own side can produce: a line to it is a
+    line to something new. Anything else (a label, a group, a state, another line's anchor) is
+    matched on its id, which comes from its GraphId and survives an edit the same way; an id the
+    renderer had to make up (``<prefix>auto<i>``) means nothing across sides and is kept apart too.
+    """
+    paired_b = {p["before"]: p["after"] for p in diff.pairs}
+    paired_a = set(paired_b.values())
+    node_b = {n.get("id") for n in before if n.get("id")}
+    node_a = {n.get("id") for n in after if n.get("id")}
+
+    def key_b(did: str | None):
+        if not did:
+            return None
+        if did in paired_b:
+            return ("node", paired_b[did])
+        if did in node_b or _AUTO_ID.fullmatch(did):
+            return ("before", did)
+        return ("id", did)
+
+    def key_a(did: str | None):
+        if not did:
+            return None
+        if did in paired_a:
+            return ("node", did)
+        if did in node_a or _AUTO_ID.fullmatch(did):
+            return ("after", did)
+        return ("id", did)
+
+    return key_b, key_a
+
+
+def diff_edges(
+    before_edges: list[dict],
+    after_edges: list[dict],
+    node_diff: PathwayDiff,
+    before_nodes: list[dict],
+    after_nodes: list[dict],
+) -> dict:
+    """Classify every interaction on both sides of an update.
+
+    ``*_edges`` are the ``edges`` of each side's graph sidecar; only ``kind == "Interaction"`` is
+    compared, as only data nodes are among the boxes: a graphical line carries no meaning. The
+    node lists and ``node_diff`` supply the pairing of the line ends.
+
+    Matching, each pass over what is still unmatched:
+
+    1. **GraphId**, where both sides have one.
+    2. **source, target and type**: the same interaction redrawn under a new id.
+    3. **source and target**: the same two ends with a different arrow, which is a retyping.
+
+    A matched pair is **retyped** when the arrow changed and **reconnected** when either end now
+    lands somewhere else (an end attached or let go counts); a change of both reads as
+    reconnected, the larger of the two, and still carries the old arrow as ``was``.
+    """
+    before = [e for e in before_edges if isinstance(e, dict) and e.get("kind") == "Interaction"]
+    after = [e for e in after_edges if isinstance(e, dict) and e.get("kind") == "Interaction"]
+    key_b, key_a = _endpoint_keys(node_diff, before_nodes, after_nodes)
+
+    def ends_b(e: dict) -> tuple:
+        return (key_b(e.get("source")), key_b(e.get("target")))
+
+    def ends_a(e: dict) -> tuple:
+        return (key_a(e.get("source")), key_a(e.get("target")))
+
+    unmatched_b = set(range(len(before)))
+    unmatched_a = set(range(len(after)))
+    pairs: dict[int, int] = {}
+
+    def graph_id(e: dict) -> tuple:
+        return ((e.get("graph_id") or "").strip(),)
+
+    _pair_on(graph_id, before, after, unmatched_b, unmatched_a, pairs, require_all=True)
+
+    # A line attached at neither end has no identity beyond its GraphId: every such line would
+    # share the key (None, None) and pair with any other.
+    def by_ends(ends):
+        def key(e: dict) -> tuple:
+            t = ends(e)
+            return t if any(t) else (("unattached", id(e)),)
+        return key
+
+    _pair_on(
+        lambda e: (*by_ends(ends_b)(e), e.get("type")), before, after,
+        unmatched_b, unmatched_a, pairs,
+        key_after=lambda e: (*by_ends(ends_a)(e), e.get("type")),
+    )
+    _pair_on(
+        by_ends(ends_b), before, after, unmatched_b, unmatched_a, pairs, key_after=by_ends(ends_a)
+    )
+
+    summary = {c: 0 for c in EDGE_CHANGES}
+    summary["added"] = len(unmatched_a)
+    summary["removed"] = len(unmatched_b)
+    b_ids: dict[str, str] = {e["id"]: "removed" for e in before if e.get("id")}
+    a_ids: dict[str, dict] = {e["id"]: {"change": "added"} for e in after if e.get("id")}
+    pair_list: list[dict] = []
+    for i, j in sorted(pairs.items()):
+        b, a = before[i], after[j]
+        if ends_b(b) != ends_a(a):
+            change = "reconnected"
+        elif (b.get("type") or "") != (a.get("type") or ""):
+            change = "retyped"
+        else:
+            change = "unchanged"
+        summary[change] += 1
+        entry: dict = {"change": change}
+        if (b.get("type") or "") != (a.get("type") or ""):
+            # The panel strikes the old arrow through beside the new one, whether or not an end
+            # moved as well.
+            entry["was"] = {"type_label": b.get("type_label") or b.get("type") or ""}
+        if b.get("id"):
+            b_ids[b["id"]] = change
+        if a.get("id"):
+            a_ids[a["id"]] = entry
+        if b.get("id") and a.get("id"):
+            pair_list.append({"before": b["id"], "after": a["id"], "change": change})
+    return {"summary": summary, "pairs": pair_list, "before": b_ids, "after": a_ids}
+
+
 def diff_metadata(before, after) -> dict:
     """What an update changed besides the data nodes: title, description, references, tags.
 
@@ -217,7 +384,18 @@ def diff_metadata(before, after) -> dict:
     b_desc = (getattr(before, "description", None) or "").strip()
     a_desc = (getattr(after, "description", None) or "").strip()
     if b_desc != a_desc:
-        out["description"] = {"from_words": len(b_desc.split()), "to_words": len(a_desc.split())}
+        # Measured by the quality rule's own function, so the card and the rule agree on whether
+        # this edit is a small one (app.quality.rules.description_change).
+        change = description_change(b_desc, a_desc)
+        out["description"] = {
+            "from_words": len(b_desc.split()),
+            "to_words": len(a_desc.split()),
+            "word_delta": change["word_delta"],
+            "char_delta": change["char_delta"],
+            "rewritten": change["over"],
+            "max_words": change["max_words"],
+            "max_chars": change["max_chars"],
+        }
 
     def refs(meta) -> dict[tuple[str, str], str]:
         return {
@@ -245,3 +423,45 @@ def diff_metadata(before, after) -> dict:
         if added or removed:
             out[key] = {"added": sorted(added), "removed": sorted(removed)}
     return out
+
+
+def _signed(n: int, word: str) -> str:
+    sign = "+" if n > 0 else "\u2212"
+    return f"{sign}{abs(n)} {word}{'' if abs(n) == 1 else 's'}"
+
+
+def describe_description_change(entry: dict) -> str:
+    """The card's words for ``diff_metadata``'s ``description`` entry, e.g. "edited (+1 word)".
+
+    "Rewritten" only past the repository's limits, the line the quality rule draws too. A cache
+    written before the deltas were recorded has only the two word counts, and keeps the old
+    wording rather than guessing which side of the line it fell.
+    """
+    b, a = entry.get("from_words"), entry.get("to_words")
+    if "rewritten" not in entry:
+        return f"rewritten ({b} \u2192 {a} words)"
+    if not b:
+        return f"added ({a} word{'' if a == 1 else 's'})"
+    if not a:
+        return f"removed (was {b} word{'' if b == 1 else 's'})"
+    words, chars = entry.get("word_delta") or 0, entry.get("char_delta") or 0
+    if entry.get("rewritten"):
+        if abs(words) <= (entry.get("max_words") or 0):
+            # Only the character count went past its limit; say so, or "8 → 8 words" reads as
+            # no change at all.
+            return f"rewritten ({b} \u2192 {a} words, {_signed(chars, 'character')})"
+        return f"rewritten ({b} \u2192 {a} words)"
+    if words:
+        return f"edited ({_signed(words, 'word')})"
+    if chars:
+        return f"edited ({_signed(chars, 'character')})"
+    return "edited (same length, reworded)"
+
+
+def describe_edge_changes(summary: dict) -> str:
+    """"1 added, 2 reconnected", or the sentence for no change at all."""
+    parts = [
+        f"{summary[k]} {k}" for k in ("added", "removed", "retyped", "reconnected")
+        if summary.get(k)
+    ]
+    return ", ".join(parts) if parts else "No interactions were added, removed or changed."

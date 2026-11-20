@@ -115,6 +115,32 @@ _EDIT_MAX_CHAR_DIFF = 10
 #: ("the arrow from ARNT ends near NQO1"), so fewer than ``_MAX_NAMED``.
 _MAX_LOOSE_NAMED = 3
 
+def description_change(was: str | None, now: str | None) -> dict:
+    """How an edit changed the description, measured the way the repository measures it.
+
+    The repository compares lengths, not wording: the difference in word count and in character
+    count, each against its own limit. ``word_delta``/``char_delta`` are signed (positive when the
+    description grew); ``over`` is the repository's verdict, true when either difference passes its
+    limit. One measurement for the rule and for the change summary on the card
+    (``app.preview.diff.diff_metadata``), so the two cannot describe the same edit differently.
+    """
+    was = (was or "").strip()
+    now = (now or "").strip()
+    word_delta = _words(now) - _words(was)
+    char_delta = len(now) - len(was)
+    return {
+        "identical": was == now,
+        "word_delta": word_delta,
+        "char_delta": char_delta,
+        "over": abs(word_delta) > _EDIT_MAX_WORD_DIFF or abs(char_delta) > _EDIT_MAX_CHAR_DIFF,
+        "max_words": _EDIT_MAX_WORD_DIFF,
+        "max_chars": _EDIT_MAX_CHAR_DIFF,
+    }
+
+
+def _plural(n: int, word: str) -> str:
+    return f"{n} {word}" if n == 1 else f"{n} {word}s"
+
 #: How many offending labels a note names before it gives up and counts. Six is what
 #: ``app.review.checklist`` has always shown; keeping it means the note wording does not change
 #: for anyone as this takes over.
@@ -907,17 +933,49 @@ def _check_description(s: Subject) -> tuple[str, str] | None:
             "overview of the processes it describes.",
         )
     if s.kind == "update" and s.before is not None:
-        was = getattr(s.before, "description", "") or ""
-        word_diff = abs(_words(description) - _words(was))
-        char_diff = abs(len(description) - len(was))
-        if word_diff > _EDIT_MAX_WORD_DIFF or char_diff > _EDIT_MAX_CHAR_DIFF:
+        was = (getattr(s.before, "description", "") or "").strip()
+        change = description_change(was, description)
+        word_diff = abs(change["word_delta"])
+        char_diff = abs(change["char_delta"])
+        limit = (
+            f"the repository's limit of {_EDIT_MAX_WORD_DIFF} words or "
+            f"{_EDIT_MAX_CHAR_DIFF} characters"
+        )
+        if not was:
+            # The card calls this "added" (app.preview.diff.describe_description_change); so
+            # does the rule, rather than describing a first description as a rewrite.
+            added = _plural(_words(description), "word")
+            if change["over"]:
+                return (
+                    Severity.WARN.value,
+                    f"This edit adds a description ({added}). The repository flags any change "
+                    f"to the description of more than {_EDIT_MAX_WORD_DIFF} words or "
+                    f"{_EDIT_MAX_CHAR_DIFF} characters.",
+                )
+            return (
+                Severity.PASS.value,
+                f"This edit adds a short description ({added}), under {limit}.",
+            )
+        if change["over"]:
             return (
                 Severity.WARN.value,
-                f"The description changed by {word_diff} words and {char_diff} characters. The "
-                "repository flags an edit that rewrites it by more than "
-                f"{_EDIT_MAX_WORD_DIFF} words or {_EDIT_MAX_CHAR_DIFF} characters.",
+                f"The description changed by {_plural(word_diff, 'word')} and "
+                f"{_plural(char_diff, 'character')}. The repository flags an edit that rewrites "
+                f"it by more than {_EDIT_MAX_WORD_DIFF} words or {_EDIT_MAX_CHAR_DIFF} "
+                "characters.",
             )
-        return (Severity.PASS.value, "The description is essentially unchanged by this edit.")
+        if change["identical"]:
+            return (Severity.PASS.value, "The description is unchanged.")
+        if not word_diff and not char_diff:
+            return (
+                Severity.PASS.value,
+                f"The description was reworded at the same length, under {limit}.",
+            )
+        return (
+            Severity.PASS.value,
+            f"The description changed slightly ({_plural(word_diff, 'word')}, "
+            f"{_plural(char_diff, 'character')}), under {limit}.",
+        )
     count = _words(description)
     if count < _MIN_DESCRIPTION_WORDS:
         return (
