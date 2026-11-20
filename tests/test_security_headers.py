@@ -60,3 +60,18 @@ def test_site_host_only_from_https_settings():
     assert host("https://x.org/a") == "https://x.org"
     assert host("javascript:x") == ""
     assert "https://x.org" in build_csp("https://x.org")
+
+
+def test_static_url_follows_an_edited_file(tmp_path, monkeypatch):
+    import os
+
+    import app.main as main
+
+    monkeypatch.setattr(main, "_STATIC_DIR", tmp_path)
+    monkeypatch.setattr(main, "_STATIC_VERSIONS", {})
+    f = tmp_path / "x.css"
+    f.write_text("a{}")
+    first = main.static_url("x.css")
+    f.write_text("b{}")
+    os.utime(f, ns=(1, f.stat().st_mtime_ns + 1_000_000))
+    assert main.static_url("x.css") != first

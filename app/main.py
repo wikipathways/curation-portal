@@ -195,7 +195,7 @@ templates.env.filters["ago"] = _ago
 
 
 _STATIC_DIR = _ROOT / "static"
-_STATIC_VERSIONS: dict[str, str] = {}
+_STATIC_VERSIONS: dict[str, tuple[int, str]] = {}
 
 
 def static_url(name: str) -> str:
@@ -203,16 +203,22 @@ def static_url(name: str) -> str:
 
     Replaces the hand-bumped ``?v=22``, which every change to app.js or app.css had to remember
     and which several branches editing assets at once would all bump to the same number. The hash
-    is computed once per process; a deploy is a new process.
+    is cached against the file's mtime, so an edit under ``--reload`` (which restarts only for
+    Python files) still gets a new URL instead of the year-long cached copy of the old one.
     """
-    version = _STATIC_VERSIONS.get(name)
-    if version is None:
+    path = _STATIC_DIR / name
+    try:
+        mtime = path.stat().st_mtime_ns
+    except OSError:
+        return f"/static/{name}?v=0"
+    cached = _STATIC_VERSIONS.get(name)
+    if cached is None or cached[0] != mtime:
         try:
-            digest = hashlib.sha1((_STATIC_DIR / name).read_bytes()).hexdigest()[:8]
+            digest = hashlib.sha1(path.read_bytes()).hexdigest()[:8]
         except OSError:
             digest = "0"
-        version = _STATIC_VERSIONS[name] = digest
-    return f"/static/{name}?v={version}"
+        cached = _STATIC_VERSIONS[name] = (mtime, digest)
+    return f"/static/{name}?v={cached[1]}"
 
 
 templates.env.globals["static_url"] = static_url

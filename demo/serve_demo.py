@@ -96,8 +96,10 @@ class _MergingFake(FakeGitHubClient):
     """Offline fallback: like the test fake, but a merge promotes the PR's file onto main so the
     update step afterwards finds the pathway on the base branch (real GitHub does this for free)."""
 
-    def merge_pull_request(self, repo: str, pr_number: int, *, method: str = "squash") -> None:
-        super().merge_pull_request(repo, pr_number, method=method)
+    def merge_pull_request(
+        self, repo: str, pr_number: int, *, method: str = "squash", sha: str | None = None
+    ) -> None:
+        super().merge_pull_request(repo, pr_number, method=method, sha=sha)
         pr = next((p for p in self.pulls if p.number == pr_number), None)
         if pr is None:
             return
