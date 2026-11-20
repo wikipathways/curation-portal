@@ -349,6 +349,73 @@ def test_adopting_from_the_panel_takes_it_off_the_panel(tmp_path):
         assert app.state.worker.untracked.items == []
 
 
+def test_a_dismissed_pull_request_leaves_the_panel_until_its_next_commit(tmp_path):
+    fake = _fake()
+    app, current = _authed_app(tmp_path, curators=["curator"], fake=fake)
+    with TestClient(app) as c:
+        _seed(fake, 85, files=[("pathways/WP554/WP554.gpml", "modified", "<Pathway/>")])
+        _seed(fake, 86, files=[("pathways/WP9/WP9.gpml", "modified", "<Pathway/>")])
+        app.state.worker.tick(github=fake)
+
+        current["user"] = "bob"
+        assert c.post("/api/untracked/85/dismiss").status_code == 403
+
+        current["user"] = "curator"
+        r = c.post("/api/untracked/85/dismiss")
+        assert r.status_code == 200, r.text
+        state = app.state.worker.untracked
+        assert [p.number for p in state.items] == [86]
+        assert [p.number for p in state.dismissed] == [85]
+        # Nothing was written to GitHub.
+        assert not [k for k in fake.calls if any(w in k for w in ("comment", "close", "label"))]
+
+        # It stays dismissed across scans (and restarts: the row is in the database) ...
+        app.state.worker.request_scan()
+        app.state.worker.tick(github=fake)
+        assert [p.number for p in app.state.worker.untracked.items] == [86]
+        assert [p.number for p in app.state.worker.untracked.dismissed] == [85]
+
+        _login(c, "curator")
+        page = c.get("/dashboard").text
+        assert "Dismissed (<span data-untracked-dismissed-count>1</span>)" in page
+
+        # ... until somebody pushes to it.
+        fake.pull_meta[85]["head_sha"] = "sha85-new"
+        app.state.worker.request_scan()
+        app.state.worker.tick(github=fake)
+        assert sorted(p.number for p in app.state.worker.untracked.items) == [85, 86]
+        assert app.state.worker.untracked.dismissed == []
+
+
+def test_restoring_a_dismissed_pull_request_lists_it_again(tmp_path):
+    fake = _fake()
+    app, current = _authed_app(tmp_path, curators=["curator"], fake=fake)
+    with TestClient(app) as c:
+        _seed(fake, 85, files=[("pathways/WP554/WP554.gpml", "modified", "<Pathway/>")])
+        app.state.worker.tick(github=fake)
+        current["user"] = "curator"
+        assert c.post("/api/untracked/85/dismiss").status_code == 200
+        assert c.post("/api/untracked/85/restore").status_code == 200
+        assert [p.number for p in app.state.worker.untracked.items] == [85]
+        app.state.worker.request_scan()
+        app.state.worker.tick(github=fake)
+        assert [p.number for p in app.state.worker.untracked.items] == [85]
+        assert c.post("/api/untracked/999/dismiss").status_code == 404
+
+
+def test_the_panel_is_folded_and_only_on_the_open_tab(tmp_path):
+    fake = _fake()
+    app, _ = _authed_app(tmp_path, curators=["curator"], fake=fake)
+    with TestClient(app) as c:
+        _seed(fake, 85, files=[("pathways/WP554/WP554.gpml", "modified", "<Pathway/>")])
+        app.state.worker.tick(github=fake)
+        _login(c, "curator")
+        page = c.get("/dashboard").text
+        assert '<details class="untracked__fold">' in page
+        assert "On GitHub, not in the portal" in page
+        assert "On GitHub, not in the portal" not in c.get("/dashboard?status=published").text
+
+
 def test_an_untracked_pull_request_opening_asks_for_a_rescan(tmp_path):
     app, _ = _authed_app(tmp_path, webhook_secret="whsec")
     with TestClient(app) as c:

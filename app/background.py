@@ -34,7 +34,7 @@ from starlette.concurrency import run_in_threadpool
 
 from app import obs
 from app.github import GitHubClient, PrFile
-from app.models import Review
+from app.models import Review, UntrackedDismissal
 from app.preview.backfill import refresh_stale_renders
 from app.review.untracked import UntrackedPr, scan_untracked
 
@@ -67,6 +67,8 @@ class UntrackedState:
     """The last scan's answer. In memory: one replica, and a restart refills it on a tick."""
 
     items: list[UntrackedPr] = field(default_factory=list)
+    #: Listed by the scan but hidden by a curator, on the head commit they saw.
+    dismissed: list[UntrackedPr] = field(default_factory=list)
     checked_at: datetime | None = None
     error: str | None = None
 
@@ -127,6 +129,26 @@ class BackgroundWorker:
     def forget(self, pr_number: int) -> None:
         """Drop one pull request from the panel — it was just adopted, so it is tracked now."""
         self.untracked.items = [p for p in self.untracked.items if p.number != pr_number]
+        self.untracked.dismissed = [p for p in self.untracked.dismissed if p.number != pr_number]
+
+    def find_untracked(self, pr_number: int) -> UntrackedPr | None:
+        """The last scan's entry for this pull request, listed or dismissed."""
+        for p in (*self.untracked.items, *self.untracked.dismissed):
+            if p.number == pr_number:
+                return p
+        return None
+
+    def mark_dismissed(self, pr_number: int, dismissed: bool) -> None:
+        """Move one entry between the panel's two lists, so the page agrees before a rescan."""
+        entry = self.find_untracked(pr_number)
+        if entry is None:
+            return
+        items = [p for p in self.untracked.items if p.number != pr_number]
+        hidden = [p for p in self.untracked.dismissed if p.number != pr_number]
+        (hidden if dismissed else items).append(entry)
+        newest_first = lambda p: -p.number  # noqa: E731 — the scan's own order
+        self.untracked.items = sorted(items, key=newest_first)
+        self.untracked.dismissed = sorted(hidden, key=newest_first)
 
     def request_review(self, pr_number: int) -> None:
         """Re-check this review first, on a tick that starts now.
@@ -360,13 +382,24 @@ class BackgroundWorker:
         self._last_scan = self._clock()
         with self._session_factory() as s:
             tracked = set(s.execute(select(Review.pr_number)).scalars())
+            hidden = {
+                d.pr_number: d.head_sha
+                for d in s.execute(
+                    select(UntrackedDismissal).where(UntrackedDismissal.repo == self._repo)
+                ).scalars()
+            }
         try:
-            items = scan_untracked(bot, self._repo, tracked, self._file_cache)
+            found = scan_untracked(bot, self._repo, tracked, self._file_cache)
         except Exception as exc:  # noqa: BLE001 — keep the last answer, say it is stale
             logger.warning("untracked pull request scan failed", exc_info=True)
             self.untracked.error = f"The last scan of {self._repo} failed: {exc}"
             return
-        self.untracked = UntrackedState(items=items, checked_at=datetime.now(UTC))
+        # A dismissal holds for the commit it was made on; a new push lists the pull request again.
+        dismissed = [p for p in found if hidden.get(p.number) == p.head_sha]
+        items = [p for p in found if hidden.get(p.number) != p.head_sha]
+        self.untracked = UntrackedState(
+            items=items, dismissed=dismissed, checked_at=datetime.now(UTC)
+        )
 
     # -- the loop ----------------------------------------------------------------------------
 

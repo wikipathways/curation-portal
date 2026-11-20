@@ -20,7 +20,7 @@ import re
 import secrets
 from collections.abc import Callable
 from contextlib import asynccontextmanager
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import NamedTuple
 from urllib.parse import urlparse
@@ -65,7 +65,7 @@ from app.github import (
     WriteDenied,
 )
 from app.locks import LockUnavailable, PathwayLockRegistry
-from app.models import Base, ReviewStatus
+from app.models import Base, ReviewStatus, UntrackedDismissal
 from app.pipeline import DraftsReader
 from app.pipeline.collection import CollectionReports
 from app.preview import PreviewService
@@ -1313,7 +1313,12 @@ def build_app(settings: Settings | None = None) -> FastAPI:
                 "tabs": queue_tabs(counts=tab_counts, pipeline_mode=settings.is_pipeline_mode),
                 "empty": presentation(status.value) if status is not None else None,
                 "pager": pager,
-                "untracked": _untracked_view(request, login) if assigned_to is None else None,
+                # The Open tab only: on Published or Rejected it was the first thing on the page.
+                "untracked": (
+                    _untracked_view(request, login)
+                    if assigned_to is None and status == ReviewStatus.OPEN
+                    else None
+                ),
             },
         )
 
@@ -1324,6 +1329,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         state = request.app.state.worker.untracked
         return {
             "items": state.items,
+            "dismissed": state.dismissed,
             "checked_at": state.checked_at,
             "error": state.error,
             "auto_adopt": settings.adopt_foreign_prs,
@@ -2191,6 +2197,52 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             "refreshed": outcome.refreshed,
             "reason": outcome.reason,
         }
+
+    @app.post("/api/untracked/{pr_number}/dismiss")
+    def dismiss_untracked(
+        request: Request, pr_number: int, actor: str = Depends(get_current_user)
+    ) -> dict[str, object]:
+        """Hide one pull request from the untracked panel, on its current head commit.
+
+        Portal-side only: nothing is written to GitHub, and the pull request stays open there.
+        A later push to it lists it again.
+        """
+        if not request.app.state.curators.is_curator(actor):
+            raise HTTPException(status_code=403, detail=f"{actor} is not a curator")
+        worker = request.app.state.worker
+        entry = worker.find_untracked(pr_number)
+        if entry is None:
+            raise HTTPException(
+                status_code=404, detail=f"pull request #{pr_number} is not in the untracked list"
+            )
+        with request.app.state.session_factory() as s:
+            s.merge(
+                UntrackedDismissal(
+                    repo=settings.content_repo,
+                    pr_number=pr_number,
+                    head_sha=entry.head_sha,
+                    dismissed_by=actor,
+                    dismissed_at=datetime.now(UTC),
+                )
+            )
+            s.commit()
+        worker.mark_dismissed(pr_number, True)
+        return {"pr_number": pr_number, "dismissed": True}
+
+    @app.post("/api/untracked/{pr_number}/restore")
+    def restore_untracked(
+        request: Request, pr_number: int, actor: str = Depends(get_current_user)
+    ) -> dict[str, object]:
+        """Undo a dismissal: the pull request is listed in the untracked panel again."""
+        if not request.app.state.curators.is_curator(actor):
+            raise HTTPException(status_code=403, detail=f"{actor} is not a curator")
+        with request.app.state.session_factory() as s:
+            row = s.get(UntrackedDismissal, (settings.content_repo, pr_number))
+            if row is not None:
+                s.delete(row)
+                s.commit()
+        request.app.state.worker.mark_dismissed(pr_number, False)
+        return {"pr_number": pr_number, "dismissed": False}
 
     @app.get("/api/reviews/{pr_number}/conversation")
     def review_conversation(

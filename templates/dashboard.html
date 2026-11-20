@@ -33,38 +33,53 @@
      comments on the pull request, so nobody should be adopted by a background job they never
      chose. #}
   {% if untracked and not mine %}
-  <section class="untracked" aria-labelledby="untracked-title">
-    <details class="untracked__fold"{% if untracked['items'] %} open{% endif %}>
-      <summary>
-        <h2 class="untracked__title" id="untracked-title">On GitHub, not in the portal</h2>
-        {% if untracked['items'] %}<span class="queue-filter__count">{{ untracked['items'] | length }}</span>{% endif %}
-      </summary>
-      <p class="untracked__lede">
-        Open pull requests on <code>{{ repo }}</code> that change pathway files and have no review here.
-        Adopting one builds a review from the pull request and posts a short comment on it.
-        {% if untracked.checked_at %}Checked {{ untracked.checked_at | age }}{% if untracked.checked_at | age == 'today' %} at {{ untracked.checked_at.strftime('%H:%M') }} UTC{% endif %}.{% endif %}
-      </p>
-      {% if untracked.error %}<p class="untracked__error" role="status">{{ untracked.error }}</p>{% endif %}
-      {% if not untracked.checked_at and not untracked.error %}
-        <p class="untracked__empty">Not checked yet. The list fills in within a minute of the portal starting.</p>
-      {% elif not untracked['items'] %}
-        <p class="untracked__empty">Every open pull request that touches a pathway has a review here.</p>
-      {% else %}
-      <ul class="untracked__list">
-        {% for p in untracked['items'] %}
+  {# Folded by default: a count on one line. It used to open whenever it had items, and old test
+     pull requests nobody would adopt stood above the queue on every visit. #}
+  {% macro untracked_item(p, dismissed) %}
         <li class="untracked__item" data-pr="{{ p.number }}">
           <div class="untracked__main">
             <a class="untracked__pr" href="{{ p.html_url }}" target="_blank" rel="noopener">#{{ p.number }}</a>
             <span class="untracked__name">{{ p.title or '(no title)' }}</span>
             <span class="untracked__meta">@{{ p.author }}{% if p.created_at %} &middot; opened {{ p.created_at | age }}{% endif %} &middot; {{ p.summary }}{% if p.draft %} &middot; draft{% endif %}</span>
-            {% if p.reason %}<span class="untracked__reason">{{ p.reason }}</span>{% endif %}
+            {% if p.reason and not dismissed %}<span class="untracked__reason">{{ p.reason }}</span>{% endif %}
           </div>
-          {% if p.adoptable %}
-          <button type="button" class="btn btn--sm btn--adopt" data-pr="{{ p.number }}">Adopt</button>
+          <div class="untracked__actions">
+          {% if dismissed %}
+            <button type="button" class="btn btn--sm btn--ghost btn--untracked" data-pr="{{ p.number }}" data-untracked="restore">Restore</button>
+          {% else %}
+            {% if p.adoptable %}<button type="button" class="btn btn--sm btn--adopt" data-pr="{{ p.number }}">Adopt</button>{% endif %}
+            <button type="button" class="btn btn--sm btn--ghost btn--untracked" data-pr="{{ p.number }}" data-untracked="dismiss"
+                    title="Hide it here. Nothing changes on GitHub; a new commit lists it again.">Dismiss</button>
           {% endif %}
+          </div>
         </li>
-        {% endfor %}
+  {% endmacro %}
+  <section class="untracked" aria-labelledby="untracked-title">
+    <details class="untracked__fold">
+      <summary>
+        <h2 class="untracked__title" id="untracked-title">On GitHub, not in the portal</h2>
+        <span class="queue-filter__count" data-untracked-count{% if not untracked['items'] %} hidden{% endif %}>{{ untracked['items'] | length }}</span>
+      </summary>
+      <p class="untracked__lede">
+        Open pull requests on <code>{{ repo }}</code> that change pathway files and have no review here.
+        Adopting one builds a review from the pull request and posts a short comment on it.
+        Dismissing one only hides it here; a new commit to it lists it again.
+        {% if untracked.checked_at %}Checked {{ untracked.checked_at | age }}{% if untracked.checked_at | age == 'today' %} at {{ untracked.checked_at.strftime('%H:%M') }} UTC{% endif %}.{% endif %}
+      </p>
+      {% if untracked.error %}<p class="untracked__error" role="status">{{ untracked.error }}</p>{% endif %}
+      {% if not untracked.checked_at and not untracked.error %}
+        <p class="untracked__empty">Not checked yet. The list fills in within a minute of the portal starting.</p>
+      {% else %}
+      <p class="untracked__empty" data-untracked-empty{% if untracked['items'] %} hidden{% endif %}>Every open pull request that touches a pathway has a review here or was dismissed.</p>
+      <ul class="untracked__list" data-untracked-list="listed">
+        {% for p in untracked['items'] %}{{ untracked_item(p, false) }}{% endfor %}
       </ul>
+      <details class="untracked__dismissed"{% if not untracked['dismissed'] %} hidden{% endif %}>
+        <summary>Dismissed (<span data-untracked-dismissed-count>{{ untracked['dismissed'] | length }}</span>)</summary>
+        <ul class="untracked__list" data-untracked-list="dismissed">
+          {% for p in untracked['dismissed'] %}{{ untracked_item(p, true) }}{% endfor %}
+        </ul>
+      </details>
       {% endif %}
     </details>
   </section>

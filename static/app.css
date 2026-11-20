@@ -1538,6 +1538,10 @@ a.pager__step:hover { background: var(--surface); border-color: var(--moss); }
 .untracked__meta { font-size: 0.82rem; color: var(--ink-muted); }
 .untracked__reason { font-size: 0.82rem; color: var(--amber); }
 .untracked__item .btn { flex: none; }
+.untracked__actions { display: flex; gap: 0.4rem; flex: none; }
+.untracked__dismissed { margin-top: 0.6rem; font-size: 0.88rem; }
+.untracked__dismissed > summary { cursor: pointer; color: var(--ink-muted); }
+.untracked__dismissed .untracked__item { opacity: 0.75; }
 
 /* ---------- pull request conversation (review page) ---------- */
 .conversation { margin-top: 2rem; }

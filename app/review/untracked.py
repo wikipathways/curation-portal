@@ -38,6 +38,8 @@ class UntrackedPr:
     adoptable: bool
     #: Why not, or a caveat worth reading first (several pathways in one pull request).
     reason: str | None = None
+    #: The head commit, which a curator's dismissal is bound to (``UntrackedDismissal``).
+    head_sha: str = ""
 
 
 def _summarise(plan: Adoption) -> tuple[str, str | None]:
@@ -102,6 +104,7 @@ def scan_untracked(
                 summary=summary,
                 adoptable=adoptable,
                 reason=reason,
+                head_sha=detail.head_sha,
             )
         )
     return out

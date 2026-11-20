@@ -239,3 +239,21 @@ class ReviewEvent(Base):
     #: ``opened`` | ``status`` | ``assigned`` | ``checklist``.
     kind: Mapped[str] = mapped_column(String(32))
     detail: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+
+class UntrackedDismissal(Base):
+    """A curator's "not for the portal" on an open pull request it has no review for.
+
+    The untracked panel listed every open pull request touching ``pathways/``, so year-old test
+    submissions nobody would adopt stood above the queue on every visit. A dismissal hides one
+    from the panel without touching GitHub. It is bound to the head commit it was made on: a new
+    push brings the pull request back, since that is somebody working on it again.
+    """
+
+    __tablename__ = "untracked_dismissal"
+
+    repo: Mapped[str] = mapped_column(String(255), primary_key=True)
+    pr_number: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=False)
+    head_sha: Mapped[str] = mapped_column(String(64))
+    dismissed_by: Mapped[str] = mapped_column(String(255))
+    dismissed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

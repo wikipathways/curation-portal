@@ -900,6 +900,64 @@
       });
   });
 
+  // ---------- untracked panel: dismiss / restore ----------
+  // Portal-side only. The row moves between the two lists in place, so an opened panel stays open.
+  function untrackedCounts(panel) {
+    var listed = panel.querySelectorAll('[data-untracked-list="listed"] > li').length;
+    var hidden = panel.querySelectorAll('[data-untracked-list="dismissed"] > li').length;
+    var count = panel.querySelector('[data-untracked-count]');
+    if (count) { count.textContent = String(listed); count.hidden = listed === 0; }
+    var empty = panel.querySelector('[data-untracked-empty]');
+    if (empty) empty.hidden = listed !== 0;
+    var fold = panel.querySelector('.untracked__dismissed');
+    if (fold) fold.hidden = hidden === 0;
+    var hc = panel.querySelector('[data-untracked-dismissed-count]');
+    if (hc) hc.textContent = String(hidden);
+  }
+
+  document.addEventListener('click', function (e) {
+    var btn = e.target.closest('.btn--untracked');
+    if (!btn || btn.disabled) return;
+    var panel = btn.closest('.untracked');
+    var item = btn.closest('.untracked__item');
+    var pr = btn.getAttribute('data-pr');
+    var action = btn.getAttribute('data-untracked') === 'restore' ? 'restore' : 'dismiss';
+    var label = btn.textContent;
+    btn.disabled = true;
+    postForm('/api/untracked/' + pr + '/' + action, {})
+      .then(function (res) {
+        if (!res.ok) {
+          btn.disabled = false;
+          toast(describeError(res.status, res.body), 'error');
+          return;
+        }
+        if (!panel || !item) return;
+        var target = panel.querySelector('[data-untracked-list="' +
+          (action === 'dismiss' ? 'dismissed' : 'listed') + '"]');
+        var actions = item.querySelector('.untracked__actions');
+        if (actions) {
+          actions.textContent = '';
+          var b = document.createElement('button');
+          b.type = 'button';
+          b.className = 'btn btn--sm btn--ghost btn--untracked';
+          b.setAttribute('data-pr', pr);
+          b.setAttribute('data-untracked', action === 'dismiss' ? 'restore' : 'dismiss');
+          b.textContent = action === 'dismiss' ? 'Restore' : 'Dismiss';
+          actions.appendChild(b);
+        }
+        if (target) target.appendChild(item);
+        untrackedCounts(panel);
+        toast(action === 'dismiss'
+          ? 'Pull request #' + pr + ' dismissed. It is still open on GitHub.'
+          : 'Pull request #' + pr + ' restored. Refresh to adopt it.', 'success');
+      })
+      .catch(function () {
+        btn.disabled = false;
+        btn.textContent = label;
+        toast('Could not reach the server. Try again.', 'error');
+      });
+  });
+
   // ---------- pull request conversation (review page) ----------
   // Everything from GitHub is set as text. Comment bodies are Markdown written by anyone who can
   // comment on the pull request; none of it is ever parsed as HTML here.
