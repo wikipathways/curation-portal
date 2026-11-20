@@ -41,6 +41,7 @@ ALLOWED_ATTRIBUTES = frozenset({
 COORD_LIMIT = 1e6
 
 _DATA_ATTR = re.compile(r"data-[a-z0-9-]{1,40}")
+_ATTR_HOSTILE = re.compile(r"(?i)javascript:|url\(")
 _HEX = re.compile(r"#?([0-9A-Fa-f]{6})([0-9A-Fa-f]{2})?")
 # Control characters XML 1.0 cannot carry at all, plus the C1 range, which it can but which never
 # means anything in a label. Tab and newline are folded to spaces by the caller.
@@ -138,9 +139,17 @@ def clean_text(s: str | None) -> str:
 def attr_text(s: str | None, limit: int = 300) -> str:
     """Free text bound for an attribute (``aria-label``): cleaned, shortened, and without the two
     substrings the client sanitiser treats as an attack — which would otherwise strip the label
-    from a pathway that merely has an odd name."""
-    out = re.sub(r"(?i)javascript:|url\(", "", clean_text(s)).strip()
-    return out[:limit]
+    from a pathway that merely has an odd name.
+
+    Repeated until nothing is left to remove: one pass turns ``javajavascript:script:`` into
+    ``javascript:``, which ``assert_safe_svg`` then refuses, failing the whole preview."""
+    out = clean_text(s)
+    while True:
+        cut = _ATTR_HOSTILE.sub("", out)
+        if cut == out:
+            break
+        out = cut
+    return out.strip()[:limit]
 
 
 def _attr(v: object) -> str:

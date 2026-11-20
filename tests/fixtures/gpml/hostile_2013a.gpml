@@ -2,7 +2,7 @@
 <!-- Hostile input for the renderer: every GPML value that reaches the SVG tries to break out of
      where it is written. The test asserts the output passes assert_safe_svg and carries none of
      the payloads in a live position. -->
-<Pathway xmlns="http://pathvisio.org/GPML/2013a" Name="&quot;&gt;&lt;script&gt;alert(1)&lt;/script&gt; javascript:alert(2) url(evil)" Organism="Homo sapiens">
+<Pathway xmlns="http://pathvisio.org/GPML/2013a" Name="&quot;&gt;&lt;script&gt;alert(1)&lt;/script&gt; javascript:alert(2) url(evil) javajavascript:script:alert(10) uurl(rl(evil) JAVAjavascript:SCRIPT:x" Organism="Homo sapiens">
   <Graphics BoardWidth="NaN" BoardHeight="1e300" />
   <DataNode TextLabel="&lt;script&gt;alert(3)&lt;/script&gt;" GraphId="&quot;&gt;&lt;x onload=alert(4)" Type="Gene&quot; onclick=&quot;alert(5)" GroupRef="loopA">
     <Graphics CenterX="100" CenterY="100" Width="80" Height="25" Color="red&quot; onload=&quot;alert(6)" FillColor="url(javascript:alert(7))" FontName="Arial;}&lt;/style&gt;&lt;script&gt;alert(8)&lt;/script&gt;" FontSize="1e300" ShapeType="&lt;script&gt;" Rotation="NaN" LineThickness="100000" />
