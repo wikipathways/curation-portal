@@ -5,10 +5,12 @@ Repaired copies of GitHub Actions workflows belonging to
 staged here so they can be reviewed and then opened as a pull request against that
 repository.
 
-> [!note] **In sync with the live repository as of 2026-11-13.** All four files under
-> `.github/workflows/` are byte-identical to `wikipathways/sandbox-wp-db` at `main` `c96ff6f`
-> (same git blob ids). The last gap was 3A's `PUBLISHED_ASSETS_BASE_URL` step, applied there on
-> 2026-08-21 and copied back here. The live repository also runs `2_after_pr_processed.yml`,
+> [!note] **In sync with the live repository as of 2026-11-20.** All four files under
+> `.github/workflows/` are byte-identical to `wikipathways/sandbox-wp-db` at `main` `efc675d`
+> (same git blob ids). That pulls in Dependabot's action-version bumps (`4dbf00a`, 2026-11-19)
+> and PR #90, which restores the bridge-file cache read-only and installs only the pathway's own
+> organism's file, instead of re-downloading the 800 MB Homo sapiens file from Zenodo on every
+> run. The live repository also runs `2_after_pr_processed.yml`,
 > `3b_rejected_pull_request.yml` and two scheduled workflows that were never staged here. Check
 > again before relying on this: `git hash-object <file>` against
 > `gh api repos/wikipathways/sandbox-wp-db/contents/.github/workflows --jq '.[]|"\(.name) \(.sha)"'`.
