@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 100 100" onload="window.__pwned=1">
+ <script>window.__pwned=2</script>
+ <style>rect{fill:url(javascript:alert(1))}</style>
+ <foreignObject width="100" height="100"><div xmlns="http://www.w3.org/1999/xhtml" onclick="window.__pwned=3">x</div></foreignObject>
+ <a href="javascript:window.__pwned=4"><rect class="evil-a" x="0" y="0" width="10" height="10"/></a>
+ <use xlink:href="#x"/>
+ <image href="https://example.org/x.png"/>
+ <rect id="ok" class="kept" x="1" y="1" width="5" height="5" fill="url(https://evil.example/x)" stroke="url(#ok)" onclick="window.__pwned=5" style="fill:red" data-id="n-x" data-evil="javascript:alert(1)" xlink:href="#ok" transform="java&#9;script:1"/>
+ <g class="wp-node" data-id="n-y"><text x="5" y="5">Label <tspan>inner</tspan></text></g>
+ <animate attributeName="href" to="javascript:alert(1)"/>
+ <set attributeName="onmouseover" to="alert(1)"/>
+ <svg onload="window.__pwned=6"><rect x="1" y="1" width="1" height="1"/></svg>
+</svg>

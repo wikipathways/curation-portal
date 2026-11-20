@@ -1,0 +1,104 @@
+{
+ "version": 2,
+ "before": [
+  {
+   "change": "reannotated"
+  },
+  {
+   "change": "unchanged"
+  },
+  {
+   "change": "unchanged"
+  },
+  {
+   "change": "moved"
+  },
+  {
+   "change": "removed"
+  }
+ ],
+ "after": [
+  {
+   "change": "reannotated",
+   "was": {
+    "label": "AHR",
+    "database": "Ensembl",
+    "identifier": "ENSG00000000001"
+   }
+  },
+  {
+   "change": "unchanged"
+  },
+  {
+   "change": "added"
+  },
+  {
+   "change": "unchanged"
+  },
+  {
+   "change": "moved"
+  }
+ ],
+ "summary": {
+  "added": 1,
+  "removed": 1,
+  "reannotated": 1,
+  "relabelled": 0,
+  "moved": 1,
+  "unchanged": 2
+ },
+ "meta": {},
+ "pairs": [
+  {
+   "before": "n-d001",
+   "after": "n-d001",
+   "change": "reannotated"
+  },
+  {
+   "before": "n-d002",
+   "after": "n-d002",
+   "change": "unchanged"
+  },
+  {
+   "before": "n-d004",
+   "after": "n-d004",
+   "change": "unchanged"
+  },
+  {
+   "before": "n-d005",
+   "after": "n-d005",
+   "change": "moved"
+  }
+ ],
+ "ids": {
+  "before": {
+   "n-d001": "reannotated",
+   "n-d002": "unchanged",
+   "n-d004": "unchanged",
+   "n-d005": "moved",
+   "n-d009": "removed"
+  },
+  "after": {
+   "n-d001": {
+    "change": "reannotated",
+    "was": {
+     "label": "AHR",
+     "database": "Ensembl",
+     "identifier": "ENSG00000000001"
+    }
+   },
+   "n-d002": {
+    "change": "unchanged"
+   },
+   "n-d003": {
+    "change": "added"
+   },
+   "n-d004": {
+    "change": "unchanged"
+   },
+   "n-d005": {
+    "change": "moved"
+   }
+  }
+ }
+}

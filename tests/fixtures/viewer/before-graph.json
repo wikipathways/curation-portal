@@ -1,0 +1,271 @@
+{
+ "version": 2,
+ "renderer": 2,
+ "dialect": "2013a",
+ "viewBox": [
+  0,
+  0,
+  400,
+  300
+ ],
+ "nodes": [
+  {
+   "id": "n-d001",
+   "graph_id": "d001",
+   "kind": "DataNode",
+   "type": "GeneProduct",
+   "label": "AHR",
+   "database": "Ensembl",
+   "identifier": "ENSG00000000001",
+   "url": "https://identifiers.org/ensembl:ENSG00000000001",
+   "comment": "",
+   "bbox": [
+    60,
+    40,
+    80,
+    20
+   ],
+   "cx": 100,
+   "cy": 50,
+   "group": "g-grp1",
+   "shape": "Rectangle",
+   "states": [
+    {
+     "id": "st-st1",
+     "label": "P",
+     "database": "",
+     "identifier": ""
+    }
+   ]
+  },
+  {
+   "id": "n-d002",
+   "graph_id": "d002",
+   "kind": "DataNode",
+   "type": "GeneProduct",
+   "label": "ARNT",
+   "database": "Ensembl",
+   "identifier": "ENSG00000143437",
+   "url": "javascript:alert(1)",
+   "comment": "",
+   "bbox": [
+    60,
+    70,
+    80,
+    20
+   ],
+   "cx": 100,
+   "cy": 80,
+   "group": "g-grp1",
+   "shape": "Rectangle",
+   "states": []
+  },
+  {
+   "id": "n-d004",
+   "graph_id": "d004",
+   "kind": "DataNode",
+   "type": "Metabolite",
+   "label": "A",
+   "database": "",
+   "identifier": "",
+   "url": null,
+   "comment": "",
+   "bbox": [
+    200,
+    50,
+    40,
+    20
+   ],
+   "cx": 220,
+   "cy": 60,
+   "group": null,
+   "shape": "Rectangle",
+   "states": []
+  },
+  {
+   "id": "n-d005",
+   "graph_id": "d005",
+   "kind": "DataNode",
+   "type": "Metabolite",
+   "label": "B",
+   "database": "ChEBI",
+   "identifier": "CHEBI:15377",
+   "url": "https://identifiers.org/CHEBI:15377",
+   "comment": "",
+   "bbox": [
+    320,
+    50,
+    40,
+    20
+   ],
+   "cx": 340,
+   "cy": 60,
+   "group": null,
+   "shape": "Rectangle",
+   "states": []
+  },
+  {
+   "id": "n-d009",
+   "graph_id": "d009",
+   "kind": "DataNode",
+   "type": "Protein",
+   "label": "CYP1A1",
+   "database": "",
+   "identifier": "",
+   "url": null,
+   "comment": "",
+   "bbox": [
+    200,
+    200,
+    80,
+    20
+   ],
+   "cx": 240,
+   "cy": 210,
+   "group": null,
+   "shape": "Rectangle",
+   "states": []
+  }
+ ],
+ "edges": [
+  {
+   "id": "e-i002",
+   "graph_id": "i002",
+   "kind": "Interaction",
+   "type": "mim-conversion",
+   "type_label": "conversion",
+   "source": "n-d004",
+   "target": "n-d005",
+   "target_edge": null,
+   "source_edge": null,
+   "points": [
+    [
+     240,
+     60
+    ],
+    [
+     320,
+     60
+    ]
+   ],
+   "anchors": [
+    {
+     "id": "a-a001",
+     "position": 0.5,
+     "x": 280,
+     "y": 60
+    }
+   ],
+   "dangling": [],
+   "comment": "",
+   "database": "",
+   "identifier": ""
+  },
+  {
+   "id": "e-i003",
+   "graph_id": "i003",
+   "kind": "Interaction",
+   "type": "mim-catalysis",
+   "type_label": "catalysis",
+   "source": "n-d002",
+   "target": "a-a001",
+   "target_edge": "e-i002",
+   "source_edge": null,
+   "points": [
+    [
+     150,
+     85
+    ],
+    [
+     290,
+     60
+    ]
+   ],
+   "anchors": [],
+   "dangling": [],
+   "comment": "",
+   "database": "",
+   "identifier": ""
+  },
+  {
+   "id": "e-i004",
+   "graph_id": "i004",
+   "kind": "GraphicalLine",
+   "type": "Line",
+   "type_label": "line",
+   "source": "n-d005",
+   "target": null,
+   "target_edge": null,
+   "source_edge": null,
+   "points": [
+    [
+     340,
+     75
+    ],
+    [
+     340,
+     150
+    ]
+   ],
+   "anchors": [],
+   "dangling": [
+    "target"
+   ],
+   "comment": "",
+   "database": "",
+   "identifier": ""
+  }
+ ],
+ "groups": [
+  {
+   "id": "g-grp1",
+   "group_id": "grp1",
+   "graph_id": "g001",
+   "style": "complex",
+   "members": [
+    "n-d001",
+    "n-d002"
+   ],
+   "parent": null,
+   "bbox": [
+    44,
+    30,
+    112,
+    70
+   ]
+  }
+ ],
+ "labels": [
+  {
+   "id": "l-l001",
+   "text": "Nucleus",
+   "bbox": [
+    180,
+    10,
+    60,
+    20
+   ],
+   "href": "javascript:alert(1)"
+  }
+ ],
+ "shapes": [
+  {
+   "id": "s-s001",
+   "type": "Rectangle",
+   "label": "",
+   "bbox": [
+    300,
+    200,
+    80,
+    60
+   ]
+  }
+ ],
+ "stats": {
+  "nodes": 5,
+  "edges": 3,
+  "dangling_ends": 1,
+  "unannotated": 2,
+  "groups": 1
+ }
+}
