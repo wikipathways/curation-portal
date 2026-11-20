@@ -1,0 +1,45 @@
+<p>
+  The same checks run in three places: on the submit form the moment you choose a file, on the
+  review page, and in the summary the portal posts on the pull request. Each finding gets one of
+  these grades:
+</p>
+<table class="docs-table docs-table--ladder">
+  <thead><tr><th scope="col">Grade</th><th scope="col">What it means</th></tr></thead>
+  <tbody>
+    {% for s in severities %}
+    <tr>
+      <td><span class="quality__pill quality__pill--{{ s.value }}">{{ s.word }}</span></td>
+      <td>{{ s.meaning }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<p>
+  The checks, in the order the portal lists them. <em>Repository check</em> marks the ones the
+  repository also runs on every pull request; the portal predicts its answer so you can fix it
+  before you submit. <em>Checklist</em> names the curation checklist item a check fills in.
+</p>
+<div class="docs-table__scroll">
+<table class="docs-table docs-table--rules">
+  <thead>
+    <tr><th scope="col">Check</th><th scope="col">What it looks for</th></tr>
+  </thead>
+  <tbody>
+    {% for r in rules %}
+    <tr id="rule-{{ r.id }}">
+      <td>
+        <strong>{{ r.title }}</strong>
+        <code class="docs-id">{{ r.id }}</code>
+        <span class="docs-tags">
+          {% if r.refuses %}<span class="docs-tag docs-tag--block">Can refuse the file</span>{% endif %}
+          {% if r.predicts_repo %}<span class="docs-tag">Repository check</span>{% endif %}
+          {% if r.checklist_key %}<span class="docs-tag">Checklist: <a href="#check-{{ r.checklist_key }}">{{ r.checklist_key }}</a></span>{% endif %}
+        </span>
+      </td>
+      <td>{{ r.explain }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>

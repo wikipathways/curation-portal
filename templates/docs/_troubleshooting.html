@@ -1,0 +1,124 @@
+<p>
+  The problems people actually run into, roughly in the order they meet them. Most come from the
+  repository's own processing, which is stricter than PathVisio about a few attributes that
+  PathVisio always writes but hand-edited or converted files often lack.
+</p>
+
+<h3 id="troubleshooting-file">Problems with the file</h3>
+<dl class="docs-defs">
+  <dt id="troubleshooting-gpml2021">My file is refused for having no Name or no Organism, but it has both</dt>
+  <dd>
+    The file is probably in the newer GPML 2021 format, which stores the title and organism
+    differently. The portal accepts GPML 2013a, the format WikiPathways uses. Save the pathway in
+    that format from PathVisio and upload it again.
+  </dd>
+
+  <dt>A group has no stacking order (<a href="#rule-gpml.group_zorder">Group stacking order</a>)</dt>
+  <dd>
+    In every group, such as a complex, at least one member needs a <code>ZOrder</code> on its
+    <code>&lt;Graphics&gt;</code>. Without it the repository's converter cannot draw the group, so
+    no diagram or draft page is made and publishing fails later. Opening the file in PathVisio
+    and saving it again adds the missing values.
+  </dd>
+
+  <dt>A group inside another group</dt>
+  <dd>
+    The repository's converter refuses nested groups outright, with or without stacking order,
+    and the portal does not check for them yet. The repository's processing fails and no draft
+    page appears. Flatten the groups (ungroup the inner one) and upload again.
+  </dd>
+
+  <dt>Lines without a thickness (<a href="#rule-gpml.line_thickness">Interaction line thickness</a>)</dt>
+  <dd>
+    Every interaction needs a <code>LineThickness</code> on its <code>&lt;Graphics&gt;</code>, or
+    the repository's metadata step fails, and with it the identifier table, the reference list and
+    the draft page. Saving the file from PathVisio adds it.
+  </dd>
+
+  <dt>Empty citation IDs (<a href="#rule-gpml.citation_ids">Empty citation IDs</a>)</dt>
+  <dd>
+    A literature reference with an empty ID. The repository patches it, but it is the most common
+    reason its metadata step fails. Fill in the PubMed ID or DOI, or delete the empty reference.
+  </dd>
+</dl>
+
+<h3 id="troubleshooting-submitting">Problems submitting</h3>
+<dl class="docs-defs">
+  <dt id="troubleshooting-revoked">"GitHub rejected your authorisation"</dt>
+  <dd>
+    The permission you gave the portal on GitHub was withdrawn, or has lapsed after a long time
+    unused. You are signed out; sign in again. If writes still fail after that, remove the portal
+    under <a href="https://github.com/settings/applications" target="_blank" rel="noopener">GitHub
+    &rsaquo; Settings &rsaquo; Applications</a> and sign in once more to authorise it afresh.
+  </dd>
+
+  {% if submit_identity == 'fork' %}
+  <dt id="troubleshooting-stale-fork">"GitHub did not accept the change" right after the repository changed</dt>
+  <dd>
+    Before each submission the portal brings your fork up to date with the repository. GitHub can
+    refuse that update when the repository's recent changes include its own automation files,
+    because changing those needs a permission the portal does not ask for. Your fork is then left
+    behind and the submission can fail. Open your fork on GitHub, press <em>Sync fork</em> and
+    then <em>Update branch</em>, and submit again.
+  </dd>
+  {% endif %}
+
+  <dt>"This pathway is checked out by …"</dt>
+  <dd>
+    Someone else has an update of this pathway open. Only one edit of a pathway can be open at a
+    time; try again once theirs is finished.
+  </dd>
+
+  <dt>Too many submissions</dt>
+  <dd>
+    Each account can open a limited number of pull requests per hour, to stop accidental retry
+    loops. Nothing is lost: wait a while and upload again. Uploading a correction to an existing
+    pull request is not limited.
+  </dd>
+</dl>
+
+<h3 id="troubleshooting-review">Problems during review</h3>
+<dl class="docs-defs">
+  {% if pipeline_mode %}
+  <dt id="troubleshooting-draft">"No draft page yet"</dt>
+  <dd>
+    Approval needs the draft page the repository builds while processing the pull request,
+    because its publish workflow cannot run without it. If the processing is still running (see
+    <a href="#timeline">how long things take</a>), wait and try again. If it failed, the
+    <em>Automated checks</em> panel says so with a link to the failing run; the file almost always
+    has one of the problems listed above, and the submitter fixes it and uploads a revision.
+  </dd>
+
+  <dt id="troubleshooting-publish-failed">Not published</dt>
+  <dd>
+    The submission was approved but the repository never reported a publication. Open the
+    publish run linked from the review. Approving again removes and re-applies the
+    <code>accepted</code> label, which starts a fresh run. If the pathway was published some
+    other way, record its WPID in the <em>Record the published WPID</em> box instead.
+  </dd>
+  {% endif %}
+
+  <dt id="troubleshooting-base-moved">"The pathway changed on the main branch after this update was made"</dt>
+  <dd>
+    Someone changed the published pathway while this update was waiting. An update replaces the
+    whole file, so approving it would undo their change, and the portal refuses. The submitter
+    downloads the current version from the <em>Update existing</em> form, redoes the edit on it and
+    uploads it again; it lands on the same pull request.
+  </dd>
+
+  <dt id="troubleshooting-unexpected-files">"This pull request changes other files too"</dt>
+  <dd>
+    Only the pathway may be published, so approval is refused while the pull request carries
+    anything else. The usual cause is a fork that has drifted: commits on the submitter's fork
+    that the repository does not have were carried into the pull request. On GitHub, open the fork,
+    use <em>Sync fork</em> to discard the fork's own commits (if they are not needed), and submit
+    the pathway again as a new pull request. Since the portal now checks forks before submitting,
+    this mostly affects older pull requests and ones opened on GitHub.
+  </dd>
+
+  <dt>"has a new commit since this page was loaded"</dt>
+  <dd>
+    Someone pushed to the pull request while you were reviewing it. Reload the page and look at
+    the new version before approving.
+  </dd>
+</dl>

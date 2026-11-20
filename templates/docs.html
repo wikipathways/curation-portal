@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}Help &middot; WikiPathways Curation Portal{% endblock %}
+{% block head %}<link rel="stylesheet" href="{{ static_url('docs.css') }}">{% endblock %}
+
+{# One page rather than one per topic: people arrive here from a specific word on a specific
+   screen, and in-page search (Ctrl+F) finds it wherever it is. The sections are partials only so
+   each one stays editable on its own. The rule and checklist tables are generated from the code
+   that runs them (app/docs.py), so they cannot fall out of step with it. #}
+{% set SECTIONS = [
+  ('start', 'Getting started'),
+  ('submit', 'Submitting a new pathway'),
+  ('update', 'Updating a published pathway'),
+  ('revise', 'When a curator asks for changes'),
+  ('review', 'Reading a review page'),
+  ('curator', 'For curators'),
+  ('rules', 'The automated checks'),
+  ('checklist', 'The curation checklist'),
+  ('timeline', 'How long things take'),
+  ('troubleshooting', 'Troubleshooting'),
+  ('glossary', 'Glossary'),
+] %}
+
+{% block content %}
+<div class="docs">
+  <header class="docs__intro">
+    <h1>Help</h1>
+    <p class="lede">
+      How to submit and update pathways through this portal, what curators see when they review
+      them, and what to do when something goes wrong. The portal opens pull requests on
+      <code>{{ repo }}</code>{% if pipeline_mode and site_host %}, which publishes to <strong>{{ site_host }}</strong>{% endif %}.
+    </p>
+  </header>
+
+  <div class="docs__layout">
+    <nav class="docs-toc" aria-label="On this page">
+      <p class="docs-toc__title">On this page</p>
+      <ol class="docs-toc__list">
+        {% for id, title in SECTIONS %}
+        <li><a href="#{{ id }}">{{ title }}</a></li>
+        {% endfor %}
+      </ol>
+      {% if login %}<p class="docs-toc__tour"><a href="/?tour=1" data-tour-start>Take the tour</a></p>{% endif %}
+    </nav>
+
+    <div class="docs__body">
+      {% for id, title in SECTIONS %}
+      <section class="docs-section" id="{{ id }}" aria-labelledby="{{ id }}-title">
+        <h2 id="{{ id }}-title">{{ title }}</h2>
+        {% include "docs/_" ~ id ~ ".html" %}
+      </section>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+{% endblock %}

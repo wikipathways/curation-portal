@@ -60,6 +60,9 @@ class ChecklistItemDef:
     required: bool
     auto_check: MetaFn | None = None
     relevant_for_update: RelevanceFn | None = None
+    #: How a curator answers this item, in plain words. Shown on /docs beside the label; on the
+    #: item rather than in the template so a new item cannot ship without one (a test requires it).
+    help: str = ""
 
 
 # ---- auto-check implementations (offline, cheap) -----------------------------------------
@@ -171,13 +174,28 @@ def _rel_ontology(before, after) -> bool:
 # render, and in pipeline mode it owns the naming outright.
 CURATION_CHECKLIST: list[ChecklistItemDef] = [
     # A human still eyeballs the rendered diagram — no auto_check.
-    ChecklistItemDef("render_ok", "Rendered pathway displays correctly", required=True),
+    ChecklistItemDef(
+        "render_ok",
+        "Rendered pathway displays correctly",
+        required=True,
+        help=(
+            "Look at the diagram on the review page. Are the nodes, labels and lines where you "
+            "would expect, with nothing missing or piled on top of each other? The portal draws "
+            "its own preview and can differ in detail from the published picture; when in doubt, "
+            "compare with the repository's own render, linked once its pipeline has run."
+        ),
+    ),
     ChecklistItemDef(
         "datanodes_mapped",
         "Data nodes are annotated with identifiers",
         required=True,
         auto_check=_auto_datanodes,
         relevant_for_update=_rel_datanodes,
+        help=(
+            "Every data node carries a database identifier. Pre-filled from the file; open the "
+            "data node table and check that the identifiers point at the right genes, proteins "
+            "and metabolites."
+        ),
     ),
     ChecklistItemDef(
         "references_valid",
@@ -185,9 +203,25 @@ CURATION_CHECKLIST: list[ChecklistItemDef] = [
         required=True,
         auto_check=_auto_references,
         relevant_for_update=_rel_references,
+        help=(
+            "Open each listed reference and check that it exists and supports the pathway. "
+            "The portal can count references in the file but not read them, so the file alone "
+            "never ticks this. Where the repository's own processing runs, it is ticked once "
+            "that processing has resolved every reference the file declares, and marked as a "
+            "problem when some did not resolve."
+        ),
     ),
     ChecklistItemDef(
-        "naming_ok", "WPID and file layout are correct", required=True, auto_check=_auto_naming
+        "naming_ok",
+        "WPID and file layout are correct",
+        required=True,
+        auto_check=_auto_naming,
+        help=(
+            "Where the file sits and which identifier it gets. Where the repository publishes "
+            "through its own workflows, it assigns both and this item fills in from its record "
+            "once its pipeline has run; where the portal merges, the portal assigns them and "
+            "this passes on its own."
+        ),
     ),
     # "Meaningful" is still a human judgement, and the auto-check cannot reach ``pass`` — but it
     # can say a description is missing or shorter than the repository will accept, which is a fact
@@ -198,12 +232,24 @@ CURATION_CHECKLIST: list[ChecklistItemDef] = [
         required=True,
         auto_check=_auto_description,
         relevant_for_update=_rel_description,
+        help=(
+            "Is the title specific, and does the description summarise the pathway in two or "
+            "three sentences? The automatic check can only say a description is missing or "
+            "short; whether it is meaningful is your call, so this never passes on its own."
+        ),
     ),
     # No auto_check, and there cannot be one: whether an interaction is *connected* is about the
     # graph the diagram draws, not about the annotation the parser reads. It is here because the
     # repository asks every reviewer for it and the portal was the only place not asking.
     ChecklistItemDef(
-        "interactions_connected", "Interactions are connected", required=True
+        "interactions_connected",
+        "Interactions are connected",
+        required=True,
+        help=(
+            "Do the arrows really attach to the nodes they point at? A line that only ends near "
+            "a node looks connected in the drawing but is not linked in the data, so the "
+            "interaction is lost to anyone analysing the pathway. No automatic check exists."
+        ),
     ),
     ChecklistItemDef(
         "ontology_tags",
@@ -211,13 +257,24 @@ CURATION_CHECKLIST: list[ChecklistItemDef] = [
         required=False,
         auto_check=_auto_ontology,
         relevant_for_update=_rel_ontology,
+        help=(
+            "Optional. Whether the pathway carries ontology tags (pathway, disease or cell "
+            "type). Never blocks approval."
+        ),
     ),
     # Derived from the pull request's file list rather than from the GPML, so it has no
     # ``auto_check`` (which takes metadata) and is filled in by ``build_checklist`` directly.
     # Always passes for a portal submission — the app commits one file — and exists for the
     # pull requests the app did not open, where changing several pathways at once is real.
     ChecklistItemDef(
-        "one_pathway_per_pr", "One pathway per pull request", required=True
+        "one_pathway_per_pr",
+        "One pathway per pull request",
+        required=True,
+        help=(
+            "The repository publishes one pathway per pull request. Always true for a "
+            "submission made through the portal; a pull request opened on GitHub that changes "
+            "several pathways fails here and has to be split."
+        ),
     ),
 ]
 

@@ -1,1 +1,100 @@
-/* tour.css: the onboarding tour. */
+/* tour.css: the onboarding tour (tour.js) and the footer's Help line. Reuses app.css's tokens. */
+
+.site-footer__help { margin-top: 0.3rem; }
+
+/* The element a step describes. An outline rather than a dimmed overlay, so the page stays
+   readable and usable while the tour is open. */
+.tour-target {
+  outline: 3px solid var(--focus);
+  outline-offset: 4px;
+  border-radius: var(--radius-s);
+}
+
+.tour {
+  position: fixed;
+  z-index: 1000;
+  top: 0;
+  left: 0;
+  width: min(22rem, calc(100vw - 16px));
+  padding: 1rem 1.1rem 0.9rem;
+  background: var(--surface);
+  color: var(--ink);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-m);
+  box-shadow: var(--shadow-pop);
+  --tour-arrow-x: 50%;
+}
+/* Focused by script so a screen reader reads it; the buttons inside carry the visible focus. */
+.tour:focus { outline: none; }
+
+.tour__count { margin: 0 0 0.25rem; font-size: 0.75rem; color: var(--ink-faint); }
+.tour__title { margin: 0 0 0.35rem; font-size: 1.02rem; }
+.tour__body { margin: 0 0 0.9rem; font-size: 0.92rem; line-height: 1.5; color: var(--ink-muted); }
+
+.tour__actions { display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; }
+.tour__nav { display: flex; gap: 0.4rem; margin-left: auto; }
+.tour__skip {
+  background: none;
+  border: 0;
+  padding: 0.3rem 0;
+  font: inherit;
+  font-size: 0.85rem;
+  color: var(--ink-muted);
+  text-decoration: underline;
+  cursor: pointer;
+}
+.tour__skip:hover { color: var(--ink); }
+
+/* A small diamond on the edge facing the target. */
+.tour__arrow {
+  position: absolute;
+  left: var(--tour-arrow-x);
+  width: 12px;
+  height: 12px;
+  margin-left: -6px;
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  transform: rotate(45deg);
+}
+.tour[data-placement="below"] .tour__arrow { top: -7px; border-right: 0; border-bottom: 0; }
+.tour[data-placement="above"] .tour__arrow { bottom: -7px; border-left: 0; border-top: 0; }
+.tour[data-placement="sheet"] .tour__arrow { display: none; }
+
+/* A phone has no room beside anything: the tour becomes a sheet along the bottom edge. */
+.tour[data-placement="sheet"] {
+  top: auto !important;
+  left: 8px !important;
+  right: 8px;
+  bottom: 8px;
+  width: auto;
+}
+
+/* The small-screen invitation, in place of starting the tour by itself. */
+.tour-prompt {
+  position: fixed;
+  z-index: 999;
+  left: 50%;
+  bottom: 12px;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.5rem 0.5rem 0.5rem 0.9rem;
+  background: var(--surface);
+  color: var(--ink);
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  box-shadow: var(--shadow-pop);
+  font-size: 0.9rem;
+  white-space: nowrap;
+}
+.tour-prompt__close {
+  background: none;
+  border: 0;
+  font-size: 1.2rem;
+  line-height: 1;
+  padding: 0.2rem 0.45rem;
+  color: var(--ink-muted);
+  cursor: pointer;
+}
+.tour-prompt__close:hover { color: var(--ink); }

@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% block title %}Submit a pathway &middot; WikiPathways Curation Portal{% endblock %}
+{% block tour_page %}submit{% endblock %}
 
 {% block content %}
 {% if not login %}
@@ -66,7 +67,7 @@
 
 <div class="tabs" role="tablist" aria-label="Submission type">
   <button type="button" class="tab tab--active" role="tab" aria-selected="true" data-tab="new" id="tab-new">New pathway</button>
-  <button type="button" class="tab" role="tab" aria-selected="false" data-tab="update" id="tab-update">Update existing</button>
+  <button type="button" class="tab" role="tab" aria-selected="false" data-tab="update" id="tab-update" data-tour="tab-update">Update existing</button>
 </div>
 
 <section class="tab-panel" data-panel="new" role="tabpanel" aria-labelledby="tab-new">
@@ -76,7 +77,7 @@
       pull request on <code>{{ repo }}</code>.
       {% if pipeline_mode %}Your pathway gets its WPID when a curator accepts it and the database
       publishes it — not now.{% else %}The WPID is assigned when you submit.{% endif %}</p>
-    <div class="file-field">
+    <div class="file-field" data-tour="submit-file">
       <input type="file" id="new-file" accept=".gpml,.xml" required
              aria-label="Pathway GPML file" aria-describedby="new-file-hint">
     </div>
@@ -85,8 +86,8 @@
        it is about the file that was just picked, and above the note field because a submitter who
        is going to change their mind should do it before writing the note. Polite rather than
        assertive: choosing a file is not an error, and the findings never block the button. #}
-    <div class="preflight" id="preflight" role="status" aria-live="polite" hidden></div>
-    <label class="note-field">
+    <div class="preflight" id="preflight" role="status" aria-live="polite" hidden data-tour="preflight"></div>
+    <label class="note-field" data-tour="note">
       <span class="note-field__label">Note for reviewers <span class="muted">(optional)</span></span>
       <textarea id="submit-description" rows="3"
                 placeholder="Anything a curator should know: the source, what this pathway covers, open questions."></textarea>
@@ -95,7 +96,14 @@
       By submitting you release this pathway under <a href="https://creativecommons.org/publicdomain/zero/1.0/" target="_blank" rel="noopener">CC0</a>, like all WikiPathways content.
       <a href="https://www.wikipathways.org/help.html" target="_blank" rel="noopener">Help with pathways and GPML</a>.
     </p>
-    <button type="submit" id="submit-btn" class="btn btn--primary">Submit new pathway</button>
+    {# A small, valid pathway to try the form with: what the checks say about a good file is
+       easier to learn on one than on your own work. #}
+    <p class="hint">
+      No file to hand? <a href="/static/examples/example-pathway.gpml" download>Download an example pathway</a>
+      or read <a href="/docs#submit">how submitting works</a>. Choose the example to see the
+      checks, but please do not submit it: it would open a real pull request.
+    </p>
+    <button type="submit" id="submit-btn" class="btn btn--primary" data-tour="submit">Submit new pathway</button>
     <div class="result-card" id="result-card" hidden></div>
   </form>
 </section>

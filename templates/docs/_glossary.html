@@ -1,0 +1,85 @@
+<dl class="docs-defs docs-defs--glossary">
+  <dt>GPML</dt>
+  <dd>The file format of a WikiPathways pathway: an XML file holding the nodes, lines, labels,
+    annotations and references. PathVisio reads and writes it.</dd>
+
+  <dt>PathVisio</dt>
+  <dd>The desktop program most pathways are drawn in.</dd>
+
+  <dt>WPID</dt>
+  <dd>A pathway's WikiPathways identifier, such as <code>WP554</code>.
+    {% if pipeline_mode %}A new pathway gets one when it is published.{% endif %}</dd>
+
+  <dt>Data node</dt>
+  <dd>A box in the pathway that stands for something: a gene, protein, RNA, metabolite, complex
+    or another pathway.</dd>
+
+  <dt>Identifier (annotation)</dt>
+  <dd>The database entry a data node refers to, for example <code>Ensembl:ENSG00000106546</code>
+    or <code>ChEBI:CHEBI:28119</code>. It is what makes the node findable and usable in
+    analyses.</dd>
+
+  <dt>Interaction</dt>
+  <dd>A line between two things in the pathway, with an arrowhead saying what kind of relation it
+    is (conversion, stimulation, inhibition, binding and so on).</dd>
+
+  <dt>Anchor</dt>
+  <dd>A point on an interaction that another line can attach to, for example a catalyst acting
+    on a conversion.</dd>
+
+  <dt>Group, complex</dt>
+  <dd>Several data nodes kept together. A complex is a group whose members bind each other.</dd>
+
+  <dt>ZOrder</dt>
+  <dd>The stacking order of the elements in a drawing: which is drawn on top of which.</dd>
+
+  <dt>Repository</dt>
+  <dd>The GitHub project that holds every pathway file, here <code>{{ repo }}</code>.</dd>
+
+  <dt>Pull request</dt>
+  <dd>A proposed change to the repository, open for review. The portal opens one for every
+    submission.</dd>
+
+  {% if submit_identity == 'fork' %}
+  <dt>Fork</dt>
+  <dd>Your own copy of the repository on GitHub. The portal uses it to hold your submission until
+    it is reviewed.</dd>
+  {% endif %}
+
+  <dt>Branch</dt>
+  <dd>A named line of changes inside a repository. Each submission gets its own.</dd>
+
+  <dt>Curator</dt>
+  <dd>A person allowed to approve, reject or ask for changes.</dd>
+
+  <dt>Review</dt>
+  <dd>The portal's record of one pull request: its state, checklist, checks and history.</dd>
+
+  <dt>Checklist</dt>
+  <dd>The questions a curator answers before approving (<a href="#checklist">the items</a>).</dd>
+
+  {% if pipeline_mode %}
+  <dt>Draft page</dt>
+  <dd>The pathway's page as it will look once published, built by the repository while it
+    processes the pull request.</dd>
+
+  <dt>Workflow, publish workflow</dt>
+  <dd>The repository's automation on GitHub. One workflow processes every pull request; the
+    publish workflow runs when a curator approves.</dd>
+
+  <dt>Label</dt>
+  <dd>A tag on a pull request. Two of them, <code>accepted</code> and <code>rejected</code>,
+    start the repository's workflows.</dd>
+  {% endif %}
+
+  <dt>Adopted pull request</dt>
+  <dd>One opened on GitHub, for example by the PathVisio plugin, that a curator brought into the
+    portal.</dd>
+
+  <dt>Check-out</dt>
+  <dd>The hold an open update has on a pathway, so that two edits of the same file never
+    collide.</dd>
+
+  <dt>CC0</dt>
+  <dd>The public-domain dedication all WikiPathways content is released under.</dd>
+</dl>

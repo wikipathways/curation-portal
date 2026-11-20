@@ -1,0 +1,130 @@
+<p>
+  Every submission has a review page, reached from the queue with <em>Open full review</em>.
+  Submitters see the same page as curators, without the controls only curators may use. From top
+  to bottom:
+</p>
+<dl class="docs-defs">
+  <dt>Status and progress</dt>
+  <dd>
+    A banner says which state the submission is in and who it is waiting on
+    (<a href="#review-statuses">the states</a>). <em>Checked … ago</em> says when the portal last
+    compared the review with GitHub; <em>Refresh</em> updates the card in place without reloading
+    the page. While the repository is processing or publishing, the card refreshes itself.
+    {% if pipeline_mode %}Once a submission is approved, a progress tracker shows how far
+    publication has got (<a href="#timeline-tracker">what each stage means</a>).{% endif %}
+  </dd>
+  <dt>Automated checks</dt>
+  <dd>
+    The portal's checks on the uploaded file (<a href="#rules">the full list</a>). Where the
+    repository runs the same check itself and has reported back, its answer is shown beside the
+    portal's. A note also appears here when the repository's own processing of the pull request
+    failed.
+  </dd>
+  <dt>Database checks</dt>
+  <dd>
+    For an update: WikiPathways' own quality report on the version that is published now, before
+    this edit. A problem listed there was already there unless this edit fixes it.
+  </dd>
+  <dt>What changed</dt>
+  <dd>
+    For an update: how many data nodes were added, removed, re-annotated (same label, different
+    identifier), relabelled or only moved, and whether the title, description, references or
+    ontology tags changed.
+  </dd>
+  <dt>The diagram</dt>
+  <dd>
+    The pathway drawn by the portal from the uploaded file; for an update, the published version
+    and the new one side by side. How to use it is described <a href="#review-viewer">below</a>.
+    Under it, once the repository has processed the pull request, a link to the
+    <em>draft page</em>, the pathway's page as it will look on {{ site_host or 'the site' }}.
+  </dd>
+  <dt>What the repository generated</dt>
+  <dd>
+    The repository's own reading of the file: how many data nodes it annotated and references it
+    resolved, its own render and a link to its workflow run. It appears once that run has
+    finished; the portal's diagram does not depend on it.
+  </dd>
+  <dt>Submitter note, description, data nodes, references, ontology tags</dt>
+  <dd>
+    What the file contains, as tables. Data nodes without an identifier are marked
+    <em>not annotated</em>; identifiers and references link to their databases.
+  </dd>
+  <dt>Curation checklist</dt>
+  <dd>
+    The questions a curator answers before approving (<a href="#checklist">the items</a>).
+    Items marked <em>auto</em> were suggested by the portal from the file.
+  </dd>
+  <dt>Conversation and history</dt>
+  <dd>
+    The pull request's comments, from people and from the repository's workflows, with a box to
+    add one; and a record of who did what to the review.
+  </dd>
+</dl>
+
+<h3 id="review-viewer">Using the diagram</h3>
+<p>
+  Drag to move around, and use the toolbar or the keys below to zoom. Hovering over a node shows
+  its name; clicking it opens its properties (type, identifier with a link to the database, group,
+  and the interactions it takes part in) and highlights its neighbours, so you can follow what
+  connects to what. Clicking a line shows its type and the two things it connects. Click an
+  interaction in the properties to jump to it.
+</p>
+<ul>
+  <li><strong>Zoom</strong> with <em>+</em> and <em>&minus;</em>, or with Ctrl (Cmd on a Mac)
+    and the mouse wheel. Pinch on a touch screen. <em>Fit</em> shows the whole pathway again.</li>
+  <li><strong>Fullscreen</strong> gives the diagram the whole screen; for an update, both
+    versions go fullscreen together.</li>
+  <li><strong>Search</strong> finds nodes by label or identifier (for example <code>AHR</code>,
+    <code>ENSG00000106546</code> or <code>Ensembl:ENSG00000106546</code>). Press Enter to step
+    through the matches.</li>
+  <li><strong>Legend</strong> lists the node, line and group types in this pathway and, for an
+    update, the change colours with their counts.</li>
+  <li><strong>Show unconnected line ends</strong> marks every line that ends near a node without
+    being attached to it, which is what the
+    <em>Interactions are connected</em> checklist item asks about.</li>
+  <li><strong>Portal render / Database render</strong> switches to the picture the repository's
+    pipeline drew, once it exists. That one is a plain image: no search or properties.</li>
+</ul>
+<p>
+  On the queue the diagrams are still pictures until you point at, click or tab into one, which
+  keeps a long queue fast. The full review page is interactive from the start.
+</p>
+
+<h4>Comparing two versions</h4>
+<p>
+  For an update the two diagrams move together: zoom or pan one and the other follows, and
+  selecting a node selects its counterpart. Changed nodes are coloured and outlined by kind of
+  change, with a badge, so the difference does not rely on colour alone. <em>Previous</em> and
+  <em>Next change</em> step through the changes in reading order. A switch in the legend hides
+  nodes that only moved, since a re-layout can produce many of them.
+</p>
+
+<h4>Keyboard</h4>
+<p>Tab into the diagram first. The keys work while it has focus.</p>
+<table class="docs-table docs-table--keys">
+  <thead><tr><th scope="col">Key</th><th scope="col">What it does</th></tr></thead>
+  <tbody>
+    <tr><td><kbd>&larr;</kbd> <kbd>&uarr;</kbd> <kbd>&rarr;</kbd> <kbd>&darr;</kbd></td><td>Move to the next node in that direction when a node has focus; otherwise pan</td></tr>
+    <tr><td><kbd>+</kbd> <kbd>&minus;</kbd></td><td>Zoom in, zoom out</td></tr>
+    <tr><td><kbd>0</kbd></td><td>Fit the whole pathway</td></tr>
+    <tr><td><kbd>F</kbd></td><td>Fullscreen on or off</td></tr>
+    <tr><td><kbd>/</kbd></td><td>Search</td></tr>
+    <tr><td><kbd>N</kbd> <kbd>P</kbd></td><td>Next, previous change (updates only)</td></tr>
+    <tr><td><kbd>Enter</kbd></td><td>Show the focused node's properties</td></tr>
+    <tr><td><kbd>Esc</kbd></td><td>Close the properties, or leave fullscreen</td></tr>
+  </tbody>
+</table>
+<p>
+  A screen reader announces each node's label and how it changed, and reads the properties as
+  they open.
+</p>
+
+<h3 id="review-statuses">The states a submission goes through</h3>
+<table class="docs-table">
+  <thead><tr><th scope="col">State</th><th scope="col">What it means</th></tr></thead>
+  <tbody>
+    {% for s in statuses %}
+    <tr><td><span class="badge badge--{{ s.status }}">{{ s.label }}</span></td><td>{{ s.blurb }}</td></tr>
+    {% endfor %}
+  </tbody>
+</table>

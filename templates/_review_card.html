@@ -44,7 +44,7 @@
 {% set quiet = (q.findings | rejectattr('severity', 'in', QUALITY_LOUD) | list) if q else [] %}
 {% set publish_failed = r.pipeline and r.pipeline.publish_run and r.pipeline.publish_run.conclusion not in (None, 'success') %}
 {% if q or (r.pipeline and r.pipeline.run_failed) or publish_failed %}
-<section class="quality{% if loud %} quality--{{ q.status }}{% endif %}">
+<section class="quality{% if loud %} quality--{{ q.status }}{% endif %}" data-tour="quality">
   <h3 class="quality__heading">Automated checks</h3>
 
   {# The repository ran its own processing and could not finish. In practice that means it could
@@ -447,7 +447,7 @@
   </div>
   {% endif %}
 
-  <div class="checklist">
+  <div class="checklist" data-tour="checklist">
     <h3 class="checklist__title">Curation checklist</h3>
     <ul>
       {% for it in r.checklist %}
@@ -474,7 +474,7 @@
 
   {% if can_act %}
     {% set blocking = r.checklist | selectattr('required') | rejectattr('state', 'equalto', 'pass') | list %}
-    <div class="review-card__actions">
+    <div class="review-card__actions" data-tour="actions">
       <label class="assign">
         <span>Assign reviewer</span>
         <select class="assign__select"
@@ -525,7 +525,7 @@
      nowhere in the portal to answer, which is the whole reason they are not using git. It is the
      submitter's control first and the curator's second, so it sits outside the curator gate. #}
   {% if can_revise and expanded %}
-  <div class="revise-panel">
+  <div class="revise-panel" data-tour="revise">
     <label class="revise-panel__label" for="revise-{{ r.pr_number }}">Upload a revision</label>
     <input type="file" id="revise-{{ r.pr_number }}" class="revise-file" accept=".gpml,application/xml,text/xml" data-preflight="revise-preflight-{{ r.pr_number }}">
     <div class="preflight" id="revise-preflight-{{ r.pr_number }}" role="status" aria-live="polite" hidden></div>

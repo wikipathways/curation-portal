@@ -8,10 +8,12 @@
   <link rel="stylesheet" href="{{ static_url('app.css') }}">
   <link rel="stylesheet" href="{{ static_url('viewer.css') }}">
   <link rel="stylesheet" href="{{ static_url('tour.css') }}">
+  {% block head %}{% endblock %}
 </head>
 {# The client has to know whether approving merges or hands the pull request to the repository:
    otherwise the button says "Merging…" on a target that never merges anything. #}
-<body data-publish-mode="{{ 'pipeline' if pipeline_mode else 'direct' }}">
+{# data-signed-in: the onboarding tour starts by itself only for someone who can use the page. #}
+<body data-publish-mode="{{ 'pipeline' if pipeline_mode else 'direct' }}"{% if login %} data-signed-in{% endif %}>
   <div class="shell">
     <a class="skip-link" href="#main">Skip to content</a>
     <header class="site-header">
@@ -23,8 +25,9 @@
       </a>
       <nav class="site-header__nav" aria-label="Primary">
         <a href="/"{% if request and request.url.path == '/' %} aria-current="page"{% endif %}>Submit</a>
-        {% if login %}<a href="/dashboard?mine=1">My submissions</a>{% endif %}
+        {% if login %}<a href="/dashboard?mine=1" data-tour="nav-mine">My submissions</a>{% endif %}
         <a href="/dashboard"{% if request and request.url.path.startswith('/dashboard') %} aria-current="page"{% endif %}>{% if is_curator %}Curation queue{% else %}All submissions{% endif %}</a>
+        <a href="/docs" data-tour="nav-help"{% if request and request.url.path.startswith('/docs') %} aria-current="page"{% endif %}>Help</a>
         {% if login %}
           <span class="site-header__who">
             @{{ login }}
@@ -49,7 +52,8 @@
     </aside>
     {% endif %}
 
-    <main id="main">
+    {# The tour picks its steps by this name; a page without one has no tour. #}
+    <main id="main" data-tour-page="{% block tour_page %}{% endblock %}">
       <div class="container">
         {% block content %}{% endblock %}
       </div>
@@ -59,6 +63,11 @@
       {# The target repo is configurable, so naming a fixed one here would eventually lie —
          it already did, once the portal was pointed at the sandbox. #}
       <p>A portal for uploading, updating, and reviewing pathways. Opens pull requests on <a href="https://github.com/{{ repo }}">{{ repo }}</a>.</p>
+      {# The tour link goes to the submit page's tour unless the current page has one of its own,
+         which tour.js decides; without JavaScript it still lands somewhere sensible. Signed in
+         only: signed out, the submit form and the review actions are not on the page, and the
+         tour would come down to one step pointing at this footer's Help link. #}
+      <p class="site-footer__help"><a href="/docs">Help</a>{% if login %} &middot; <a href="/?tour=1" data-tour-start>Take the tour</a>{% endif %}</p>
     </footer>
   </div>
 

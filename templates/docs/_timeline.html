@@ -1,0 +1,80 @@
+{% if pipeline_mode %}
+<p>
+  Most of the waiting is the repository's own automation, which runs on GitHub and not in the
+  portal. Rough times, measured on the sandbox repository:
+</p>
+<table class="docs-table">
+  <thead><tr><th scope="col">Step</th><th scope="col">Typical time</th><th scope="col">What is happening</th></tr></thead>
+  <tbody>
+    <tr>
+      <td>Checks on your file</td>
+      <td>a second or two</td>
+      <td>The portal grades the file as soon as you choose it.</td>
+    </tr>
+    <tr>
+      <td>Pull request opened, diagram drawn</td>
+      <td>a few seconds</td>
+      <td>The review page exists and shows the portal's drawing straight away.</td>
+    </tr>
+    <tr>
+      <td>Repository processing</td>
+      <td>about 9&ndash;10 minutes (about 4 once a pending fix to its workflow is in)</td>
+      <td>It reads identifiers and references, draws its own diagram and builds the draft page.
+        Until it finishes, the draft-page link is missing and approval is refused.</td>
+    </tr>
+    <tr>
+      <td>Review by a curator</td>
+      <td>depends on people</td>
+      <td>Curators are volunteers; a change request adds a round trip.</td>
+    </tr>
+    <tr>
+      <td>Publish workflow</td>
+      <td>about 1 minute</td>
+      <td>Starts when the <code>accepted</code> label is applied. It assigns the WPID, publishes
+        the files and closes the pull request.</td>
+    </tr>
+    <tr>
+      <td>Site rebuild</td>
+      <td>2&ndash;4 minutes</td>
+      <td>{{ site_host or 'The site' }} rebuilds with the new pathway page.</td>
+    </tr>
+    <tr>
+      <td>Caches catch up</td>
+      <td>up to 10 minutes</td>
+      <td>Until then some visitors may still see the old page, or none.</td>
+    </tr>
+  </tbody>
+</table>
+<p>
+  A first-time contributor's first pull request can wait longer: GitHub holds the repository's
+  automation on it until a maintainer allows it to run, which from the outside looks like
+  nothing happening.
+</p>
+
+<h3 id="timeline-tracker">The publication tracker</h3>
+<p>Once a submission is approved its card shows four stages:</p>
+<dl class="docs-defs">
+  <dt>Accepted</dt>
+  <dd>A curator approved it and the portal applied the <code>accepted</code> label.</dd>
+  <dt>Publish workflow</dt>
+  <dd>The repository's publish workflow is queued or running. If it fails, the stage says so with
+    a link to the run.</dd>
+  <dt>Published</dt>
+  <dd>The workflow reported back with the pathway's WPID and closed the pull request.</dd>
+  <dt>Site live</dt>
+  <dd>The pathway's page on {{ site_host or 'the site' }} answers with the new version. This is
+    the last step to turn green, a few minutes after Published.</dd>
+</dl>
+<p>
+  The card refreshes itself while a stage is in progress. If the repository has not reported
+  back about ten minutes after approval, the portal marks the review <em>Not published</em> so a
+  person looks at it. A publication that arrives later still settles it.
+</p>
+{% else %}
+<p>
+  The portal checks your file as soon as you choose it, opens the pull request and draws the
+  pathway within seconds. After that the wait is for a curator. Approving merges the pull request
+  straight away; the site then rebuilds, which can take several minutes, and caches can show the
+  old page for up to ten minutes more.
+</p>
+{% endif %}
