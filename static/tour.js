@@ -39,6 +39,8 @@
         body: 'When the portal last checked GitHub. Refresh updates this review without reloading the page; while something is running it refreshes itself.' },
       { anchor: 'tracker', title: 'Publication progress',
         body: 'After approval: accepted, the publish workflow, published with its WPID, and live on the site.' },
+      { anchor: 'review-details', title: 'The rest of the review',
+        body: 'Once a review is on its way to the site, the checks, diagram and checklist fold away under the progress. Open Review details to see them again.' },
       { anchor: 'quality', title: 'Automated checks',
         body: 'What the portal found in the uploaded file, problems first. Where the repository runs the same check, its answer is shown too.' },
       { anchor: 'diff-summary', title: 'What changed',

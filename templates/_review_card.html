@@ -114,6 +114,28 @@
 {# The diagram and everything that makes it readable live in _viewer.html (static/viewer.js). #}
 {% from "_viewer.html" import viewer_pair %}
 
+{# The publish workflow is the one part of the loop this app does not control. When it does not
+   announce a WPID — or fails outright and someone publishes by hand — this is how the review still
+   reaches a truthful terminal state. A fallback only: normally the WPID arrives by itself a minute
+   after the publish run, so the form appears once that has visibly not happened (r.record_wpid,
+   app/review/tracker.py wpid_fallback_due). A macro because it sits beside the publish tracker
+   when the rest of the card is folded away, and in its old place when it is not. #}
+{% macro record_wpid_panel(r, is_curator) %}
+  {% if is_curator and r.record_wpid %}
+  <div class="publish-panel">
+    <h3>Record the published WPID</h3>
+    <p class="publish-panel__hint">
+      The WPID normally arrives here by itself shortly after the publish workflow runs, and for
+      this pathway it has not. If <code>{{ repo }}</code> did publish it, put the identifier it
+      assigned here. That closes the review out and is what the dashboard shows from then on.
+    </p>
+    <label class="visually-hidden" for="published-wpid-{{ r.pr_number }}">Assigned WPID</label>
+    <input type="text" id="published-wpid-{{ r.pr_number }}" class="published-wpid" placeholder="WP5678" autocomplete="off" inputmode="numeric">
+    <button type="button" class="btn btn--sm btn--record-wpid">Record it</button>
+  </div>
+  {% endif %}
+{% endmacro %}
+
 {% macro review_card(r, is_curator, curators, expanded=False) %}
 {# Who may do what. The endpoints already enforce all three (app/main.py); this keeps the card
    from offering an action that would come back 403, or an approval on a review that is already
@@ -181,6 +203,21 @@
     Submitted by <strong>@{{ r.submitter }}</strong>{% if r.created_at %} {{ r.created_at | age }}{% endif %}{% if r.assigned_curator %} &middot; assigned to <strong>@{{ r.assigned_curator }}</strong>{% endif %}
   </p>
 
+  {# Once a review is on its way to the site, the publish tracker is what anyone opening it wants
+     to see. The card then shows its header and the tracker, and everything else (the checks,
+     the diagram, the checklist, the actions) folds into one closed "Review details", on the queue
+     and on the review page alike. refresh.js keeps it open across a refresh once opened (it is
+     matched by data-details-key, not by position, so it does not inherit another panel's state
+     when it first appears), and viewer.js mounts the diagram when it opens. #}
+  {% set collapsed = r.tracker | length > 0 %}
+  {% if collapsed %}
+  {% include "_publish_tracker.html" %}
+  {{ record_wpid_panel(r, is_curator) }}
+  <details class="review-card__more" data-details-key="review-details">
+    <summary class="review-card__more-summary" data-tour="review-details">Review details</summary>
+    <div class="review-card__more-body">
+  {% endif %}
+
   {# What approval would refuse, found by the background check (CurationService._check_guards).
      Shown before anything else about the submission: no amount of checklist work gets past it. #}
   {% if r.guards and r.guards.unexpected_files %}
@@ -236,7 +273,7 @@
   </p>
   {% endif %}
 
-  {% include "_publish_tracker.html" %}
+  {% if not collapsed %}{% include "_publish_tracker.html" %}{% endif %}
 
   {{ quality_panel(r, expanded) }}
 
@@ -542,27 +579,14 @@
   <p class="review-card__links"><a href="/dashboard/{{ r.pr_number }}">Upload a revision &rarr;</a></p>
   {% endif %}
 
-  {# The publish workflow is the one part of the loop this app does not control. When it does not
-     announce a WPID — or fails outright and someone publishes by hand — this is how the review
-     still reaches a truthful terminal state. A fallback only: normally the WPID arrives by itself
-     a minute after the publish run, so the form appears once that has visibly not happened
-     (r.record_wpid, app/review/tracker.py wpid_fallback_due). #}
-  {% if is_curator and r.record_wpid %}
-  <div class="publish-panel">
-    <h3>Record the published WPID</h3>
-    <p class="publish-panel__hint">
-      The WPID normally arrives here by itself shortly after the publish workflow runs, and for
-      this pathway it has not. If <code>{{ repo }}</code> did publish it, put the identifier it
-      assigned here. That closes the review out and is what the dashboard shows from then on.
-    </p>
-    <label class="visually-hidden" for="published-wpid-{{ r.pr_number }}">Assigned WPID</label>
-    <input type="text" id="published-wpid-{{ r.pr_number }}" class="published-wpid" placeholder="WP5678" autocomplete="off" inputmode="numeric">
-    <button type="button" class="btn btn--sm btn--record-wpid">Record it</button>
-  </div>
-  {% endif %}
+  {% if not collapsed %}{{ record_wpid_panel(r, is_curator) }}{% endif %}
 
   {% if not is_curator and r.actionable %}
     <p class="review-card__readonly">Only curators can update the checklist, assign a reviewer, or decide on this submission.</p>
+  {% endif %}
+  {% if collapsed %}
+    </div>
+  </details>
   {% endif %}
 </article>
 {% endmacro %}

@@ -33,6 +33,7 @@ REVIEW_ANCHORS = (
     "diff-summary",
     "refresh",
     "tracker",
+    "review-details",
     "quality",
     "checklist",
     "actions",

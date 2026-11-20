@@ -27,17 +27,31 @@
       (recheck ? '&recheck=1' : '');
   }
 
-  // Which <details> were open, by position: the new card has the same structure, so the n-th
-  // <details> is the same panel.
+  // Which <details> were open. A panel carrying data-details-key is matched by that key; the rest
+  // by position among themselves, since the new card has the same structure and the n-th one is
+  // the same panel. The key is for a panel that comes and goes: "Review details" first appears
+  // when a review is approved, and matched by position it would inherit whatever panel used to
+  // sit first, and open itself.
+  function unkeyed(el) {
+    return Array.prototype.filter.call(el.querySelectorAll('details'), function (d) {
+      return !d.hasAttribute('data-details-key');
+    });
+  }
+
   function openDetails(el) {
-    var open = [];
-    el.querySelectorAll('details').forEach(function (d, i) { if (d.open) open.push(i); });
+    var open = { keys: [], positions: [] };
+    el.querySelectorAll('details[data-details-key]').forEach(function (d) {
+      if (d.open) open.keys.push(d.getAttribute('data-details-key'));
+    });
+    unkeyed(el).forEach(function (d, i) { if (d.open) open.positions.push(i); });
     return open;
   }
 
   function restoreDetails(el, open) {
-    var all = el.querySelectorAll('details');
-    all.forEach(function (d, i) { d.open = open.indexOf(i) !== -1; });
+    el.querySelectorAll('details[data-details-key]').forEach(function (d) {
+      d.open = open.keys.indexOf(d.getAttribute('data-details-key')) !== -1;
+    });
+    unkeyed(el).forEach(function (d, i) { d.open = open.positions.indexOf(i) !== -1; });
   }
 
   // Text typed into a card's textareas survives a refresh: a curator half-way through a change

@@ -1618,6 +1618,9 @@
     var made = [];
     viewersIn(root || document).forEach(function (r) {
       if (r.__wpViewer || !r.getAttribute('data-svg-url')) return;
+      // Inside a closed <details> ("Review details" under the publish tracker) the canvas has no
+      // size to fit the drawing to. It is mounted when the panel opens (the toggle listener).
+      if (r.closest('details:not([open])')) return;
       var v = new Viewer(r);
       mounted.push(v);
       made.push(v);
@@ -1659,6 +1662,13 @@
     mounted.slice().forEach(function (v) { if (!v.root.isConnected) v.destroy(); });
     if (e.detail) mountAll(e.detail);
   });
+
+  // A <details> opening may reveal viewers that were left unmounted while it was closed. Toggle
+  // does not bubble, hence the capture. mountAll skips anything already mounted.
+  document.addEventListener('toggle', function (e) {
+    var d = e.target;
+    if (d && d.tagName === 'DETAILS' && d.open && d.isConnected) mountAll(d);
+  }, true);
 
   document.addEventListener('fullscreenchange', function () {
     var fs = document.fullscreenElement;

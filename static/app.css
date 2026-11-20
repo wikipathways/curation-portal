@@ -1632,3 +1632,15 @@ a.pager__step:hover { background: var(--surface); border-color: var(--moss); }
   .tracker__stage--active .tracker__mark { animation: tracker-pulse 1.6s ease-in-out infinite; }
 }
 @keyframes tracker-pulse { 50% { opacity: 0.45; } }
+
+/* Once the tracker shows, the rest of the review folds away under it (_review_card.html). */
+.review-card__more { margin: 0 0 0.4rem; border-top: 1px solid var(--line); }
+.review-card__more-summary {
+  cursor: pointer;
+  padding: 0.6rem 0 0.2rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--ink-muted);
+}
+.review-card__more-summary:hover { color: var(--moss-strong); }
+.review-card__more[open] > .review-card__more-summary { margin-bottom: 0.7rem; }
