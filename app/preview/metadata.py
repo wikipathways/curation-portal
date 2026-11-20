@@ -7,6 +7,9 @@ the rendered SVGs, keeping the dashboard render a cheap disk read.
 
 Parsing is namespace-tolerant (GPML uses a default namespace; the embedded Biopax block uses the
 biopax-level3 namespace) via local-name matching, the same approach as ``app.preview.render``.
+The attributes the panel reads are taken in either spelling, GPML2013a (``Name``, ``TextLabel``,
+``Database``/``ID``) or GPML2021 (``title``, ``textLabel``, ``dataSource``/``identifier``), so a
+2021 file the renderer can draw does not leave the panel beside it empty.
 """
 from __future__ import annotations
 
@@ -58,6 +61,17 @@ def resolver_url(database: str, identifier: str) -> str | None:
     if prefix == "CHEBI" and ident.upper().startswith("CHEBI:"):
         return f"https://identifiers.org/{ident}"  # id already carries the CHEBI: prefix
     return f"https://identifiers.org/{prefix}:{ident}"
+
+
+def _either(el: ET.Element | None, *names: str) -> str | None:
+    """The first of ``names`` present on ``el`` (2013a spelling first, then 2021)."""
+    if el is None:
+        return None
+    for name in names:
+        v = el.get(name)
+        if v is not None:
+            return v
+    return None
 
 
 def _find_child(el: ET.Element, name: str) -> ET.Element | None:
@@ -146,8 +160,8 @@ def parse_curation_metadata(gpml: bytes | str) -> CurationMetadata:
     if _localname(root.tag) != "Pathway":
         return CurationMetadata()
 
-    name = root.get("Name")
-    organism = root.get("Organism")
+    name = _either(root, "Name", "title")
+    organism = _either(root, "Organism", "organism")
 
     data_nodes: list[DataNode] = []
     references: list[Reference] = []
@@ -162,12 +176,12 @@ def parse_curation_metadata(gpml: bytes | str) -> CurationMetadata:
         kind = _localname(el.tag)
         if kind == "DataNode":
             xref = _find_child(el, "Xref")
-            database = (xref.get("Database") if xref is not None else "") or ""
-            identifier = (xref.get("ID") if xref is not None else "") or ""
+            database = _either(xref, "Database", "dataSource") or ""
+            identifier = _either(xref, "ID", "identifier") or ""
             data_nodes.append(
                 DataNode(
-                    label=(el.get("TextLabel") or "").strip(),
-                    type=el.get("Type") or "Unknown",
+                    label=(_either(el, "TextLabel", "textLabel") or "").strip(),
+                    type=_either(el, "Type", "type") or "Unknown",
                     database=database,
                     identifier=identifier,
                     url=resolver_url(database, identifier),

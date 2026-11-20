@@ -8,25 +8,46 @@ and this service downloaded them; that path was retired on 2026-07-27 along with
 itself (``mvp1/pr-preview.yml`` now converts to pvjson only — a PR comment cannot show an image
 anyway). What CI produces is validation, not pictures, so nothing here talks to GitHub.
 
-Cached per PR under ``<cache_dir>/<pr_number>/``: ``before.svg`` / ``after.svg``, the
-``metadata.json`` sidecar the dashboard panel reads, and a ``render-failed`` marker when a GPML
-could not be drawn (so the queue can say so instead of spinning on "generating" forever).
+Cached per PR under ``<cache_dir>/<pr_number>/``: ``before.svg`` / ``after.svg``, the GPML each
+was drawn from (``before.gpml`` / ``after.gpml``), the viewer's ``<side>-graph.json`` and the older
+``<side>-nodes.json`` hotspots, the ``metadata.json`` sidecar the dashboard panel reads,
+``render.json`` (which renderer drew it, and from what), and a ``render-failed`` marker when a
+GPML could not be drawn (so the queue can say so instead of spinning on "generating" forever).
+
+The source is kept so a renderer upgrade can redraw a live review from disk
+(``rerender_from_source``) rather than fetching it from GitHub again; ``needs_rerender`` compares
+``render.json`` against ``RENDERER_VERSION`` to find the ones that need it.
 """
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import shutil
 import time
 from collections.abc import Container, Iterator
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
 from app.preview.diff import diff_metadata, diff_nodes
 from app.preview.metadata import parse_curation_metadata
-from app.preview.render import RenderError, render_gpml_with_nodes
+from app.preview.render import RENDERER_VERSION, RenderError, render_gpml_full
 
 _SIDES = ("before", "after")
 _FAILED_MARKER = "render-failed"
+_STAMP = "render.json"
+
+
+def _write_atomic(path: Path, data: bytes) -> None:
+    """Replace ``path`` in one step, so a reader never sees half a file.
+
+    Matters once a drawing is served as immutable under its ``?rev=``: a browser that caught a
+    half-written SVG would keep it for a year.
+    """
+    tmp = path.with_name(f".{path.name}.tmp")
+    tmp.write_bytes(data)
+    os.replace(tmp, path)
 
 #: How often the orphan sweep may run. It walks the cache directory and stats each entry, which
 #: is cheap but pointless to repeat: nothing it collects appears faster than reviews terminalise.
@@ -72,6 +93,7 @@ class PreviewService:
         before_gpml: bytes | None = None,
         submitter_note: str | None = None,
         origin: str = "portal",
+        head_sha: str | None = None,
     ) -> PreviewState:
         """Render the before/after SVGs in-process and cache them on disk.
 
@@ -79,27 +101,59 @@ class PreviewService:
         never sink the submission. The curation metadata parsed from the *after* GPML (data nodes,
         references, description, ontology tags) plus the submitter's note is cached alongside for
         the dashboard panel.
+
+        ``before_gpml=None`` on an update that was rendered before (a revision) keeps comparing
+        against the base it was first drawn with, which is on disk: the revise route does not
+        fetch the base again, and dropping the comparison there lost the diff on every revision.
         """
         out = self._cache_dir / str(pr_number)
         out.mkdir(parents=True, exist_ok=True)
         # 0 means "no id yet": a new pathway in pipeline mode.
         target_wpid = wpid or None
+        if before_gpml is None and target_wpid is not None:
+            before_gpml = self._cached_before(out, target_wpid)
         rendered: dict[str, bool] = {"before": False, "after": False}
         drawn_nodes: dict[str, list[dict]] = {}
+        counts: dict[str, int | None] = {"before": None, "after": None}
+        dialect: str | None = None
+        svgs: dict[str, bytes] = {}
         for side, gpml in (("before", before_gpml), ("after", after_gpml)):
             if gpml is None:
                 continue
+            raw = gpml if isinstance(gpml, bytes) else str(gpml).encode("utf-8")
             try:
-                svg, hotspots = render_gpml_with_nodes(gpml)
+                # The source, so a later renderer can redraw this without asking GitHub.
+                _write_atomic(out / f"{side}.gpml", raw)
+            except OSError:
+                pass
+            try:
+                result = render_gpml_full(raw)
             except RenderError:
+                self._clear_side(out, side)
                 continue
-            drawn_nodes[side] = [h.as_dict() for h in hotspots]
-            (out / f"{side}.svg").write_bytes(svg)
-            # The clickable-node overlay (issue #14). Written beside the drawing it belongs to,
-            # so a side that failed to render has no stale hotspots left pointing at nothing.
+            counts[side] = result.element_count
+            if result.element_count == 0 and result.declared > 0:
+                # Content we could not place is a failed render, not an empty one: a blank
+                # "ready" frame tells the curator there is nothing to review.
+                self._clear_side(out, side)
+                continue
+            if side == "after" or dialect is None:
+                dialect = result.dialect
+            drawn_nodes[side] = [h.as_dict() for h in result.hotspots]
+            svgs[side] = result.svg
+            try:
+                _write_atomic(out / f"{side}.svg", result.svg)
+            except OSError:
+                continue
+            # The clickable-node overlay (issue #14) and the viewer's graph. Written beside the
+            # drawing they belong to, so a side that failed to render has nothing stale left
+            # pointing at nothing.
             try:
                 (out / f"{side}-nodes.json").write_text(
                     json.dumps(drawn_nodes[side]), encoding="utf-8"
+                )
+                _write_atomic(
+                    out / f"{side}-graph.json", json.dumps(result.graph).encode("utf-8")
                 )
             except OSError:
                 pass  # the overlay is an enhancement; never fail a render on it
@@ -125,11 +179,137 @@ class PreviewService:
             marker.unlink(missing_ok=True)
         else:
             marker.write_text("", encoding="utf-8")
+        self._write_stamp(
+            out,
+            {
+                "renderer": RENDERER_VERSION,
+                # Changes whenever either drawing does, so a URL carrying it can be cached for
+                # good; the page always asks for the current one.
+                "rev": hashlib.sha256(
+                    b"%d|" % RENDERER_VERSION
+                    + svgs.get("before", b"") + b"|" + svgs.get("after", b"")
+                ).hexdigest()[:12],
+                "head_sha": head_sha,
+                "origin": origin,
+                "target_wpid": target_wpid,
+                "submitter_note": (submitter_note or "").strip(),
+                "dialect": dialect,
+                "counts": counts,
+                "rendered_at": datetime.now(UTC).isoformat(timespec="seconds"),
+            },
+        )
         return PreviewState(
             "ready" if drawn else "failed",
             has_before=rendered["before"],
             has_after=rendered["after"],
         )
+
+    @staticmethod
+    def _clear_side(out: Path, side: str) -> None:
+        """Remove a side's drawing and sidecars, so a re-upload that no longer renders does not
+        keep showing the previous file's picture under the new file's name."""
+        for name in (f"{side}.svg", f"{side}-nodes.json", f"{side}-graph.json"):
+            try:
+                (out / name).unlink(missing_ok=True)
+            except OSError:
+                pass
+
+    @staticmethod
+    def _cached_before(out: Path, target_wpid: int) -> bytes | None:
+        """The base this update was first compared against, when the cache is this pathway's.
+
+        Keyed on the WPID in the stamp: the cache directory is named by pull request number
+        alone, and a number reused against another repository must not inherit a stranger's
+        base.
+        """
+        try:
+            stamp = json.loads((out / _STAMP).read_text(encoding="utf-8"))
+            if not isinstance(stamp, dict) or stamp.get("target_wpid") != target_wpid:
+                return None
+            return (out / "before.gpml").read_bytes()
+        except (OSError, ValueError):
+            return None
+
+    @staticmethod
+    def _write_stamp(out: Path, data: dict) -> None:
+        try:
+            _write_atomic(out / _STAMP, json.dumps(data).encode("utf-8"))
+        except OSError:
+            pass  # without a stamp the backfill simply redraws it later
+
+    # -- what drew this, and redrawing it ----------------------------------------------------
+    def stamp(self, pr_number: int) -> dict | None:
+        """``render.json``: renderer version, ``rev``, head sha, origin, WPID, note, dialect,
+        counts and time of the cached render. None for a cache older than renderer 2."""
+        path = self._cache_dir / str(pr_number) / _STAMP
+        if not path.is_file():
+            return None
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        return data if isinstance(data, dict) else None
+
+    def needs_rerender(self, pr_number: int) -> bool:
+        """True when nothing current is cached: no stamp, or one from an older renderer."""
+        stamp = self.stamp(pr_number)
+        if stamp is None:
+            return True
+        try:
+            return int(stamp.get("renderer") or 0) < RENDERER_VERSION
+        except (TypeError, ValueError):
+            return True
+
+    def source_path(self, pr_number: int, side: str) -> Path | None:
+        """The GPML a side was drawn from, when it was kept (renders since renderer 2)."""
+        if side not in _SIDES:
+            return None
+        path = self._cache_dir / str(pr_number) / f"{side}.gpml"
+        return path if path.is_file() else None
+
+    def rerender_from_source(self, pr_number: int) -> PreviewState | None:
+        """Redraw from the GPML on disk, keeping what the stamp recorded. None without a source."""
+        after = self.source_path(pr_number, "after")
+        if after is None:
+            return None
+        stamp = self.stamp(pr_number) or {}
+        note = stamp.get("submitter_note")
+        if note is None:
+            note = (self.metadata(pr_number) or {}).get("submitter_note")
+        before = self.source_path(pr_number, "before")
+        try:
+            after_gpml = after.read_bytes()
+            before_gpml = before.read_bytes() if before is not None else None
+        except OSError:
+            return None
+        wpid = stamp.get("target_wpid")
+        return self.render_local(
+            pr_number,
+            wpid if isinstance(wpid, int) else 0,
+            after_gpml=after_gpml,
+            before_gpml=before_gpml,
+            submitter_note=note,
+            origin=str(stamp.get("origin") or "portal"),
+            head_sha=stamp.get("head_sha"),
+        )
+
+    def graph_path(self, pr_number: int, side: str) -> Path | None:
+        """Where ``<side>-graph.json`` is, or None when that side has none on file."""
+        if side not in _SIDES:
+            return None
+        path = self._cache_dir / str(pr_number) / f"{side}-graph.json"
+        return path if path.is_file() else None
+
+    def graph(self, pr_number: int, side: str) -> dict | None:
+        """The viewer's graph for one side (``<side>-graph.json``), or None when not on file."""
+        path = self.graph_path(pr_number, side)
+        if path is None:
+            return None
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        return data if isinstance(data, dict) else None
 
     def _local_side_exists(self, pr_number: int) -> bool:
         d = self._cache_dir / str(pr_number)
