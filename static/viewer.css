@@ -1,1 +1,293 @@
-/* viewer.css: the pathway viewer. */
+/* viewer.css: the pathway viewer (templates/_viewer.html, static/viewer.js).
+   Tokens come from app.css (--surface, --line, --moss, --focus, --diff-*). */
+
+.viewer {
+  position: relative;
+  background: var(--surface);
+  /* The drawing is black-on-white by GPML's own colours; a dark canvas would put dark-blue
+     metabolites on near-black. The board stays light in both themes. */
+  --viewer-board: #ffffff;
+  --viewer-ring: var(--focus);
+  --viewer-match: #e69f00;
+}
+
+/* ---------- toolbar ---------- */
+.viewer__toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.3rem 0.4rem;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-2);
+}
+.viewer__btn {
+  font: inherit;
+  font-size: 0.75rem;
+  line-height: 1;
+  min-width: 1.8rem;
+  min-height: 1.8rem;
+  padding: 0.3rem 0.45rem;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-s);
+  background: var(--surface);
+  color: var(--ink);
+  cursor: pointer;
+}
+.viewer__btn:hover:not(:disabled) { border-color: var(--moss); color: var(--moss); }
+.viewer__btn:disabled { opacity: 0.45; cursor: default; }
+.viewer__btn[aria-pressed="true"],
+.viewer__btn[aria-expanded="true"] { background: var(--moss-tint); border-color: var(--moss); color: var(--moss-strong); }
+.viewer__changes,
+.viewer__source { display: inline-flex; gap: 0.25rem; }
+.viewer__source { margin-left: auto; }
+.viewer__search { flex: 1 1 8rem; min-width: 6rem; max-width: 14rem; }
+.viewer__search-input {
+  width: 100%;
+  font: inherit;
+  font-size: 0.78rem;
+  padding: 0.3rem 0.5rem;
+  min-height: 1.8rem;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-s);
+  background: var(--surface);
+  color: var(--ink);
+  box-sizing: border-box;
+}
+
+/* ---------- canvas ---------- */
+.viewer__canvas {
+  height: 19rem;
+  overflow: hidden;
+  background: var(--viewer-board);
+  /* Vertical swipes scroll the queue; once zoomed, the gesture pans the diagram instead. */
+  touch-action: pan-y;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+}
+.review-card--expanded .viewer__canvas { height: 30rem; }
+/* Queue density: the queue is for triage, and at full height the diagram pushed every decision
+   button below the fold (see the note in app.css). */
+.review-card:not(.review-card--expanded) .viewer__canvas { height: 13rem; }
+.viewer__canvas:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.viewer--zoomed .viewer__canvas { cursor: grab; touch-action: none; }
+.viewer--panning .viewer__canvas { cursor: grabbing; }
+.viewer__fallback {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+  padding: 0.5rem;
+  box-sizing: border-box;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+.viewer__fallback[hidden] { display: none; }
+.viewer__svg { display: block; width: 100%; height: 100%; user-select: none; }
+.viewer--loading .viewer__canvas::after {
+  content: "";
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+  width: 0.7rem;
+  height: 0.7rem;
+  border-radius: 50%;
+  border: 2px solid var(--line-strong);
+  border-top-color: var(--moss);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .viewer--loading .viewer__canvas::after { animation: viewer-spin 0.8s linear infinite; }
+}
+@keyframes viewer-spin { to { transform: rotate(360deg); } }
+
+/* ---------- the drawing, made interactive ---------- */
+.viewer__svg .wp-node,
+.viewer__svg .wp-edge,
+.viewer__svg .wp-group,
+.viewer__svg .wp-label,
+.viewer__svg .viewer__hit { cursor: pointer; }
+.viewer--zoomed .viewer__svg .wp-node,
+.viewer--zoomed .viewer__svg .wp-edge { cursor: pointer; }
+.viewer__svg [tabindex]:focus { outline: none; }
+.viewer__svg .wp-node:focus-visible > :first-child,
+.viewer__svg .viewer__hit:focus-visible {
+  stroke: var(--viewer-ring);
+  stroke-width: 3px;
+  vector-effect: non-scaling-stroke;
+}
+.viewer__hit { fill: transparent; stroke: none; }
+.viewer__hit:hover { fill: color-mix(in srgb, var(--moss) 14%, transparent); }
+.viewer__svg .wp-node:hover > :first-child { stroke-width: 2px; }
+.viewer__edge-hit {
+  fill: none;
+  stroke: transparent;
+  stroke-width: 10px;
+  vector-effect: non-scaling-stroke;
+  pointer-events: stroke;
+}
+.viewer__edge-hit:hover { stroke: color-mix(in srgb, var(--moss) 22%, transparent); }
+
+/* Neighbourhood: the selection and what it is wired to stay, everything else steps back. */
+.viewer__svg .wp-node,
+.viewer__svg .wp-edge,
+.viewer__svg .wp-group,
+.viewer__svg .wp-label,
+.viewer__svg .wp-shape,
+.viewer__svg .wp-state { transition: opacity 140ms ease; }
+.viewer--focus .viewer__svg .wp-node:not(.is-hl),
+.viewer--focus .viewer__svg .wp-edge:not(.is-hl),
+.viewer--focus .viewer__svg .wp-group:not(.is-hl),
+.viewer--focus .viewer__svg .wp-label:not(.is-hl),
+.viewer--focus .viewer__svg .wp-shape,
+.viewer--focus .viewer__svg .wp-state:not(.is-hl) { opacity: 0.22; }
+.viewer__svg .wp-edge.is-selected .wp-edge__line { stroke: var(--viewer-ring); }
+.viewer__svg .wp-edge.is-hl .wp-edge__line { stroke-width: 2px; }
+.viewer__svg .wp-group.is-selected .wp-group__outline { stroke: var(--viewer-ring); stroke-width: 2px; }
+
+.viewer__overlay { pointer-events: none; }
+.viewer__ring {
+  fill: none;
+  stroke: var(--viewer-ring);
+  stroke-width: 2.5px;
+  vector-effect: non-scaling-stroke;
+}
+.viewer__match {
+  fill: color-mix(in srgb, var(--viewer-match) 18%, transparent);
+  stroke: var(--viewer-match);
+  stroke-width: 2px;
+  stroke-dasharray: 2 2;
+  vector-effect: non-scaling-stroke;
+}
+.viewer__ends { display: none; }
+.viewer--ends .viewer__ends { display: inline; }
+.viewer__end {
+  fill: color-mix(in srgb, var(--brick) 25%, transparent);
+  stroke: var(--brick);
+  stroke-width: 2px;
+  vector-effect: non-scaling-stroke;
+}
+
+/* ---------- diff marks ----------
+   Colour plus a different outline for each kind plus a badge glyph, so no reader depends on
+   telling five hues apart over a diagram that is itself coloured. */
+.viewer__mark {
+  fill: none;
+  stroke-width: 2.5px;
+  vector-effect: non-scaling-stroke;
+}
+.viewer__mark--added { stroke: var(--diff-added); fill: color-mix(in srgb, var(--diff-added) 12%, transparent); }
+.viewer__mark--removed { stroke: var(--diff-removed); stroke-dasharray: 1 4; stroke-linecap: round; stroke-width: 3px; fill: color-mix(in srgb, var(--diff-removed) 12%, transparent); }
+.viewer__mark--reannotated { stroke: var(--diff-reannotated); stroke-width: 4px; stroke-dasharray: 10 3 2 3; fill: color-mix(in srgb, var(--diff-reannotated) 12%, transparent); }
+.viewer__mark--relabelled { stroke: var(--diff-relabelled); stroke-dasharray: 6 3; fill: color-mix(in srgb, var(--diff-relabelled) 12%, transparent); }
+.viewer__mark--moved { stroke: var(--diff-moved); stroke-dasharray: 3 3; stroke-width: 1.5px; }
+.viewer__badge circle { stroke: #ffffff; stroke-width: 1px; vector-effect: non-scaling-stroke; }
+.viewer__badge text { fill: #ffffff; font-family: Arial, Helvetica, sans-serif; font-weight: 700; }
+.viewer__badge--added circle { fill: var(--diff-added); }
+.viewer__badge--removed circle { fill: var(--diff-removed); }
+.viewer__badge--reannotated circle { fill: var(--diff-reannotated); }
+.viewer__badge--relabelled circle { fill: var(--diff-relabelled); }
+.viewer__badge--moved circle { fill: var(--diff-moved); }
+.review-card--hide-moved .viewer__mark--moved,
+.review-card--hide-moved .viewer__badge--moved { display: none; }
+
+/* ---------- tooltip, legend, panel ---------- */
+.viewer__tooltip {
+  position: absolute;
+  z-index: 3;
+  max-width: 18rem;
+  padding: 0.3rem 0.5rem;
+  border-radius: var(--radius-s);
+  background: var(--ink);
+  color: var(--surface);
+  font-size: 0.75rem;
+  line-height: 1.3;
+  pointer-events: none;
+  overflow-wrap: anywhere;
+}
+.viewer__tooltip[hidden] { display: none; }
+.viewer__legend {
+  position: absolute;
+  z-index: 3;
+  top: 2.6rem;
+  right: 0.4rem;
+  width: min(17rem, calc(100% - 0.8rem));
+  max-height: calc(100% - 3rem);
+  overflow-y: auto;
+  padding: 0.6rem 0.75rem;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-m);
+  box-shadow: var(--shadow-pop);
+  font-size: 0.8rem;
+  box-sizing: border-box;
+}
+.viewer__legend[hidden] { display: none; }
+.viewer__legend-title {
+  margin: 0.4rem 0 0.2rem;
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--ink-faint);
+}
+.viewer__legend-title:first-child { margin-top: 0; }
+.viewer__legend-list { margin: 0; padding-left: 1rem; color: var(--ink-muted); }
+.viewer__legend-diff { flex-direction: column; margin: 0; }
+.viewer__legend-toggle { display: flex; align-items: center; gap: 0.35rem; margin-top: 0.5rem; color: var(--ink-muted); }
+.viewer__legend-note { margin: 0.5rem 0 0; color: var(--ink-faint); }
+.viewer .node-panel { z-index: 4; }
+.node-panel__title:focus { outline: none; }
+.node-panel__list { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 0.15rem; }
+.node-panel__link {
+  font: inherit;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--moss);
+  text-align: left;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.node-panel__link:hover { color: var(--moss-strong); }
+.node-panel__warn { color: var(--brick); }
+
+/* ---------- Database render ---------- */
+.viewer__db { background: var(--viewer-board); }
+.viewer__db[hidden] { display: none; }
+.viewer__db-scroll { height: 19rem; overflow: auto; }
+.review-card--expanded .viewer__db-scroll { height: 30rem; }
+.review-card:not(.review-card--expanded) .viewer__db-scroll { height: 13rem; }
+.viewer__db-img { display: block; width: 100%; height: auto; }
+.viewer__caption {
+  margin: 0;
+  padding: 0.3rem 0.6rem;
+  font-size: 0.75rem;
+  color: var(--ink-faint);
+  border-top: 1px solid var(--line);
+  background: var(--surface-2);
+}
+
+/* ---------- full screen ---------- */
+.viewer:fullscreen,
+.preview:fullscreen {
+  background: var(--bg);
+  padding: 0.75rem;
+  box-sizing: border-box;
+  overflow: auto;
+}
+.preview:fullscreen { display: flex; align-items: stretch; margin: 0; }
+.viewer:fullscreen { display: flex; flex-direction: column; }
+.viewer:fullscreen .viewer__canvas,
+.preview:fullscreen .viewer__canvas { height: calc(100vh - 6rem); }
+.viewer:fullscreen .viewer__canvas { flex: 1; height: auto; }
+.viewer:fullscreen .viewer__db-scroll,
+.preview:fullscreen .viewer__db-scroll { height: calc(100vh - 7.5rem); }
+
+/* ---------- narrow screens ---------- */
+@media (max-width: 640px) {
+  .viewer__source { margin-left: 0; }
+  .viewer__search { max-width: none; flex-basis: 100%; }
+  .preview:fullscreen { flex-direction: column; }
+  .preview:fullscreen .viewer__canvas { height: calc(50vh - 5rem); }
+}

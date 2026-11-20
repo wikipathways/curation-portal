@@ -111,56 +111,8 @@
 {% endif %}
 {% endmacro %}
 
-{% macro zoomable(url, alt) %}
-<div class="zoom" data-zoom>
-  {# Focusable and arrow-key pannable: at 8x the pointer is otherwise the only way to reach the
-     rest of the diagram, and reading node labels is the review. #}
-  <div class="zoom__viewport" tabindex="0" role="img" aria-label="{{ alt }}. Zoomable; use the arrow keys to pan and Home to reset.">
-    {# The stage is what zoom resizes and pans, so the hotspot layer inherits both for free.
-       Sizing the <img> alone would leave the overlay behind the moment anyone zoomed. #}
-    <div class="zoom__stage">
-      <img class="zoom__img" src="{{ url }}" alt="{{ alt }}" draggable="false" loading="lazy">
-      {# Filled by JS from <side>-nodes.json (issue #14). The drawing is an <img>, so its own
-         markup is inert; clickability has to be laid over it. Empty and invisible without JS,
-         which leaves exactly the static image that shipped before.
-
-         A toolbar because that is the ARIA pattern for a set of buttons sharing one tab stop:
-         the hotspots use a roving tabindex, so a hundred-node pathway costs the keyboard one
-         stop and not a hundred (issue #19). #}
-      <div class="zoom__hotspots" hidden role="toolbar"
-           aria-label="Data nodes. Use the arrow keys to move between them, Escape to close the properties.">
-      </div>
-    </div>
-  </div>
-  {# Not a dialog: focus stays on the node so the arrows keep working, and the properties are
-     announced where they change. That is what lets a screen-reader user read the diagram at all,
-     since the drawing itself is an inert image to them. #}
-  <div class="node-panel" hidden role="group" aria-label="Data node properties">
-    <button type="button" class="node-panel__close" aria-label="Close">&times;</button>
-    <div class="node-panel__body" aria-live="polite" aria-atomic="true"></div>
-  </div>
-  <div class="zoom__controls" role="group" aria-label="Zoom and pan">
-    <button type="button" class="zoom__btn" data-zoom-out aria-label="Zoom out">&minus;</button>
-    <button type="button" class="zoom__btn" data-zoom-reset aria-label="Reset view">Reset</button>
-    <button type="button" class="zoom__btn" data-zoom-in aria-label="Zoom in">+</button>
-  </div>
-</div>
-{% endmacro %}
-
-{% macro preview_frame(label, url, alt, status) %}
-<figure class="preview__frame">
-  <figcaption>{{ label }}</figcaption>
-  {% if url %}
-    {{ zoomable(url, alt) }}
-  {% elif status == 'failed' %}
-    {# A GPML the renderer refuses is the strongest available signal that a submission is
-       malformed. Saying "no render on file" here would swallow it. #}
-    <div class="preview__failed">Could not draw this version from its GPML.</div>
-  {% else %}
-    <div class="preview__empty">No render on file for this version.</div>
-  {% endif %}
-</figure>
-{% endmacro %}
+{# The diagram and everything that makes it readable live in _viewer.html (static/viewer.js). #}
+{% from "_viewer.html" import viewer_pair %}
 
 {% macro review_card(r, is_curator, curators, expanded=False) %}
 {# Who may do what. The endpoints already enforce all three (app/main.py); this keeps the card
@@ -302,7 +254,7 @@
      Only an update has a "before" to compare against. #}
   {% if r.kind == 'update' and r.preview and r.preview.diff %}
   <div class="diff-summary{% if not r.preview.diff.changed %} diff-summary--quiet{% endif %}"
-       data-diff-pr="{{ r.pr_number }}">
+       data-diff-pr="{{ r.pr_number }}" data-tour="diff-summary">
     <p class="diff-summary__line"><strong>Data nodes:</strong> {{ r.preview.diff.sentence }}</p>
     {% set meta = r.preview.diff.meta %}
     {% if meta is not none %}
@@ -342,29 +294,7 @@
   </div>
   {% endif %}
 
-  <div class="preview">
-    {% set preview_status = r.preview.status if r.preview else 'pending' %}
-    {% if r.kind == 'update' %}
-      {{ preview_frame('Before', r.preview.before_svg_url if r.preview and r.preview.status == 'ready' else None, 'Pathway diagram before this change', preview_status) }}
-      <div class="preview__edge" aria-hidden="true">
-        <svg viewBox="0 0 32 16" fill="none"><path class="edge-flow" d="M1 8h22" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M20 3l7 5-7 5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-      </div>
-      {{ preview_frame('After', r.preview.after_svg_url if r.preview and r.preview.status == 'ready' else None, 'Pathway diagram after this change', preview_status) }}
-    {% else %}
-      <figure class="preview__frame preview__frame--solo">
-        <figcaption>Preview</figcaption>
-        {% if r.preview and r.preview.status == 'ready' and r.preview.after_svg_url %}
-          {{ zoomable(r.preview.after_svg_url, 'Rendered pathway diagram') }}
-        {% elif r.preview and r.preview.status == 'failed' %}
-          <div class="preview__failed">Could not draw this pathway from its GPML.</div>
-        {% else %}
-          <div class="preview__empty">
-            No render on file for this pull request. Re-uploading the GPML draws it again.
-          </div>
-        {% endif %}
-      </figure>
-    {% endif %}
-  </div>
+  {{ viewer_pair(r, 'full' if expanded else 'lite') }}
 
   {# The target repository builds a full pathway page for every submission, and that page is the
      "what will this actually look like" answer the diagram above cannot give. It belongs under

@@ -1,0 +1,110 @@
+{# The pathway viewer (static/viewer.js, contract K6).
+
+   The server ships a working picture and nothing that needs script: the canvas holds a plain
+   <img> of the render, which is what anyone without JavaScript sees, what stays on screen when
+   the inlined drawing cannot be fetched or parsed, and all the queue shows until somebody
+   reaches for a diagram ("lite" mode). viewer.js replaces it with the sanitised SVG inline, so
+   nodes and interactions can be pointed at, read out and searched.
+
+   Every URL comes from the review view-model (K4). A cache written before the graph sidecar
+   existed has no `<side>_graph_url`; the client then falls back to the older `-nodes.json`
+   hotspots, which is why the attribute may be empty. #}
+
+{% macro viewer(pr, side, preview, alt, mode='full', pipeline=None) %}
+{% set svg_url = preview.get(side ~ '_svg_url') %}
+{% set graph_url = preview.get(side ~ '_graph_url') %}
+{# K4 says None for a new pathway. Until the view-model carries the key, the server-rendered
+   diff summary is the evidence that a comparison exists at all. #}
+{% if 'diff_url' in preview %}
+  {% set diff_url = preview.diff_url %}
+{% elif preview.diff %}
+  {% set diff_url = '/previews/' ~ pr ~ '/diff.json' ~ ('?rev=' ~ preview.rev if preview.rev else '') %}
+{% else %}
+  {% set diff_url = None %}
+{% endif %}
+{% set render_svg_url = (pipeline or {}).get('render_svg_url') if side == 'after' else None %}
+{% set full = mode == 'full' %}
+{% set vid = 'viewer-' ~ pr ~ '-' ~ side %}
+<div class="viewer viewer--{{ mode }}" id="{{ vid }}" data-viewer data-pr="{{ pr }}" data-side="{{ side }}"
+     data-svg-url="{{ svg_url or '' }}" data-graph-url="{{ graph_url or '' }}"
+     data-diff-url="{{ diff_url or '' }}" data-render-svg-url="{{ render_svg_url or '' }}"
+     data-mode="{{ mode }}" data-tour="viewer">
+  <div class="viewer__toolbar" role="group" aria-label="Diagram controls" data-tour="viewer-toolbar">
+    <button type="button" class="viewer__btn" data-v="zoom-out" aria-label="Zoom out" title="Zoom out (−)">&minus;</button>
+    <button type="button" class="viewer__btn" data-v="fit" title="Fit the whole diagram (0)">Fit</button>
+    <button type="button" class="viewer__btn" data-v="zoom-in" aria-label="Zoom in" title="Zoom in (+)">+</button>
+    <button type="button" class="viewer__btn" data-v="fullscreen" aria-pressed="false" title="Full screen (F)">Full screen</button>
+    {% if full %}
+    {# Search reads labels and identifiers; "Ensembl:ENSG…" style finds an annotation. #}
+    <span class="viewer__search">
+      <input type="search" class="viewer__search-input" data-v="search" placeholder="Find a node"
+             aria-label="Find a node by label or identifier" aria-describedby="{{ vid }}-status" autocomplete="off">
+    </span>
+    {% endif %}
+    <button type="button" class="viewer__btn" data-v="legend" aria-expanded="false" aria-controls="{{ vid }}-legend">Legend</button>
+    {% if diff_url %}
+    <span class="viewer__changes" role="group" aria-label="Step through the changes">
+      <button type="button" class="viewer__btn" data-v="prev-change" aria-label="Previous change" title="Previous change (P)">&lsaquo; Change</button>
+      <button type="button" class="viewer__btn" data-v="next-change" aria-label="Next change" title="Next change (N)">Change &rsaquo;</button>
+    </span>
+    {% endif %}
+    {% if render_svg_url %}
+    {# Two drawings of the same GPML: this portal's own, and the one the repository's pipeline
+       produced. The second is what the site will show, so a curator can check them against each
+       other; it is only ever an <img>, never inlined. #}
+    <span class="viewer__source" role="group" aria-label="Which drawing to show">
+      <button type="button" class="viewer__btn" data-v="source-portal" aria-pressed="true">Portal render</button>
+      <button type="button" class="viewer__btn" data-v="source-db" aria-pressed="false">Database render</button>
+    </span>
+    {% endif %}
+  </div>
+  <div class="viewer__canvas" tabindex="0" role="group" aria-roledescription="pathway diagram"
+       aria-label="{{ alt }}. Tab into the diagram to reach its data nodes; the arrow keys move between them and Enter shows a node's properties. Plus and minus zoom, 0 fits the whole diagram, F is full screen{% if full %}, slash searches{% endif %}{% if diff_url %}, N and P step through the changes{% endif %}, Escape closes the properties.">
+    <img class="viewer__fallback" src="{{ svg_url }}" alt="{{ alt }}" draggable="false" loading="lazy">
+  </div>
+  <div class="viewer__tooltip" hidden role="tooltip"></div>
+  {# Not a dialog: focus stays on the node so the arrow keys keep working, and the properties are
+     announced where they change. A dialog's focus trap would break exactly that. #}
+  <div class="node-panel" hidden role="group" aria-label="Properties">
+    <button type="button" class="node-panel__close" aria-label="Close properties">&times;</button>
+    <div class="node-panel__body" aria-live="polite" aria-atomic="true"></div>
+  </div>
+  <div class="viewer__legend" id="{{ vid }}-legend" hidden></div>
+  <p class="viewer__status visually-hidden" id="{{ vid }}-status" role="status" aria-live="polite"></p>
+</div>
+{% endmacro %}
+
+{% macro frame(label, r, side, alt, mode, pipeline=None) %}
+{# A GPML the renderer refuses is the strongest available signal that a submission is malformed.
+   Saying "no render on file" there would swallow it. #}
+<figure class="preview__frame{% if r.kind != 'update' %} preview__frame--solo{% endif %}">
+  <figcaption>{{ label }}</figcaption>
+  {% if r.preview and r.preview.status == 'ready' and r.preview.get(side ~ '_svg_url') %}
+    {{ viewer(r.pr_number, side, r.preview, alt, mode, pipeline) }}
+  {% elif r.preview and r.preview.status == 'failed' %}
+    <div class="preview__failed">Could not draw {{ 'this version' if r.kind == 'update' else 'this pathway' }} from its GPML.</div>
+  {% elif r.kind == 'update' %}
+    <div class="preview__empty">No render on file for this version.</div>
+  {% else %}
+    <div class="preview__empty">
+      No render on file for this pull request. Re-uploading the GPML draws it again.
+    </div>
+  {% endif %}
+</figure>
+{% endmacro %}
+
+{# The before/after pair for an update, one frame for a new pathway. The wrapper is what full
+   screen takes over in diff mode, so both sides stay side by side and in step. #}
+{% macro viewer_pair(r, mode='full') %}
+<div class="preview" data-viewer-pair>
+  {% if r.kind == 'update' %}
+    {{ frame('Before', r, 'before', 'Pathway diagram before this change', mode) }}
+    <div class="preview__edge" aria-hidden="true">
+      <svg viewBox="0 0 32 16" fill="none"><path class="edge-flow" d="M1 8h22" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M20 3l7 5-7 5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </div>
+    {{ frame('After', r, 'after', 'Pathway diagram after this change', mode, r.pipeline) }}
+  {% else %}
+    {{ frame('Preview', r, 'after', 'Rendered pathway diagram', mode, r.pipeline) }}
+  {% endif %}
+</div>
+{% endmacro %}
