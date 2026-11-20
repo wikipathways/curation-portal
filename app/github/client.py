@@ -466,6 +466,14 @@ class GitHubClient(ABC):
         there is no reliable way to join it to a review — never drive state from this.
         """
 
+    @abstractmethod
+    def get_blob(self, repo: str, sha: str) -> bytes | None:
+        """The raw bytes of blob ``sha`` in ``repo``, or None if there is no such blob.
+
+        How the base an update was compared against is read back after the default branch has
+        moved on: ``Review.base_blob`` records the blob, not a commit.
+        """
+
 
 class FakeGitHubClient(GitHubClient):
     """In-memory GitHubClient for tests. Records every mutation; can simulate failures.
@@ -1055,6 +1063,22 @@ class FakeGitHubClient(GitHubClient):
     def simulate_dispatcher_failure(self, repo: str, pr_number: int) -> None:
         """The label goes on and nothing happens. Historically the most likely outcome."""
         return None
+
+    def seed_blob(self, repo: str, sha: str, content: str) -> None:
+        """Make blob ``sha`` readable through ``get_blob`` (a base that has since moved on)."""
+        self.__dict__.setdefault("blobs", {})[(repo, sha)] = content
+
+    def get_blob(self, repo: str, sha: str) -> bytes | None:
+        self._maybe_fail("get_blob")
+        content = self.__dict__.get("blobs", {}).get((repo, sha))
+        if content is None:
+            # A blob sha is what ``get_file_sha`` reports for a file, so the seeded file with
+            # that sha *is* the blob — as on GitHub, where both name the same object.
+            for (r, path), blob_sha in self.existing_files.items():
+                if r == repo and blob_sha == sha:
+                    content = self.existing_contents.get((repo, path))
+                    break
+        return content.encode("utf-8") if content is not None else None
 
 
 _shared_transport: httpx.HTTPTransport | None = None
@@ -1749,3 +1773,15 @@ class HttpGitHubClient(GitHubClient):
         if status != "success":
             return {"absent": "absent", "pending": "pending"}.get(status, "failed")
         return "ready" if self._preview_artifact_id(repo, run_id, artifact_name) else "failed"
+
+    def get_blob(self, repo: str, sha: str) -> bytes | None:
+        # The raw media type returns the bytes themselves, with no base64 envelope and no 1 MB
+        # inline limit.
+        resp = self._client.get(
+            f"/repos/{repo}/git/blobs/{sha}",
+            headers={"Accept": "application/vnd.github.raw"},
+        )
+        if resp.status_code in (404, 422):  # 422: not a valid sha at all
+            return None
+        self._raise_for(resp, f"get_blob({sha[:12]})")
+        return resp.content
