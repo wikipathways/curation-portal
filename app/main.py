@@ -22,6 +22,7 @@ from collections.abc import Callable
 from contextlib import asynccontextmanager
 from datetime import timedelta
 from pathlib import Path
+from typing import NamedTuple
 from urllib.parse import urlparse
 
 import httpx
@@ -44,11 +45,13 @@ from fastapi.responses import (
 )
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from markupsafe import Markup, escape
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
+from app import obs
 from app.auth import GitHubApp, GithubOAuth, OAuthError, TokenCipher, TokenCipherError
 from app.background import BackgroundWorker
 from app.config import Settings
@@ -71,7 +74,7 @@ from app.ratelimit import RateLimited, SubmissionRateLimiter
 from app.review.adoption import AdoptionService
 from app.review.audit import acting_as
 from app.review.audit import history as review_history
-from app.review.conversation import ConversationCache
+from app.review.conversation import PORTAL_MARKERS, ConversationCache
 from app.review.conversation import present as present_conversation
 from app.review.service import (
     TESTING_RULE_IDS,
@@ -89,6 +92,7 @@ from app.review.status import (
     presentation,
     queue_tabs,
 )
+from app.review.tracker import publish_pending, publish_stages
 from app.security import SecurityHeadersMiddleware, settings_site_host
 from app.submit import (
     InvalidGpml,
@@ -161,6 +165,33 @@ def _age(value) -> str:
 
 
 templates.env.filters["age"] = _age
+
+
+def _ago(value) -> str:
+    """"just now", "4 min ago", "2 h ago": for "Checked …" on a card, which ``age`` rounds to
+    "today". Empty for nothing, so a review never checked says so through the template."""
+    from datetime import UTC, datetime
+
+    if not value:
+        return ""
+    if isinstance(value, str):
+        try:
+            value = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return ""
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=UTC)
+    seconds = max(0, int((datetime.now(UTC) - value).total_seconds()))
+    if seconds < 45:
+        return "just now"
+    if seconds < 3600:
+        return f"{max(1, round(seconds / 60))} min ago"
+    if seconds < 86400:
+        return f"{seconds // 3600} h ago"
+    return _age(value)
+
+
+templates.env.filters["ago"] = _ago
 
 
 _STATIC_DIR = _ROOT / "static"
@@ -533,6 +564,8 @@ def build_app(settings: Settings | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         engine = make_engine(settings.database_url)
+        # Every SQL statement counts toward the request's Server-Timing (app/obs.py).
+        obs.instrument_engine(engine)
         # Dev convenience only. Production (Postgres) runs `alembic upgrade head` on deploy — see
         # docs/migrations.md — so we never auto-create tables outside SQLite.
         if settings.database_url.startswith("sqlite"):
@@ -540,6 +573,9 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         session_factory = make_session_factory(engine)
         # GitHub App (bot) identity — privileged merge/comment. None → those routes 503 (dev).
         bot_app = _make_bot_app(settings)
+        # Whether the background loop will run (below). Decided once, here, because the curator
+        # registry's refresh depends on it as well as the loop itself.
+        loop_on = bot_app is not None and settings.background_interval_seconds > 0
         app.state.settings = settings
         app.state.session_factory = session_factory
         app.state.bot_app = bot_app
@@ -564,9 +600,20 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             team=settings.curator_team,
             config_logins=settings.curators,
             bot_client_provider=lambda: app.state.bot_client_provider(),
+            # An expired team membership is re-read by the background loop, not by the page
+            # that happens to notice (C10). Only when there is a loop: without one, nothing
+            # would ever re-read it, and a curator removed from the team would keep their
+            # rights until a restart.
+            background=loop_on,
         )
         # Pathway preview: the app draws before/after itself and caches it (issue #11).
         app.state.preview = PreviewService(cache_dir=settings.preview_cache_dir)
+        # The render cache's reads count as "disk" in Server-Timing.
+        obs.time_methods(
+            app.state.preview,
+            "disk",
+            ("status", "diff", "metadata", "quality", "nodes", "svg_path", "graph", "stamp"),
+        )
         # The target repo's own derived artifacts (pipeline mode). Read anonymously — the App is
         # not installed on the site repo and does not need to be, since those files are public.
         app.state.drafts = (
@@ -655,11 +702,15 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             content_repo=settings.content_repo,
             untracked_interval_seconds=settings.untracked_scan_interval_seconds,
             collection=app.state.collection,
+            # A provider rather than the object, so a test that swaps app.state.drafts is seen.
+            drafts=lambda: app.state.drafts,
+            curators=app.state.curators,
+            default_branch=settings.default_branch,
         )
         # Only with an App identity: without one there is nothing to reconcile against, and the
         # tests (which wire no App) drive ``worker.tick`` themselves.
         loop_task = None
-        if bot_app is not None and settings.background_interval_seconds > 0:
+        if loop_on:
             loop_task = asyncio.create_task(
                 app.state.worker.run(settings.background_interval_seconds)
             )
@@ -671,11 +722,20 @@ def build_app(settings: Settings | None = None) -> FastAPI:
                 with contextlib.suppress(asyncio.CancelledError):
                     await loop_task
 
-    def _curation(request: Request, github: GitHubClient | None = None) -> CurationService:
-        # Review CRUD needs no GitHub client; only approve_and_merge does.
-        return _make_curation(request.app.state, github)
+    def _curation(
+        request: Request,
+        github: GitHubClient | None = None,
+        background: BackgroundTasks | None = None,
+    ) -> CurationService:
+        # Review CRUD needs no GitHub client; only approve_and_merge does. With ``background``,
+        # the mirror and approval comments are posted after the response (C9).
+        return _make_curation(
+            request.app.state,
+            github,
+            defer=background.add_task if background is not None else None,
+        )
 
-    def _make_curation(st, github: GitHubClient | None = None) -> CurationService:
+    def _make_curation(st, github: GitHubClient | None = None, defer=None) -> CurationService:
         return CurationService(
             st.session_factory,
             github,
@@ -701,6 +761,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             ),
             drafts=st.drafts,
             previews=st.preview,
+            defer=defer,
         )
 
     def _adoption(request: Request, github: GitHubClient) -> AdoptionService:
@@ -792,11 +853,35 @@ def build_app(settings: Settings | None = None) -> FastAPI:
     # app.js most of all). Nothing sent is a secret beside attacker-chosen text, which is the
     # condition compression-oracle attacks need: the session lives in a cookie, not in a page.
     app.add_middleware(GZipMiddleware, minimum_size=1000)
+    # Added last, so it is the outermost layer: Server-Timing's total covers everything else.
+    app.add_middleware(obs.TimingMiddleware)
     app.mount(
         "/static",
         _VersionedStaticFiles(directory=str(_ROOT / "static"), check_dir=False),
         name="static",
     )
+
+    # Registered here, ahead of ``/previews/{pr_number}/{side}.svg``, which would otherwise
+    # match "pipeline" as a side and answer 404.
+    @app.get("/previews/{pr_number}/pipeline.svg")
+    def pipeline_svg(request: Request, pr_number: int):
+        """The repository pipeline's own drawing, from the background loop's cache (C1).
+
+        raw.githubusercontent.com serves SVG as ``text/plain`` with ``nosniff``, so an ``<img>``
+        pointed there draws nothing. Served same-origin with the locked-down headers the
+        portal's own renders get. Never fetched here: 404 until the loop has cached it.
+        """
+        drafts = request.app.state.drafts
+        try:
+            r = _curation(request).get(pr_number)
+        except ReviewNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        if drafts is None:
+            raise HTTPException(status_code=404, detail="no pipeline render on file")
+        path = drafts.svg_path(drafts.slug_for(kind=r.kind, wpid=r.wpid, pr_number=r.pr_number))
+        if path is None:
+            raise HTTPException(status_code=404, detail="no pipeline render on file")
+        return FileResponse(path, media_type="image/svg+xml", headers=_SVG_HEADERS)
 
     @app.exception_handler(CredentialsRejected)
     async def _credentials_rejected(request: Request, exc: CredentialsRejected) -> JSONResponse:
@@ -999,7 +1084,31 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             # rendered or the cache has been swept — the card falls back to saying nothing rather
             # than to an empty panel that reads as "no problems found".
             "quality": request.app.state.preview.quality(r.pr_number),
+            # When the background loop last compared this review with GitHub ("Checked 2 min
+            # ago" on the card). None while a re-check is due.
+            "checked_at": r.last_checked_at,
+            # Accepted -> publish workflow -> published -> site live (C4). Empty before approval.
+            "tracker": publish_stages(r, r.pipeline_run),
+            # Seconds until the card asks for itself again; 0 means it does not (C3).
+            "poll_after": _poll_after(r),
         }
+
+    def _poll_after(r) -> int:
+        """How soon a card's own refresh should ask again, from what could change and how fast.
+
+        Five seconds while the repository is working on it (its run is queued or running, or a
+        publication is under way), thirty while it is live and waiting on people, never once it
+        is finished. The client stretches these when the tab is hidden or the server errs.
+        """
+        status = r.status.value
+        run = r.pipeline_run or {}
+        if publish_pending(r, run):
+            return 5
+        if status in ("published", "rejected", "merged", "closed"):
+            return 0
+        if run.get("status") in ("requested", "queued", "in_progress", "waiting"):
+            return 5
+        return 30
 
     def _pipeline_view(request: Request, r) -> dict | None:
         """What the target repo's own pipeline has produced for this PR, if anything.
@@ -1014,7 +1123,17 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         if drafts is None:
             return None
         slug = drafts.slug_for(kind=r.kind, wpid=r.wpid, pr_number=r.pr_number)
-        artifacts = drafts.fetch(slug)
+        # Disk only, never the network: the background loop keeps the copy current (C1). A
+        # finished review needs no draft at all — publication moves the drafts and a rejection
+        # deletes them — so it does not even read the disk.
+        finished = r.status in (
+            ReviewStatus.PUBLISHED,
+            ReviewStatus.REJECTED,
+            ReviewStatus.CLOSED,
+            ReviewStatus.MERGED,
+        )
+        artifacts = DraftsReader.unavailable(slug) if finished else drafts.cached(slug)
+        svg_on_disk = not finished and drafts.svg_path(slug) is not None
         run = r.pipeline_run or {}
         conclusion = run.get("conclusion")
         # The finished page, once the repo has published it. Kept separate from `draft_url`
@@ -1033,6 +1152,9 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             "draft_url": artifacts.draft_url,
             "published_url": published_url,
             "svg_url": artifacts.svg_url,
+            # The same drawing, same-origin, for the viewer's "Database render" (K5). None until
+            # the background loop has cached it.
+            "render_svg_url": f"/previews/{r.pr_number}/pipeline.svg" if svg_on_disk else None,
             "thumb_url": artifacts.thumb_url,
             "datanode_count": len(artifacts.datanodes or []) or None,
             "reference_count": len(artifacts.bibliography or []) or None,
@@ -1127,6 +1249,8 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         else:
             matching = sum(counts.values()) if status is None else counts.get(status.value, 0)
         pager = _pager(request, page=page, total=matching)
+        page_ctx = _page_ctx(request)
+        curators = sorted(request.app.state.curators.members())
         reviews = [
             _review_view(request, r)
             for r in curation.list_queue(
@@ -1145,9 +1269,14 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             request,
             "dashboard.html",
             {
-                **_page_ctx(request),
+                **page_ctx,
                 "reviews": reviews,
-                "curators": sorted(request.app.state.curators.members()),
+                # Each card rendered as the card route renders it, ETag included (_render_card).
+                "cards": {
+                    v["pr_number"]: _render_card(page_ctx, v, curators, expanded=False).html
+                    for v in reviews
+                },
+                "curators": curators,
                 "repo": settings.content_repo,
                 "status": status.value if status is not None else None,
                 "mine": bool(submitter),
@@ -1274,49 +1403,144 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="no diff on file for this pull request")
         return JSONResponse(data)
 
+    def _ask_for_a_recheck(
+        request: Request, curation: CurationService, r, *, anyone=False
+    ) -> str | None:
+        """Have this review re-checked against GitHub when it is due.
+
+        Returns ``"queued"`` when the background loop was asked (the page renders from the
+        database at once and its card asks for itself again a moment later), ``"checked"`` when
+        it was re-checked inline here, and None when nothing was done.
+
+        Curators ask for any due review; with ``anyone`` (the card's own polling while a
+        publication runs), any signed-in viewer may queue one. Never anonymous, so a visitor
+        cannot spend the portal's GitHub quota.
+
+        Without a running loop (no App identity, or PORTAL_BACKGROUND_INTERVAL_SECONDS=0) a
+        queued request would never be taken, so a curator's request re-checks inline, as the
+        page did before the loop existed. Other viewers get nothing then: their card keeps its
+        normal interval and shows what the next curator visit or webhook records.
+        """
+        login = request.session.get("gh_login")
+        if not login:
+            return None
+        curator = request.app.state.curators.is_curator(login)
+        if not (anyone or curator):
+            return None
+        if not curation.is_due(r):
+            return None
+        worker = request.app.state.worker
+        if worker.loop_running:
+            worker.request_review(r.pr_number)
+            return "queued"
+        if curator and worker.recheck_now(r.pr_number):
+            return "checked"
+        return None
+
     @app.get("/dashboard/{pr_number}", response_class=HTMLResponse)
-    def review_page(
-        request: Request, pr_number: int, bot: GitHubClient | None = Depends(get_bot_optional)
-    ):
-        curation = _curation(request, bot)
+    def review_page(request: Request, pr_number: int):
+        # Renders from the database only. The page used to reconcile with GitHub inline for a
+        # curator (four to eight GitHub calls, plus the drafts site) before showing anything;
+        # now it asks the background loop to do that first and the card refreshes itself (C2).
+        curation = _curation(request)
         try:
-            curation.get(pr_number)
+            r = curation.get(pr_number)
         except ReviewNotFound as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
-        # A curator about to decide gets the freshest state the throttle allows: this page is
-        # reached directly as often as from the queue (a link in a comment, a refresh after
-        # acting). Anyone else reads what the background loop last recorded — a GET from a
-        # visitor never writes and never spends GitHub calls.
-        login = request.session.get("gh_login")
-        if login and request.app.state.curators.is_curator(login):
-            curation.reconcile_review(pr_number)
-            # Fill in whatever the target repo's pipeline has already worked out, so the curator
-            # is confirming answers rather than deriving them. Best-effort, and it never
-            # overwrites a state a curator set by hand.
-            meta = request.app.state.preview.metadata(pr_number)
-            # The *cited* count, not the total: the target repo's generator only emits references
-            # a <BiopaxRef> actually points at, so comparing its output against every
-            # PublicationXref in the file reports a shortfall that is not one — and that item is
-            # required, so the false FAIL would block approval and read as the submitter's fault.
-            curation.refresh_pipeline_checks(
-                pr_number,
-                gpml_reference_count=meta.get("cited_reference_count") if meta else None,
-            )
-        # Read the row last. Both calls above write to it, and rendering the copy fetched before
-        # them would show the page as it was one refresh ago.
-        r = curation.get(pr_number)
+        if _ask_for_a_recheck(request, curation, r) == "checked":
+            r = curation.get(pr_number)  # re-checked inline (no loop): show what it found
         events = review_history(request.app.state.session_factory, pr_number)
+        view = _review_view(request, r)
+        if request.app.state.worker.is_pending(pr_number):
+            view["poll_after"] = 2  # the loop is on it; show its answer as soon as it lands
+        curators = sorted(request.app.state.curators.members())
+        page_ctx = _page_ctx(request)
         return templates.TemplateResponse(
             request,
             "review_detail.html",
             {
-                **_page_ctx(request),
-                "review": _review_view(request, r),
-                "curators": sorted(request.app.state.curators.members()),
+                **page_ctx,
+                "review": view,
+                # Rendered once, the way the card route renders it, so the page's card carries
+                # the same ETag and the first timer poll is a 304 rather than a swap (K5).
+                "card_html": (
+                    _render_card(page_ctx, view, curators, expanded=True).html
+                    if page_ctx["login"]
+                    else None
+                ),
+                "curators": curators,
                 "repo": settings.content_repo,
                 "history": [_event_view(e) for e in events],
             },
         )
+
+    @app.get("/dashboard/{pr_number}/card", response_class=HTMLResponse)
+    def review_card_fragment(
+        request: Request, pr_number: int, expanded: int = 0, recheck: int = 0
+    ):
+        """One review card, as HTML, for the client to swap in place (C3, K5).
+
+        What every action and the auto-refresh fetch instead of reloading the page. A weak ETag
+        over the body answers an unchanged card with a 304; ``X-Poll-After`` says when to ask
+        again. Private and per-viewer (``Vary: Cookie``): the card shows curator controls.
+
+        The timer's own polls read the database and nothing else. A re-check on the loop is
+        asked for when someone presses Refresh (``recheck=1``, curators), or while the
+        repository is working on the review (any signed-in viewer), and only when one is due.
+        """
+        curation = _curation(request)
+        try:
+            r = curation.get(pr_number)
+        except ReviewNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        busy = _poll_after(r) == 5
+        if (recheck or busy) and _ask_for_a_recheck(
+            request, curation, r, anyone=busy
+        ) == "checked":
+            r = curation.get(pr_number)  # re-checked inline (no loop): show what it found
+        view = _review_view(request, r)
+        if request.app.state.worker.is_pending(pr_number):
+            view["poll_after"] = 2  # the loop is on it; show its answer as soon as it lands
+        card = _render_card(
+            _page_ctx(request),
+            view,
+            sorted(request.app.state.curators.members()),
+            expanded=bool(expanded),
+        )
+        # No Vary here: SessionMiddleware adds "Vary: Cookie" to any response that read the
+        # session, which this one always does, and a second copy only repeats it.
+        headers = {
+            "ETag": card.etag,
+            "Cache-Control": "private, no-cache",
+            "X-Poll-After": str(view["poll_after"]),
+            "X-Checked": card.checked,
+        }
+        if card.etag in [t.strip() for t in request.headers.get("if-none-match", "").split(",")]:
+            return Response(status_code=304, headers=headers)
+        return HTMLResponse(card.html, headers=headers)
+
+    def _render_card(page_ctx: dict, view: dict, curators: list[str], *, expanded: bool):
+        """One review card as the card route serves it, with its ETag on the ``<article>``.
+
+        The review page and the queue render their cards through this too, so a card on a page
+        is byte-for-byte what the route would answer and carries the same ``data-etag``: the
+        first timer poll is then a 304, not a swap that re-mounts the diagram for nothing.
+
+        Left out of the ETag, because they change with the clock and not with the review:
+        "Checked 2 min ago" (sent as X-Checked, which the client applies on a 304), the poll
+        interval (X-Poll-After), and the relative times inside ``<time data-ago>``, which the
+        client rewrites from their ``datetime``.
+        """
+        body = templates.get_template("_card_fragment.html").render(
+            {**page_ctx, "review": view, "expanded": expanded, "curators": curators}
+        )
+        checked = _CHECKED_SPAN_RE.search(body)
+        etag_body = _AGO_TIME_RE.sub(
+            r"\1</time>", _POLL_ATTR_RE.sub("", _CHECKED_SPAN_RE.sub("", body))
+        )
+        etag = 'W/"' + hashlib.sha1(etag_body.encode("utf-8")).hexdigest()[:20] + '"'
+        html = body.replace("<article ", f'<article data-etag="{escape(etag)}" ', 1)
+        return _Card(Markup(html), etag, checked.group(1).strip() if checked else "")
 
     def _event_view(e) -> dict:
         """One audit event as a sentence's worth of parts."""
@@ -1893,6 +2117,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
     def update_checklist(
         request: Request,
         pr_number: int,
+        background: BackgroundTasks,
         key: str = Form(...),
         state: str = Form(...),
         # Omitted (the dashboard's state chips send no note) → the stored note is left alone.
@@ -1904,7 +2129,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         if not request.app.state.curators.is_curator(actor):
             raise HTTPException(status_code=403, detail=f"{actor} is not a curator")
         try:
-            r = _curation(request, bot).set_checklist_item(
+            r = _curation(request, bot, background).set_checklist_item(
                 pr_number, key, state, note, actor=actor
             )
         except ReviewNotFound as exc:
@@ -1945,6 +2170,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
     def review_conversation(
         request: Request,
         pr_number: int,
+        background: BackgroundTasks,
         _user: str = Depends(get_current_user),
         bot: GitHubClient | None = Depends(get_bot_optional),
     ) -> dict[str, object]:
@@ -1952,7 +2178,8 @@ def build_app(settings: Settings | None = None) -> FastAPI:
 
         Read as the App, through a one-minute cache the webhook invalidates. Signed-in only, like
         the review page it feeds: the thread is public on GitHub, but the API quota is the
-        portal's.
+        portal's. A copy up to ten minutes old is answered at once with ``"stale": true`` and
+        re-read after the response; the page asks again shortly (C6).
         """
         try:
             _curation(request).get(pr_number)
@@ -1960,20 +2187,35 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         if bot is None:
             raise HTTPException(status_code=503, detail="the portal cannot read GitHub right now")
+        cache = request.app.state.conversations
+
+        def fetch():
+            return bot.list_conversation(settings.content_repo, pr_number)
+
         try:
-            entry = request.app.state.conversations.get(
-                pr_number, lambda: bot.list_conversation(settings.content_repo, pr_number)
-            )
+            entry, stale = cache.get_or_stale(pr_number, fetch)
         except (GitHubError, httpx.HTTPError) as exc:
             raise HTTPException(
                 status_code=502, detail=f"could not read the pull request's conversation: {exc}"
             ) from exc
+        if stale:
+            background.add_task(_refresh_conversation, cache, pr_number, fetch)
         curators = set(request.app.state.curators.members())
         return {
             "pr_number": pr_number,
             "url": f"https://github.com/{settings.content_repo}/pull/{pr_number}",
             "items": [present_conversation(i, curators=curators) for i in entry.items],
+            "stale": stale,
         }
+
+    def _refresh_conversation(cache, pr_number: int, fetch) -> None:
+        """After a stale answer, re-read the thread: one fetch however many asked."""
+        try:
+            cache.refresh(pr_number, fetch, only_if_older_than=cache.ttl_seconds)
+        except Exception:  # noqa: BLE001 - after the response; the next reader retries
+            logging.getLogger("wpsubmit.conversation").warning(
+                "refreshing the conversation of PR #%s failed", pr_number, exc_info=True
+            )
 
     @app.post("/api/reviews/{pr_number}/comments", status_code=201)
     def post_review_comment(
@@ -2020,6 +2262,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
     def assign_review(
         request: Request,
         pr_number: int,
+        background: BackgroundTasks,
         # Empty means "Unassigned", which the select offers first. Form(...) refused it with a
         # 422, so a curator could assign a review and never take the assignment back.
         curator: str = Form(""),
@@ -2032,7 +2275,9 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         if curator and not request.app.state.curators.is_curator(curator):
             raise HTTPException(status_code=422, detail=f"{curator} is not a curator")
         try:
-            r = _curation(request, bot).assign(pr_number, curator or None, actor=actor)
+            r = _curation(request, bot, background).assign(
+                pr_number, curator or None, actor=actor
+            )
         except ReviewNotFound as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return _detail(r)
@@ -2041,6 +2286,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
     def request_changes(
         request: Request,
         pr_number: int,
+        background: BackgroundTasks,
         note: str = Form(""),
         actor: str = Depends(get_current_user),
         bot: GitHubClient | None = Depends(get_bot_optional),
@@ -2048,7 +2294,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         if not request.app.state.curators.is_curator(actor):
             raise HTTPException(status_code=403, detail=f"{actor} is not a curator")
         try:
-            r = _curation(request, bot).request_changes(pr_number, actor, note)
+            r = _curation(request, bot, background).request_changes(pr_number, actor, note)
         except ReviewNotFound as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ReviewNotActionable as exc:
@@ -2059,6 +2305,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
     def approve_review(
         request: Request,
         pr_number: int,
+        background: BackgroundTasks,
         # The head commit the curator's page showed; optional so an API caller without it keeps
         # the server-side check alone.
         head_sha: str = Form(""),
@@ -2069,7 +2316,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         # (scaffolding-plan §3) — merging that way satisfies branch protection, and labelling
         # that way works even for a curator without write access to the target repo.
         try:
-            r = _curation(request, bot).approve(
+            r = _curation(request, bot, background).approve(
                 pr_number, curator, seen_head=head_sha.strip() or None
             )
         except ReviewNotFound as exc:
@@ -2091,6 +2338,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
     def reject_review(
         request: Request,
         pr_number: int,
+        background: BackgroundTasks,
         note: str = Form(""),
         curator: str = Depends(get_current_user),
         bot: GitHubClient = Depends(get_bot_client),
@@ -2098,7 +2346,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         # Terminal, unlike request-changes: in pipeline mode this hands the PR to the target
         # repo's rejection workflow, which deletes the generated drafts and closes it.
         try:
-            r = _curation(request, bot).reject(pr_number, curator, note)
+            r = _curation(request, bot, background).reject(pr_number, curator, note)
         except ReviewNotFound as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except NotACurator as exc:
@@ -2116,6 +2364,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
     def record_published_wpid(
         request: Request,
         pr_number: int,
+        background: BackgroundTasks,
         wpid: int = Form(...),
         curator: str = Depends(get_current_user),
         bot: GitHubClient | None = Depends(get_bot_optional),
@@ -2124,7 +2373,9 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         # part of the loop the app does not control, so a curator has to be able to say what it
         # actually did.
         try:
-            r = _curation(request, bot).record_published_wpid(pr_number, wpid, curator)
+            r = _curation(request, bot, background).record_published_wpid(
+                pr_number, wpid, curator
+            )
         except ReviewNotFound as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except NotACurator as exc:
@@ -2201,7 +2452,9 @@ def build_app(settings: Settings | None = None) -> FastAPI:
                 await run_in_threadpool(curation.mark_due, update_wpids=touched) if touched else 0
             )
         elif event == "workflow_run":
-            if action != "completed":
+            # ``requested`` and ``in_progress`` too, not only ``completed``: the publish tracker
+            # shows the publish workflow running, and that is only known if someone looks then.
+            if action not in ("requested", "in_progress", "completed"):
                 return {"ok": True, "ignored": f"action:{action}"}
             run = payload.get("workflow_run") or {}
             numbers = [
@@ -2222,6 +2475,12 @@ def build_app(settings: Settings | None = None) -> FastAPI:
                 if "pull_request" not in issue:
                     return {"ok": True, "ignored": "issue"}
                 number = issue.get("number")
+                if _portal_echo(payload):
+                    # The portal's own mirror or welcome comment, written by its App. Every
+                    # mirror update is a PATCH, GitHub reports each one back here, and treating
+                    # it as news re-checked the review, which could update the mirror again (C6).
+                    # Markers in a person's comment, or in a workflow's, still count.
+                    return {"ok": True, "ignored": "portal-comment"}
             else:
                 number = (payload.get("pull_request") or {}).get("number")
             if number is None:
@@ -2240,6 +2499,13 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         if marked:
             worker.poke()
         return {"ok": True, "event": event, "marked": marked}
+
+    def _portal_echo(payload: dict) -> bool:
+        """An ``issue_comment`` delivery about a comment the portal itself wrote."""
+        body = str((payload.get("comment") or {}).get("body") or "")
+        sender = payload.get("sender") or {}
+        is_bot = sender.get("type") == "Bot" or str(sender.get("login") or "").endswith("[bot]")
+        return is_bot and any(marker in body for marker in PORTAL_MARKERS)
 
     @app.post("/webhooks/github")
     async def github_webhook(
@@ -2389,6 +2655,21 @@ _WEBHOOK_EVENTS = frozenset(
 )
 
 _PATHWAY_DIR_RE = re.compile(r"^pathways/WP([1-9][0-9]*)/")
+
+#: The card's "Checked 2 min ago" span (templates/_review_card.html), kept out of its ETag.
+_CHECKED_SPAN_RE = re.compile(
+    r'<span class="review-card__checked"[^>]*>([^<]*)</span>', re.DOTALL
+)
+_POLL_ATTR_RE = re.compile(r' data-poll-after="\d+"')
+#: A relative time the client keeps current itself ("4 min ago"); its text is kept out of the
+#: card's ETag, its ``datetime`` is not.
+_AGO_TIME_RE = re.compile(r"(<time [^>]*data-ago[^>]*>)[^<]*</time>")
+
+
+class _Card(NamedTuple):
+    html: Markup
+    etag: str
+    checked: str
 
 
 class ValidateResponse(BaseModel):

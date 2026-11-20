@@ -1,0 +1,28 @@
+{# Where an approved pathway is on its way to the site (app/review/tracker.py). Included inside
+   review_card, so `r` is the review view. A list rather than a progress bar: each stage has its
+   own wording, and the states differ by glyph and word as well as by colour. #}
+{% set TRACK_WORD = {'done': 'Done', 'active': 'In progress', 'waiting': 'Not yet', 'failed': 'Failed', 'skipped': 'Skipped', 'unknown': 'Unclear'} %}
+{% if r.tracker %}
+<section class="tracker" data-tour="tracker" aria-labelledby="tracker-title-{{ r.pr_number }}">
+  <h3 class="tracker__title" id="tracker-title-{{ r.pr_number }}">On its way to the site</h3>
+  <ol class="tracker__stages">
+    {% for st in r.tracker %}
+    <li class="tracker__stage tracker__stage--{{ st.state }}"{% if st.state == 'active' %} aria-current="step"{% endif %}>
+      <span class="tracker__mark" aria-hidden="true">
+        {%- if st.state == 'done' %}&#10003;{% elif st.state == 'failed' %}&#10007;{% elif st.state == 'active' %}&#9679;{% elif st.state == 'unknown' %}?{% elif st.state == 'skipped' %}&ndash;{% else %}&#9675;{% endif -%}
+      </span>
+      <span class="tracker__label">{{ st.label }}</span>
+      <span class="tracker__state">{{ TRACK_WORD.get(st.state, st.state) }}</span>
+      <span class="tracker__detail">
+        {{ st.detail }}
+        {# data-ago: refresh.js keeps the wording current, and the card's ETag leaves it out, so a
+           minute passing is not a change to the card. #}
+        {% if st.at %}<time datetime="{{ st.at.isoformat() }}" data-ago>{{ st.at | ago }}</time>{% endif %}
+        {% if st.url %}<a href="{{ st.url }}" target="_blank" rel="noopener">Open the run</a>{% endif %}
+        {% if st.key == 'live' and r.pipeline and r.pipeline.published_url %}<a href="{{ r.pipeline.published_url }}" target="_blank" rel="noopener">Open the page</a>{% endif %}
+      </span>
+    </li>
+    {% endfor %}
+  </ol>
+</section>
+{% endif %}

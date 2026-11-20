@@ -88,7 +88,10 @@ repositories. The handler acknowledges first and does the work in the background
 | `push` | marks open updates of a pathway whose GPML changed on the default branch, so an approval made against the old version is withdrawn |
 
 The background loop (`PORTAL_BACKGROUND_INTERVAL_SECONDS`, default 60) re-checks everything
-anyway, so a missed delivery delays a state change by a minute rather than losing it. Locks and
+anyway, so a missed delivery delays a state change by a minute rather than losing it. Setting it
+to `0` turns the loop off. Deliveries then only mark a review due; a curator opening the review
+(or pressing its Refresh button) re-checks it with GitHub while the page loads, which is slower,
+and the curator team is re-read on a request once its five-minute cache expires. Locks and
 WPID reservations also expire on their own after 14 days (`PORTAL_PATHWAY_LOCK_TTL_DAYS`,
 `PORTAL_WPID_RESERVATION_TTL_DAYS`).
 

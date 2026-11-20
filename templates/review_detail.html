@@ -1,12 +1,4 @@
 {% extends "base.html" %}
-{# `with context` matters: an imported macro cannot see the calling template's context without
-   it, so anything the macro reads from the page context — the target repo's name, for one —
-   silently renders empty here while working on the queue page.
-
-   The macros live in their own partial rather than in dashboard.html because importing a
-   template that extends another executes its body: importing from the queue page rendered the
-   queue page's empty state on every review page, against a context that has no queue in it. #}
-{% from "_review_card.html" import review_card with context %}
 {% block title %}{{ review.wpid_str }} &middot; PR #{{ review.pr_number }} &middot; WikiPathways Curation Portal{% endblock %}
 
 {% block content %}
@@ -26,7 +18,8 @@
     A {{ 'new pathway' if review.kind == 'new' else 'pathway update' }} from
     <strong>@{{ review.submitter }}</strong>, against <code>{{ repo }}</code>.
   </p>
-  {{ review_card(review, is_curator, curators, expanded=True) }}
+  {# Pre-rendered by the route (main.py _render_card), so it carries the card route's ETag. #}
+  {{ card_html }}
 
   {# The thread is where contributors answer and the repository's workflows report. Loaded after
      the page so a slow GitHub never holds up the review itself; rendered as text, never HTML. #}

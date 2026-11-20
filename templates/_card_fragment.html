@@ -1,0 +1,10 @@
+{# One review card on its own. Every card the portal shows is rendered from this (main.py
+   _render_card): the card route serves it for refresh.js to swap in place, and the review page
+   and the queue embed it, so a card on a page is byte-for-byte what the route answers.
+
+   `with context` matters: an imported macro cannot see the calling template's context without
+   it, so anything the macro reads from the page context (login, repo, pipeline_mode, site_host)
+   would silently render empty. The macros live in their own partial because importing a
+   template that extends another executes its body. #}
+{% from "_review_card.html" import review_card with context %}
+{{ review_card(review, is_curator, curators, expanded=expanded) }}

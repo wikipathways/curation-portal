@@ -16,6 +16,8 @@ from dataclasses import dataclass, field
 
 import httpx
 
+from app import obs
+
 _GITHUB_API = "https://api.github.com"
 
 #: How long ``ensure_fork`` waits for an asynchronously-created fork to answer. GitHub documents
@@ -452,9 +454,13 @@ class GitHubClient(ABC):
 
     @abstractmethod
     def latest_workflow_run_for_pr(
-        self, repo: str, pr_number: int, *, workflow_file: str
+        self, repo: str, pr_number: int, *, workflow_file: str, head_sha: str | None = None
     ) -> WorkflowRun | None:
-        """Newest run of ``workflow_file`` against the PR's head SHA, or None if there is none."""
+        """Newest run of ``workflow_file`` against the PR's head SHA, or None if there is none.
+
+        ``head_sha`` when the caller already read the pull request: the head is then not read a
+        second time, which is one GET per review per reconcile.
+        """
 
     @abstractmethod
     def recent_workflow_runs(
@@ -955,7 +961,7 @@ class FakeGitHubClient(GitHubClient):
         self.closed.add(pr_number)
 
     def latest_workflow_run_for_pr(
-        self, repo: str, pr_number: int, *, workflow_file: str
+        self, repo: str, pr_number: int, *, workflow_file: str, head_sha: str | None = None
     ) -> WorkflowRun | None:
         self._maybe_fail("latest_workflow_run_for_pr")
         runs = self.workflow_runs.get((repo, workflow_file), [])
@@ -1129,6 +1135,8 @@ class HttpGitHubClient(GitHubClient):
             },
             timeout=30.0,
         )
+        # Counted per request into the Server-Timing header (app/obs.py).
+        obs.instrument_httpx(self._client, "gh")
 
     def _raise_for(self, resp: httpx.Response, what: str) -> None:
         # 401 is the token being rejected outright, which is a revoked authorisation rather than a
@@ -1670,14 +1678,16 @@ class HttpGitHubClient(GitHubClient):
         return [label["name"] for label in resp.json()]
 
     def latest_workflow_run_for_pr(
-        self, repo: str, pr_number: int, *, workflow_file: str
+        self, repo: str, pr_number: int, *, workflow_file: str, head_sha: str | None = None
     ) -> WorkflowRun | None:
-        detail = self.get_pull_request(repo, pr_number)
-        if detail is None:
-            return None
+        if not head_sha:
+            detail = self.get_pull_request(repo, pr_number)
+            if detail is None:
+                return None
+            head_sha = detail.head_sha
         resp = self._client.get(
             f"/repos/{repo}/actions/workflows/{workflow_file}/runs",
-            params={"head_sha": detail.head_sha, "per_page": 1},
+            params={"head_sha": head_sha, "per_page": 1},
         )
         self._raise_for(resp, "list_workflow_runs")
         items = resp.json().get("workflow_runs", [])

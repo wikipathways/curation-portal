@@ -22,6 +22,8 @@ from dataclasses import dataclass, field
 import httpx
 import jwt
 
+from app import obs
+
 _GITHUB_API = "https://api.github.com"
 #: Refresh the installation token this many seconds before its stated expiry (clock-skew slack).
 _REFRESH_SLACK = 60
@@ -66,6 +68,7 @@ class GitHubApp:
             raise GitHubAppError(f"could not sign App JWT: {exc}") from exc
 
         with httpx.Client(base_url=self.base_url, transport=self.transport, timeout=30.0) as client:
+            obs.instrument_httpx(client, "gh")
             resp = client.post(
                 f"/app/installations/{self.installation_id}/access_tokens",
                 headers={

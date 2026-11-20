@@ -226,17 +226,24 @@ def test_fetch_never_raises_when_the_transport_errors(tmp_path):
 
 
 def test_a_transport_error_is_not_cached(tmp_path):
-    """A blip must not freeze a healthy draft as missing for the whole TTL."""
+    """A blip must not freeze a healthy draft as missing for the whole TTL.
+
+    It does hold off the next attempt for two minutes, so a site that just refused is not asked
+    again on every background pass, but nothing is written that would outlive that.
+    """
     failing = {"first": True}
+    clock = {"t": 1000.0}
 
     def handler(request: httpx.Request) -> httpx.Response:
         if failing["first"]:
             raise httpx.ConnectError("blip", request=request)
         return serve(real_files())(request)
 
-    reader = make_reader(handler, tmp_path)
+    reader = make_reader(handler, tmp_path, clock=lambda: clock["t"])
     assert reader.fetch(SLUG).available is False
     failing["first"] = False
+    assert reader.fetch(SLUG).available is False  # inside the back-off: not asked yet
+    clock["t"] += 121
     assert reader.fetch(SLUG).available is True
 
 
@@ -406,17 +413,19 @@ def test_a_rate_limit_is_not_cached_as_a_missing_draft(tmp_path):
     files per queued review on every render, so a 429 is expected. Caching it would freeze a
     healthy draft as missing for the whole TTL."""
     limited = {"on": True}
+    clock = {"t": 1000.0}
 
     def handler(request: httpx.Request) -> httpx.Response:
         if limited["on"]:
             return httpx.Response(429, text="rate limited")
         return serve(real_files())(request)
 
-    reader = make_reader(handler, tmp_path)
+    reader = make_reader(handler, tmp_path, clock=lambda: clock["t"])
     assert reader.fetch(SLUG).available is False
     assert list((tmp_path / "drafts-cache").glob("*.json")) == []
 
     limited["on"] = False
+    clock["t"] += 121  # past the back-off
     assert reader.fetch(SLUG).available is True
 
 

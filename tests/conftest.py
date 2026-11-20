@@ -50,9 +50,11 @@ class RecordingDrafts:
 
     def __init__(self) -> None:
         self.sweeps = 0
+        self.kept: list[set[int]] = []
 
-    def sweep(self, *, force: bool = False) -> int:
+    def sweep(self, keep=None, *, force: bool = False) -> int:
         self.sweeps += 1
+        self.kept.append(set(keep or ()))
         return 0
 
 

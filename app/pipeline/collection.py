@@ -20,6 +20,8 @@ from pathlib import Path
 
 import httpx
 
+from app import obs
+
 logger = logging.getLogger("wpsubmit.collection")
 
 _OK_GROUP = re.compile(r"^\* (\w+): all (\d+) tests? OK!")
@@ -77,7 +79,9 @@ class CollectionReports:
         self._branch = branch
         self._dir = Path(cache_dir)
         self._ttl = ttl_seconds
-        self._client = httpx.Client(transport=transport, timeout=10.0, follow_redirects=True)
+        self._client = obs.instrument_httpx(
+            httpx.Client(transport=transport, timeout=10.0, follow_redirects=True), "raw"
+        )
 
     def page_url(self, wpid: int) -> str:
         return f"https://github.com/{self._repo}/blob/{self._branch}/reports/WP{wpid}.md"
