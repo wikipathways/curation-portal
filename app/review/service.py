@@ -313,12 +313,17 @@ def _merge_checklist(old: list[dict], fresh: list[dict]) -> list[dict]:
 
     An item a curator answered keeps its state and note and takes the new file's hint; everything
     else is replaced by the fresh, unanswered item.
+
+    Except an answer given while the item was scoped out of an update ("this update does not
+    touch it") on an item the new file does touch: that answer was about a change that is no
+    longer the one under review, and kept, an N/A would leave the item off the approval gate
+    beside a hint that now suggests Fail. It goes back to unanswered.
     """
     kept = {item["key"]: item for item in old if _answered(item)}
     merged = []
     for item in fresh:
         prior = kept.get(item["key"])
-        if prior is None:
+        if prior is None or (prior.get("scoped") and not item.get("scoped")):
             merged.append(item)
             continue
         answer = dict(prior)
@@ -1078,8 +1083,13 @@ class CurationService:
             review.status = ReviewStatus.OPEN
             review.title = _meta_text(metadata, "name", 512) or review.title
             review.organism = _meta_text(metadata, "organism", 255) or review.organism
+            # The file list is known from the row: without it the one-pathway item would claim
+            # the list was never read, on an item that blocks approval.
             review.checklist = build_checklist(
-                metadata=metadata, kind=review.kind, pipeline_mode=self.is_pipeline_mode
+                metadata=metadata,
+                kind=review.kind,
+                pipeline_mode=self.is_pipeline_mode,
+                pathway_paths=review.pathway_paths or None,
             )
             s.commit()
             self._maybe_mirror(review)

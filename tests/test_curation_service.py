@@ -668,3 +668,78 @@ def test_a_service_without_a_preview_cache_still_works(session_factory):
     svc.reject(4, "curator", note="no")
     assert svc.get(4).status.value == "rejected"
     svc.reconcile()  # ...nor its dashboard loads
+
+
+_SCOPE_BEFORE = (
+    '<Pathway xmlns="http://pathvisio.org/GPML/2013a" Name="X" Organism="Homo sapiens">'
+    '<DataNode TextLabel="INSR"><Xref Database="Ensembl" ID="ENSG00000171105"/></DataNode>'
+    "</Pathway>"
+)
+_SCOPE_AFTER_UNANNOTATED = (
+    '<Pathway xmlns="http://pathvisio.org/GPML/2013a" Name="X" Organism="Homo sapiens">'
+    '<DataNode TextLabel="INSR"><Xref Database="Ensembl" ID="ENSG00000171105"/></DataNode>'
+    '<DataNode TextLabel="Mystery"><Xref Database="" ID=""/></DataNode>'
+    "</Pathway>"
+)
+
+
+def test_a_scoped_na_does_not_outlive_a_reupload_that_touches_the_item(session_factory):
+    # A curator's N/A on an item the update did not touch was an answer about *that* update. A
+    # re-upload that does touch it (here: adds an unannotated data node) must ask again, not keep
+    # the N/A and leave the item off the approval gate next to a hint suggesting Fail.
+    from app.preview.metadata import parse_curation_metadata
+
+    before = parse_curation_metadata(_SCOPE_BEFORE)
+    svc = _service(session_factory)
+    svc.register(
+        pr_number=7, wpid=5637, submitter="bob", kind="update",
+        metadata=before, before_metadata=before,
+    )
+    dn = next(i for i in svc.get(7).checklist if i["key"] == "datanodes_mapped")
+    assert (dn["state"], dn["suggested"], dn["scoped"]) == ("pending", "na", True)
+    svc.set_checklist_item(7, "datanodes_mapped", "na", actor="curator")
+    svc.set_checklist_item(7, "render_ok", "pass", actor="curator")
+
+    svc.register(
+        pr_number=7, wpid=5637, submitter="bob", kind="update",
+        metadata=parse_curation_metadata(_SCOPE_AFTER_UNANNOTATED), before_metadata=before,
+    )
+    checklist = svc.get(7).checklist
+    dn = next(i for i in checklist if i["key"] == "datanodes_mapped")
+    assert (dn["state"], dn["suggested"], dn["required"]) == ("pending", "fail", True)
+    assert "scoped" not in dn
+    # An answer on an item that was not scoped is still the curator's and stays.
+    assert next(i for i in checklist if i["key"] == "render_ok")["state"] == "pass"
+
+
+def test_a_scoped_na_stays_while_the_item_is_still_scoped(session_factory):
+    from app.preview.metadata import parse_curation_metadata
+
+    before = parse_curation_metadata(_SCOPE_BEFORE)
+    svc = _service(session_factory)
+    for _ in range(2):
+        svc.register(
+            pr_number=7, wpid=5637, submitter="bob", kind="update",
+            metadata=before, before_metadata=before,
+        )
+        if _ == 0:
+            svc.set_checklist_item(7, "datanodes_mapped", "na", actor="curator")
+    dn = next(i for i in svc.get(7).checklist if i["key"] == "datanodes_mapped")
+    assert (dn["state"], dn["required"], dn["scoped"]) == ("na", False, True)
+
+
+def test_revise_keeps_the_file_list_hint(session_factory):
+    # revise() rebuilt the checklist without the row's pathway paths, so the one-pathway item
+    # claimed the file list was never read and suggested N/A, on an item that blocks approval.
+    from app.preview.metadata import parse_curation_metadata
+
+    svc = _service(session_factory)
+    svc.register(
+        pr_number=9, wpid=5637, submitter="bob", kind="new",
+        pathway_paths=["pathways/WP0001/WP0001.gpml"],
+    )
+    svc.request_changes(9, "curator", post_comment=False)
+    review = svc.revise(9, metadata=parse_curation_metadata(_SCOPE_BEFORE))
+    one = next(i for i in review.checklist if i["key"] == "one_pathway_per_pr")
+    assert (one["state"], one["suggested"]) == ("pending", "pass")
+    assert one["hint"] == "The pull request changes one pathway."
