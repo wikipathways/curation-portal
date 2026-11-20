@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Iterable
-from datetime import UTC, timedelta
+from collections.abc import Callable, Iterable
+from datetime import UTC, datetime, timedelta
 
 import httpx
 from sqlalchemy import func, or_, select, update
@@ -312,6 +312,38 @@ def _merge_checklist(old: list[dict], fresh: list[dict]) -> list[dict]:
     return [kept.get(item["key"], item) for item in fresh]
 
 
+def _apply_checklist_item(item: dict, state: str, note: str | None, auto: bool) -> bool:
+    """Write one answer onto one checklist item in place. True when anything changed."""
+    key = item["key"]
+    was_auto = bool(item.get("auto"))
+    contradicts = item.get("state") != state
+    changed = item.get("state") != state
+    item["state"] = state
+    changed = changed or bool(item.get("auto")) != auto
+    item["auto"] = auto
+    # ``na`` never blocks approval, and an item leaving ``na`` gets its requiredness back (issue
+    # #27). This writer used to set state and leave ``required`` alone, so a curator marking a
+    # required item N/A disabled Approve with no way back except guessing at Pass.
+    required = requirement_for(key, state)
+    changed = changed or bool(item.get("required")) != required
+    item["required"] = required
+    # None = "not editing the note" — a Pass/Fail/N/A click must not erase the auto-derived
+    # explanation the curator is reading.
+    if note is not None:
+        changed = changed or item.get("note") != note
+        item["note"] = note
+    elif not auto and was_auto and contradicts and item.get("note"):
+        # ...but where the click *contradicts* that explanation, leaving it unmarked states the
+        # opposite of what the item now says. PR #42 ended up reading "References resolve — pass"
+        # above the note "The pipeline resolved 0 of the 1 reference in the GPML", which is not a
+        # nuance, it is two answers to one question. Kept rather than cleared: what the pipeline
+        # saw is evidence, and a curator overriding it is the interesting part of the record.
+        # Only its standing changes.
+        item["note"] = f"Overridden by a curator. {item['note']}"
+        changed = True
+    return changed
+
+
 class ReviewNotFound(RuntimeError):
     pass
 
@@ -505,6 +537,7 @@ class CurationService:
         reconcile_min_interval: timedelta = timedelta(seconds=30),
         drafts=None,
         previews=None,
+        defer: Callable[..., None] | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._github = github
@@ -534,6 +567,14 @@ class CurationService:
         # (issue #18). Optional because nothing else in this service needs it, and every test
         # that does not care about previews should not have to build one.
         self._previews = previews
+        # ``defer(fn, *args)`` runs ``fn`` after the response has gone (a request's
+        # BackgroundTasks). With it, the mirror comment and the approval comment leave the
+        # request path: a curator's click waits for the decision, not for three more GitHub
+        # calls that only describe it. None (the loop, the webhook, tests) posts inline.
+        self._defer = defer
+        #: Pull requests whose mirror is already scheduled by this service instance — one per
+        #: request — so an action that changes a row three times posts the mirror once.
+        self._mirror_scheduled: set[int] = set()
 
     @property
     def is_pipeline_mode(self) -> bool:
@@ -603,9 +644,34 @@ class CurationService:
 
         Never fail the primary action on a comment hiccup — the app dashboard is the source of
         truth; the mirror is a convenience for GitHub-native reviewers.
+
+        Deferred when the service has a ``defer``: scheduled once per pull request, and the
+        deferred call re-reads the row, so it posts the state the request ended in.
         """
         if self._github is None:
             return
+        if self._defer is not None:
+            if review.pr_number not in self._mirror_scheduled:
+                self._mirror_scheduled.add(review.pr_number)
+                self._defer(self._mirror_by_number, review.pr_number)
+            return
+        self._post_mirror(review)
+
+    def _mirror_by_number(self, pr_number: int) -> None:
+        """The deferred half of ``_maybe_mirror``: read the row as it is now, then post."""
+        self._mirror_scheduled.discard(pr_number)
+        try:
+            with self._session_factory() as s:
+                review = s.get(Review, pr_number)
+                if review is None:
+                    return
+                s.expunge(review)
+        except Exception:  # noqa: BLE001 - after the response; nothing upstream can act on it
+            logger.warning("mirror for PR #%s: could not read the review", pr_number, exc_info=True)
+            return
+        self._post_mirror(review)
+
+    def _post_mirror(self, review: Review) -> None:
         # None whenever there is no preview cache on this service, or nothing cached for this pull
         # request. Both are ordinary, and both render the comment this method always rendered.
         quality = None
@@ -631,8 +697,11 @@ class CurationService:
             # Both API status errors (GitHubError) AND transport failures (httpx: connect
             # refused, timeout, DNS) — raised by the real client *before* _raise_for runs — must
             # be swallowed. The merge/PR has already happened; a comment hiccup must not surface
-            # as a 500 on an action that already succeeded.
-            pass
+            # as a 500 on an action that already succeeded. Logged, because a swallowed write
+            # that always fails looks exactly like one that was never attempted.
+            logger.warning(
+                "could not update the mirror comment on PR #%s", review.pr_number, exc_info=True
+            )
 
     @as_actor("submitter")
     def register(
@@ -1046,10 +1115,28 @@ class CurationService:
         answer on an item with no auto-check looked human and survived forever, while a curator's
         override of an auto-derived item was thrown away on the next upload.
         """
-        if not is_valid_key(key):
-            raise ValueError(f"unknown checklist item: {key}")
-        if state not in {s.value for s in ChecklistState}:
-            raise ValueError(f"invalid checklist state: {state}")
+        return self.set_checklist_items(pr_number, {key: (state, note)}, auto=auto, actor=actor)
+
+    @as_actor("actor")
+    def set_checklist_items(
+        self,
+        pr_number: int,
+        updates: dict[str, tuple[str, str | None]],
+        *,
+        auto: bool = False,
+        actor: str | None = None,
+    ) -> Review:
+        """Set several items at once: one version-guarded write and one mirror for all of them.
+
+        ``refresh_pipeline_checks`` fills up to five items per pass, and writing them one at a
+        time cost five commits and five mirror comment edits, each of which GitHub then
+        announced back to the webhook.
+        """
+        for key, (state, _note) in updates.items():
+            if not is_valid_key(key):
+                raise ValueError(f"unknown checklist item: {key}")
+            if state not in {s.value for s in ChecklistState}:
+                raise ValueError(f"invalid checklist state: {state}")
         # The checklist is one JSON blob on the review row, so setting an item is a
         # read-modify-write of the whole list. Two curators — or a burst of clicks — updating
         # *different* items at once would otherwise lose updates: each reads the list, changes
@@ -1068,40 +1155,13 @@ class CurationService:
                     checklist = [dict(item) for item in review.checklist]
                     changed = False
                     for item in checklist:
-                        if item["key"] == key:
-                            was_auto = bool(item.get("auto"))
-                            contradicts = item.get("state") != state
-                            changed = changed or item.get("state") != state
-                            item["state"] = state
-                            changed = changed or bool(item.get("auto")) != auto
-                            item["auto"] = auto
-                            # ``na`` never blocks approval, and an item leaving ``na`` gets its
-                            # requiredness back (issue #27). This writer used to set state and
-                            # leave ``required`` alone, so a curator marking a required item N/A
-                            # disabled Approve with no way back except guessing at Pass.
-                            required = requirement_for(key, state)
-                            changed = changed or bool(item.get("required")) != required
-                            item["required"] = required
-                            # None = "not editing the note" — a Pass/Fail/N/A click must not
-                            # erase the auto-derived explanation the curator is reading.
-                            if note is not None:
-                                changed = changed or item.get("note") != note
-                                item["note"] = note
-                            elif not auto and was_auto and contradicts and item.get("note"):
-                                # ...but where the click *contradicts* that explanation, leaving
-                                # it unmarked states the opposite of what the item now says.
-                                # PR #42 ended up reading "References resolve — pass" above the
-                                # note "The pipeline resolved 0 of the 1 reference in the GPML",
-                                # which is not a nuance, it is two answers to one question.
-                                # Kept rather than cleared: what the pipeline saw is evidence,
-                                # and a curator overriding it is the interesting part of the
-                                # record. Only its standing changes.
-                                item["note"] = f"Overridden by a curator. {item['note']}"
-                                changed = True
+                        if item["key"] in updates:
+                            state, note = updates[item["key"]]
+                            changed = _apply_checklist_item(item, state, note, auto) or changed
                     if not changed:
-                        # refresh_pipeline_checks re-derives the same answers on every page load.
+                        # refresh_pipeline_checks re-derives the same answers on every pass.
                         # Writing them back would bump the row's version and re-post the mirror
-                        # comment on the pull request each time a curator opened the page.
+                        # comment on the pull request each time.
                         return review
                     review.checklist = checklist
                     s.commit()  # version-guarded UPDATE; StaleDataError if we lost the race
@@ -1148,6 +1208,14 @@ class CurationService:
             return None
         if not artifacts.available:
             return None
+        # The pipeline's own drawing, for the viewer's "Database render". Same-origin, because
+        # raw.githubusercontent.com serves SVG as text/plain.
+        fetch_svg = getattr(self._drafts, "fetch_svg", None)
+        if fetch_svg is not None:
+            try:
+                fetch_svg(slug)
+            except Exception:  # noqa: BLE001 - cosmetic
+                logger.warning("could not cache the pipeline SVG for %s", slug, exc_info=True)
 
         results: dict[str, tuple[str, str]] = {}
         for key, outcome in (
@@ -1161,7 +1229,7 @@ class CurationService:
                 results[key] = outcome
         results.update(info_checks(artifacts))
 
-        review = None
+        updates: dict[str, tuple[str, str | None]] = {}
         for key, (state, note) in results.items():
             current = next((i for i in checklist if i.get("key") == key), None)
             if current is None:
@@ -1195,13 +1263,13 @@ class CurationService:
             # the note says the same thing and leaves it in front of the curator.
             if state == ChecklistState.NA.value and current.get("required"):
                 state = ChecklistState.PENDING.value
-            try:
-                review = self.set_checklist_item(
-                    pr_number, key, state, note=note, auto=True
-                )
-            except (ReviewNotFound, ValueError, StaleDataError):
-                continue
-        return review
+            updates[key] = (state, note)
+        if not updates:
+            return None
+        try:
+            return self.set_checklist_items(pr_number, updates, auto=True)
+        except (ReviewNotFound, ValueError, StaleDataError):
+            return None
 
     #: The only states a curator's decision applies to (``app.review.status.DECIDABLE``).
     #: PUBLISH_FAILED is in here: the approval was made and did not take, and re-approving is how
@@ -1368,18 +1436,12 @@ class CurationService:
             pass
         self._github.add_labels(self._repo, pr_number, [self._label_accepted])
         # The label is silent and the PR description gets rewritten by that repo's pipeline, so
-        # without a comment the submitter has no way to know a curator acted.
-        try:
-            self._github.create_issue_comment(
-                self._repo,
-                pr_number,
-                f"@{curator} approved this pathway in the WikiPathways curation portal.\n\n"
-                "The repository's publication workflow takes it from here: it assigns the WPID, "
-                "publishes the pathway, and closes this pull request without merging it. "
-                "That is expected — the GPML on this branch is not what gets published.",
-            )
-        except (GitHubError, httpx.HTTPError):
-            pass
+        # without a comment the submitter has no way to know a curator acted. After the response
+        # when it can be: the label is what hands the pull request over, this only reports it.
+        if self._defer is not None:
+            self._defer(self._post_approval_comment, pr_number, curator)
+        else:
+            self._post_approval_comment(pr_number, curator)
 
         with self._session_factory() as s:
             review = s.get(Review, pr_number)
@@ -1390,6 +1452,21 @@ class CurationService:
             s.commit()
             self._maybe_mirror(review)
             return review
+
+    def _post_approval_comment(self, pr_number: int, curator: str) -> None:
+        try:
+            self._github.create_issue_comment(
+                self._repo,
+                pr_number,
+                f"@{curator} approved this pathway in the WikiPathways curation portal.\n\n"
+                "The repository's publication workflow takes it from here: it assigns the WPID, "
+                "publishes the pathway, and closes this pull request without merging it. "
+                "That is expected — the GPML on this branch is not what gets published.",
+            )
+        except (GitHubError, httpx.HTTPError):
+            logger.warning(
+                "could not post the approval comment on PR #%s", pr_number, exc_info=True
+            )
 
     @as_actor("curator")
     def reject(self, pr_number: int, curator: str, note: str = "") -> Review:
@@ -1703,11 +1780,28 @@ class CurationService:
     #: dashboard load, forever.
     _STUCK_RECHECK_FACTOR = 20
 
-    def _due_cutoff(self, status: ReviewStatus):
+    #: While a fresh approval is being published, re-check it this often, for this long. The
+    #: publish workflow takes about a minute and the curator is watching the tracker; the normal
+    #: interval would show each stage up to half a minute late.
+    _PUBLISHING_RECHECK = timedelta(seconds=10)
+    _PUBLISHING_WINDOW = timedelta(minutes=15)
+
+    def _due_cutoff(self, status: ReviewStatus, approved_at=None):
         interval = self._reconcile_min_interval
         if status == ReviewStatus.PUBLISH_FAILED:
             interval = interval * self._STUCK_RECHECK_FACTOR
+        elif status == ReviewStatus.APPROVED:
+            approved = _aware(approved_at)
+            if approved is not None and utcnow() - approved < self._PUBLISHING_WINDOW:
+                interval = min(interval, self._PUBLISHING_RECHECK)
         return utcnow() - interval
+
+    def is_due(self, review: Review) -> bool:
+        """Would a re-check of this row run now? Reads only the row; no GitHub, no write."""
+        if review.status in self._TERMINAL:
+            return False
+        last = _aware(review.last_checked_at)
+        return last is None or last <= self._due_cutoff(review.status, review.approved_at)
 
     @default_actor("github")
     def handle_pr_closed(self, pr_number: int, *, merged: bool) -> Review | None:
@@ -1942,7 +2036,7 @@ class CurationService:
                 self._maybe_mirror(review)
             return review
 
-    def _pipeline_run_state(self, pr_number: int) -> dict | None:
+    def _pipeline_run_state(self, pr_number: int, head_sha: str | None = None) -> dict | None:
         """Last-seen state of the target repo's PR-processing workflow for this pull request.
 
         Its failure is worth surfacing on its own: when that repo cannot read a submitted GPML
@@ -1960,7 +2054,10 @@ class CurationService:
             return None
         try:
             run = self._github.latest_workflow_run_for_pr(
-                self._repo, pr_number, workflow_file=self._pipeline_workflow_file
+                self._repo,
+                pr_number,
+                workflow_file=self._pipeline_workflow_file,
+                head_sha=head_sha,
             )
         except (GitHubError, httpx.HTTPError):
             return None
@@ -1995,7 +2092,14 @@ class CurationService:
         if not runs:
             return None
         run = runs[0]
-        return {"status": run.status, "conclusion": run.conclusion, "url": run.html_url}
+        # created_at lets the publish tracker ignore a run that started before this approval:
+        # it certainly belongs to another pathway.
+        return {
+            "status": run.status,
+            "conclusion": run.conclusion,
+            "url": run.html_url,
+            "created_at": run.created_at,
+        }
 
     def _pipeline_testing_state(self, pr_number: int) -> dict | None:
         """The repository's own ``testing`` verdicts for this pull request, newest wins.
@@ -2043,7 +2147,7 @@ class CurationService:
         pipeline_run: dict | None = None
         if detail is not None:
             merged = dict(known)
-            run = self._pipeline_run_state(pr_number)
+            run = self._pipeline_run_state(pr_number, detail.head_sha or None)
             if run is not None:
                 merged.update(run)
             # Carried inside the same JSON column rather than in one of its own: these verdicts
@@ -2301,7 +2405,7 @@ class CurationService:
             if review is None or review.status in self._TERMINAL:
                 return False
             last = _aware(review.last_checked_at)
-            cutoff = self._due_cutoff(review.status)
+            cutoff = self._due_cutoff(review.status, review.approved_at)
         if last is not None and last > cutoff:
             return False
         if not self._claim(pr_number, cutoff):
@@ -2367,6 +2471,37 @@ class CurationService:
             s.commit()
             return result.rowcount or 0
 
+    def recently_published(self, within: timedelta) -> list[tuple[int, int, str, datetime]]:
+        """``(pr, wpid, kind, published_at)`` for publications younger than ``within`` whose
+        page has not been seen live yet. For the background loop's site probe."""
+        since = utcnow() - within
+        with self._session_factory() as s:
+            rows = s.execute(
+                select(Review).where(
+                    Review.status == ReviewStatus.PUBLISHED,
+                    Review.wpid.is_not(None),
+                    Review.published_at.is_not(None),
+                    Review.published_at >= since,
+                )
+            ).scalars()
+            return [
+                (r.pr_number, r.wpid, r.kind, _aware(r.published_at))
+                for r in rows
+                if not (r.pipeline_run or {}).get("live_at")
+            ]
+
+    def mark_live(self, pr_number: int, at: datetime | None = None) -> None:
+        """Record that the published page answered. Display only: no status, no mirror."""
+        with self._session_factory() as s:
+            review = s.get(Review, pr_number)
+            if review is None:
+                return
+            review.pipeline_run = {
+                **(review.pipeline_run or {}),
+                "live_at": (at or utcnow()).isoformat(),
+            }
+            s.commit()
+
     def live_pr_numbers(self) -> list[int]:
         """Every review that is not in a terminal state."""
         with self._session_factory() as s:
@@ -2390,7 +2525,7 @@ class CurationService:
         """
         with self._session_factory() as s:
             live = [
-                (r.pr_number, r.status, _aware(r.last_checked_at))
+                (r.pr_number, r.status, _aware(r.last_checked_at), r.approved_at)
                 for r in s.execute(
                     select(Review).where(Review.status.notin_(self._TERMINAL))
                 ).scalars()
@@ -2398,13 +2533,13 @@ class CurationService:
         # Every non-terminal review is already in hand here, which is exactly the set the render
         # sweep needs, so the backstop costs no query of its own. It runs before the GitHub guard
         # below on purpose: disk fills up on a deployment with no client wired just the same.
-        self._sweep_caches(pr_number for pr_number, _, _ in live)
+        self._sweep_caches(pr_number for pr_number, _, _, _ in live)
 
         if self._github is None:
             return 0
         changed = 0
-        for pr_number, status, last in live:
-            cutoff = self._due_cutoff(status)
+        for pr_number, status, last, approved_at in live:
+            cutoff = self._due_cutoff(status, approved_at)
             if last is not None and last > cutoff:
                 continue
             if self._claim(pr_number, cutoff) and self._reconcile_one(pr_number):
