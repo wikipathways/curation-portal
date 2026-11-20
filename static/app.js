@@ -577,6 +577,9 @@
           out.hidden = false;
           toast(noun + ' submitted.', 'success');
           disarm(updateForm, btn, 'Submitted', 'Submit update');
+          // Look the pathway up again: it now has an open update (this one), so the line under
+          // the WPID should say the next upload goes to it rather than "opens an update".
+          if (wpidInput && wpidInput.value) wpidInput.dispatchEvent(new Event('blur'));
         })
         .catch(function () {
           reset();

@@ -2,7 +2,9 @@
 
 A renderer upgrade changes nothing a curator sees until each review is drawn again, and a live
 review is otherwise only redrawn when its pull request gets a new commit. This walks the live
-reviews from the background tick and brings their cache up to ``RENDERER_VERSION``.
+reviews from the background tick and brings their cache up to ``RENDERER_VERSION`` (and the
+comparison up to ``DIFF_VERSION``). Published and merged reviews keep their render for a while,
+so they are brought up to date too, from the GPML on disk only.
 
 Two sources, cheapest first. A cache written since renderer 2 keeps the GPML it was drawn from,
 so it is redrawn from disk with no network at all. An older cache has only pictures, so its GPML
@@ -56,15 +58,46 @@ def _live_reviews(session_factory) -> list:
     return list(rows)
 
 
+def _kept_reviews(session_factory) -> list:
+    """Finished reviews whose render is kept (``CurationService._KEEPS_RENDER``), newest first.
+
+    Their card still shows the change summary, so a comparison that learned something new
+    (``DIFF_VERSION``) should reach them too. They are only ever redrawn from the GPML kept on
+    disk: a finished review is not worth a GitHub call.
+    """
+    from sqlalchemy import select
+
+    from app.models import Review
+    from app.review.service import CurationService
+
+    with session_factory() as s:
+        rows = s.scalars(
+            select(Review)
+            .where(Review.status.in_(CurationService._KEEPS_RENDER))
+            .order_by(Review.pr_number.desc())
+        ).all()
+        s.expunge_all()
+    return list(rows)
+
+
+#: How many finished reviews one tick redraws from disk. Each is a local render (milliseconds),
+#: but a production history can hold many, and they can wait for the next tick.
+_KEPT_BUDGET = 10
+
+
 def refresh_stale_renders(
     preview, session_factory, github, *, content_repo: str, default_branch: str, budget: int = 5
 ) -> int:
     """Re-render up to ``budget`` live reviews whose render is stale; return how many were.
 
     The count covers every review redrawn; ``budget`` limits only those that needed GitHub.
+    Finished reviews that keep their render are redrawn too, from disk only and at most
+    ``_KEPT_BUDGET`` a tick.
     """
     try:
         reviews = _live_reviews(session_factory)
+        live = {r.pr_number for r in reviews}
+        kept = [r for r in _kept_reviews(session_factory) if r.pr_number not in live]
     except Exception:  # noqa: BLE001 — a cosmetic pass must never take the tick down
         logger.warning("render backfill could not list reviews", exc_info=True)
         return 0
@@ -103,6 +136,25 @@ def refresh_stale_renders(
         except Exception:  # noqa: BLE001 — one bad review must not stop the others
             backoff[pr] = now + _RETRY_AFTER_SECONDS
             logger.warning("render backfill failed for PR #%s", pr, exc_info=True)
+    redrawn_kept = 0
+    for review in kept:
+        if redrawn_kept >= _KEPT_BUDGET:
+            break
+        pr = review.pr_number
+        try:
+            if backoff.get(pr, 0.0) > now or not preview.needs_rerender(pr):
+                continue
+            if preview.source_path(pr, "after") is None:
+                continue  # drawn before sources were kept; not worth fetching for a closed review
+            redrawn_kept += 1
+            if preview.rerender_from_source(pr) is not None and not preview.needs_rerender(pr):
+                done += 1
+                backoff.pop(pr, None)
+            else:
+                backoff[pr] = now + _RETRY_AFTER_SECONDS
+        except Exception:  # noqa: BLE001
+            backoff[pr] = now + _RETRY_AFTER_SECONDS
+            logger.warning("render backfill failed for finished PR #%s", pr, exc_info=True)
     return done
 
 

@@ -180,8 +180,10 @@ def test_the_retention_setting_reaches_the_service(tmp_path):
 # -- the backfill ----------------------------------------------------------------------------
 
 
-def test_the_backfill_does_not_redraw_a_kept_render(tmp_path):
-    """A kept render is a finished review's picture, not a live one to bring up to date."""
+def test_the_backfill_redraws_a_kept_render_from_disk_without_github(tmp_path):
+    """A kept render is still shown on the finished card, so it is brought up to date, but only
+    from the GPML kept beside it: a finished review is never worth a GitHub call (2026-11-20,
+    after sandbox #93 kept an outdated change summary)."""
     sf = _sf(tmp_path)
     previews = PreviewService(cache_dir=tmp_path / "cache")
     _add(sf, pr_number=4, wpid=5429, head_sha="h4", status=ReviewStatus.PUBLISHED,
@@ -192,12 +194,14 @@ def test_the_backfill_does_not_redraw_a_kept_render(tmp_path):
     (tmp_path / "cache" / "4" / "render.json").write_text(json.dumps(stamp))
     assert previews.needs_rerender(4)
 
+    fake = FakeGitHubClient()
+    fake.fail_on = {"get_file_content", "get_blob"}
     done = refresh_stale_renders(
-        previews, sf, FakeGitHubClient(), content_repo="o/r", default_branch="main"
+        previews, sf, fake, content_repo="o/r", default_branch="main"
     )
 
-    assert done == 0
-    assert previews.stamp(4)["renderer"] == 1
+    assert done == 1
+    assert not previews.needs_rerender(4)
 
 
 # -- the card --------------------------------------------------------------------------------

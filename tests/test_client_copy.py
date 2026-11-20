@@ -155,3 +155,14 @@ def test_refresh_words_every_age_as_the_server_does():
     )
     assert words == [_ago(now - a) for a in ages]
     assert words[3] == "yesterday" and words[-1] == "3 months ago"
+
+
+def test_a_submitted_update_looks_the_pathway_up_again():
+    # Sandbox #94 (2026-11-20): right after the update opened, the line under the WPID still said
+    # "Uploading opens an update" although the next upload would go to #94.
+    from pathlib import Path
+
+    js = (Path(__file__).resolve().parents[1] / "static" / "app.js").read_text()
+    success = js.index("disarm(updateForm, btn, 'Submitted', 'Submit update');")
+    after = js[success: success + 400]
+    assert "wpidInput.dispatchEvent(new Event('blur'))" in after

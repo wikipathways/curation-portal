@@ -349,6 +349,38 @@ def test_backfill_redraws_from_disk_then_from_github_within_budget(tmp_path):
     assert fake.comments == {} and fake.issue_comments == {}
 
 
+def test_backfill_brings_a_published_reviews_kept_render_up_to_date_from_disk_only(tmp_path):
+    # Sandbox #93 (2026-11-20): published before the comparison learned interactions and the
+    # description wording, its card kept "Description: rewritten (51 -> 52 words)".
+    sf = _session_factory(tmp_path)
+    repo = "o/content"
+    path = "pathways/WP5429/WP5429.gpml"
+    fake = FakeGitHubClient()
+    svc = _svc(tmp_path)
+    for pr, status in ((11, ReviewStatus.PUBLISHED), (12, ReviewStatus.MERGED),
+                       (13, ReviewStatus.REJECTED)):
+        _add(sf, pr_number=pr, wpid=5429, head_sha=f"h{pr}", pathway_paths=[path], status=status)
+        svc.render_local(pr, 5429, after_gpml=REV, before_gpml=NEW, head_sha=f"h{pr}")
+        st = svc.stamp(pr)
+        st["diff"] = 1
+        (tmp_path / "cache" / str(pr) / "render.json").write_text(json.dumps(st))
+    # Published, but drawn before sources were kept: not worth a fetch.
+    _add(sf, pr_number=14, wpid=5429, head_sha="h14", pathway_paths=[path],
+         status=ReviewStatus.PUBLISHED)
+    (tmp_path / "cache" / "14").mkdir(parents=True)
+    (tmp_path / "cache" / "14" / "after.svg").write_bytes(b"<svg/>")
+    # Fetchable, so if the backfill fetched for a finished review, #14 would come out current.
+    fake.commit_contents[(repo, "h14", path)] = REV.decode()
+
+    done = refresh_stale_renders(svc, sf, fake, content_repo=repo, default_branch="main")
+
+    assert done == 2
+    assert not svc.needs_rerender(11) and not svc.needs_rerender(12)
+    assert svc.needs_rerender(13)  # rejected: its render is not kept, so not redrawn
+    assert svc.needs_rerender(14)  # not fetched from GitHub
+    assert fake.comments == {} and fake.issue_comments == {}
+
+
 def test_backfill_backs_off_a_review_it_cannot_fetch_and_never_raises(tmp_path):
     sf = _session_factory(tmp_path)
     svc = _svc(tmp_path)
