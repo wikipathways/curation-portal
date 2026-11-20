@@ -852,12 +852,11 @@ def test_the_submitter_note_reaches_github_in_the_mirror_comment(tmp_path):
         assert note in c.get(f"/dashboard/{pr}").text
 
 
-def test_hotspot_overlay_is_one_tab_stop_and_announces_itself(tmp_path):
-    # Issue #19. The overlay puts a button on every data node, so a dense pathway inserted one
-    # tab stop per node between the diagram and the checklist. Two things keep it to one stop
-    # without deleting the keyboard path, and both are markup a later edit could quietly drop:
-    # the toolbar role (which is what the roving tabindex in app.js implements) and the polite
-    # live region that reads out each node's properties as the selection moves.
+def test_viewer_is_one_tab_stop_and_announces_itself(tmp_path):
+    # Issue #19, carried into the inline viewer. A button per data node would put one tab stop
+    # per node between the diagram and the checklist; viewer.js keeps a roving tabindex instead
+    # and the canvas's label says how to use it. The polite live region reads out each node's
+    # properties as the selection moves. All of it is markup a later edit could quietly drop.
     app, current = _authed_app(tmp_path, curators=["curator"])
     with TestClient(app) as c:
         current["user"] = "bob"
@@ -865,12 +864,15 @@ def test_hotspot_overlay_is_one_tab_stop_and_announces_itself(tmp_path):
         _login(c, "curator")
         page = c.get("/dashboard").text
 
-    assert 'class="zoom__hotspots" hidden role="toolbar"' in page
-    assert "Use the arrow keys to move between them" in page
+    assert "data-viewer " in page
+    assert "the arrow keys move between them and Enter shows a node" in page
     assert 'class="node-panel__body" aria-live="polite" aria-atomic="true"' in page
     # Not a dialog: focus stays on the node so the arrow keys keep working, which a dialog's
     # focus trap would break.
     assert 'class="node-panel" hidden role="dialog"' not in page
+    assert 'class="node-panel" hidden role="group"' in page
+    # The overlay of buttons laid over an <img> is gone for good.
+    assert "zoom__hotspots" not in page and "data-zoom" not in page
 
 
 def test_preview_missing_side_serves_placeholder(tmp_path):
