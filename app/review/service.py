@@ -2081,7 +2081,7 @@ class CurationService:
                 note = (
                     "The repository's publish workflow reported a failure"
                     + (f" in {step}" if step else "")
-                    + ". Re-run it, then record the assigned WPID here once it succeeds."
+                    + ". Re-run it, then record the WPID here once it succeeds."
                 )
             else:
                 note = (
@@ -2328,7 +2328,7 @@ class CurationService:
                 pr_number,
                 f"The accepted label has been on this pull request for {waited} minutes and "
                 f"{self._repo} has not published it. Re-run the repository's publish workflow, "
-                "then record the assigned WPID here.",
+                "then record the WPID here once it has published.",
             )
         return False
 

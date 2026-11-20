@@ -119,3 +119,46 @@ def test_approving_a_new_pathway_keeps_the_wpid_wording(tmp_path):
         comments = app.state._fake.issue_comments[(REPO, pr)]
         assert any("it assigns the WPID" in b for b in comments)
         assert "It assigns the WPID, publishes the pathway" in c.get(f"/dashboard/{pr}").text
+
+
+def test_a_failed_publication_of_an_update_does_not_ask_for_an_assigned_wpid():
+    update = presentation("publish_failed", kind="update", wpid=5430).blurb
+    assert "WP5430" in update and "assigned" not in update
+    assert presentation("publish_failed", kind="update", wpid=5430).label == "Not published"
+    # A new pathway's failure still asks for the WPID the repository assigned.
+    assert "record the assigned WPID" in presentation("publish_failed", kind="new").blurb
+
+
+def test_the_record_panel_on_an_update_offers_its_own_wpid(tmp_path):
+    from app.models import Review, ReviewStatus
+
+    fake = FakeGitHubClient(
+        default_branches={f"{REPO}#main": "basesha"},
+        existing_files={f"{REPO}#{PATH}": "blob-v1"},
+        existing_contents={f"{REPO}#{PATH}": REV_GPML.decode()},
+    )
+    app = _pipeline_app(tmp_path, curators=("marvinm2",), fake=fake)
+    with TestClient(app) as c:
+        app.state.drafts = None
+        r = c.post(
+            "/api/pathways/5636/update",
+            files={"file": ("rev.gpml", io.BytesIO(REV_GPML), "application/xml")},
+        )
+        pr = r.json()["pr_number"]
+        new_pr = _submit(c)["pr_number"]
+        with app.state.session_factory() as s:
+            for n in (pr, new_pr):
+                s.get(Review, n).status = ReviewStatus.PUBLISH_FAILED
+            s.commit()
+        _login(c, "marvinm2")
+
+        page = c.get(f"/dashboard/{pr}").text
+        assert "Record the published WPID" in page
+        assert "never published the edit to WP5636" in page
+        assert "record WP5636" in page and 'value="WP5636"' in page
+        assert "the identifier it" not in page and "assigned WPID" not in page
+
+        page = c.get(f"/dashboard/{new_pr}").text
+        assert "put the identifier it" in page and "Assigned WPID" in page
+        # No value filled in: a new pathway's WPID is whatever the repository assigned.
+        assert 'inputmode="numeric">' in page and 'value="WP' not in page

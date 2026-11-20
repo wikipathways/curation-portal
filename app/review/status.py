@@ -174,6 +174,10 @@ _KIND_BLURB = {
             "the pull request without merging it."
         ),
         ReviewStatus.PUBLISHED.value: "Published to {wpid} by the repository.",
+        ReviewStatus.PUBLISH_FAILED.value: (
+            "Approved, but the repository never published the edit to {wpid}. This one needs a "
+            "person: re-run its publish workflow, then record {wpid} here once it has published."
+        ),
     },
 }
 
