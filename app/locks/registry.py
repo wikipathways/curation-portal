@@ -105,6 +105,20 @@ class PathwayLockRegistry:
         with self._session_factory() as s:
             return s.get(PathwayLock, wpid)
 
+    def live(self, wpid: int) -> PathwayLock | None:
+        """The lock ``acquire`` would find on this pathway: none once it has expired.
+
+        Read-only, unlike ``is_locked``: a page asking who holds a pathway should not be the
+        thing that deletes the expired row.
+        """
+        lock = self.get(wpid)
+        if lock is None or lock.expires_at is None:
+            return lock
+        expires = lock.expires_at
+        if expires.tzinfo is None:
+            expires = expires.replace(tzinfo=UTC)
+        return lock if expires >= utcnow() else None
+
     def is_locked(self, wpid: int) -> bool:
         self.expire_stale()
         return self.get(wpid) is not None

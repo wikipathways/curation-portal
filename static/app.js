@@ -334,7 +334,12 @@
             return;
           }
           wpidInput.dataset.state = info.state;
-          if (info.state === 'on_main') {
+          if (info.state === 'on_main' && info.open_review) {
+            // An edit of this pathway is already under review: say what the upload will do,
+            // as the server will decide it, rather than promising a fresh update.
+            describeOpenReview(info);
+            setUpdateLabel('Submit update');
+          } else if (info.state === 'on_main') {
             wpidStatus.className = 'wpid-status wpid-status--ok';
             wpidStatus.textContent = 'Found ' + info.wpid + (info.name ? ': ' + info.name : '') + '. Uploading opens an update. ';
             // Edit the current version: an update made against an older copy is refused at
@@ -362,6 +367,43 @@
         })
         .catch(function () { wpidStatus.hidden = true; });
     });
+  }
+
+  // The line under the WPID field when an edit of the pathway is already under review
+  // (PathwayInfo.open_review). The wording follows what the update route will do: add a new
+  // version to the submitter's own pull request, or refuse.
+  function describeOpenReview(info) {
+    var o = info.open_review;
+    var what = o.kind === 'new' ? 'submission' : 'update';
+    var pr = o.pr_number ? '#' + o.pr_number : '';
+    var state = (o.status_label || '').toLowerCase();
+    var text;
+    if (o.outcome === 'revise') {
+      wpidStatus.className = 'wpid-status wpid-status--pending';
+      text = 'Your ' + what + ' ' + pr + ' is open' +
+        (o.status && o.status !== 'open' ? ' (' + state + ')' : '') +
+        '. Uploading adds a new version to it. ';
+    } else if (o.outcome === 'wait') {
+      wpidStatus.className = 'wpid-status wpid-status--err';
+      text = (o.yours ? 'Your ' : 'The ') + what + ' ' + pr + ' of ' + info.wpid +
+        (o.yours ? '' : ' by @' + o.submitter) +
+        ' is ' + state + '. An upload is refused until it is finished; ' +
+        'edit ' + info.wpid + ' again after that. ';
+    } else {
+      wpidStatus.className = 'wpid-status wpid-status--err';
+      var who = o.held_by || o.submitter;
+      text = info.wpid + ' is being edited by @' + who +
+        (pr ? ' (pull request ' + pr + (state ? ', ' + state : '') + ')' : '') +
+        '. An upload is refused until that edit is published or closed' +
+        (pr ? '; comment on its pull request to coordinate. ' : '; try again after that.');
+    }
+    wpidStatus.textContent = text;
+    if (o.pr_number) {
+      var link = document.createElement('a');
+      link.href = '/dashboard/' + o.pr_number;
+      link.textContent = 'Open the review';
+      wpidStatus.appendChild(link);
+    }
   }
 
   // /?wpid=WP554 opens the update form with that pathway filled in. A curator's change request

@@ -2065,9 +2065,14 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         request: Request,
         wpid: str,
         github: GitHubClient = Depends(get_github_client),
+        login: str = Depends(get_current_user),
     ) -> PathwayInfo:
         """Where does ``WP<wpid>`` live — on the base branch (an update), an open new-submission PR
-        (a revise), or nowhere? Backs the update form's presence check and revise routing."""
+        (a revise), or nowhere? Backs the update form's presence check and revise routing.
+
+        For a pathway on the base branch it also says whether an edit of it is already under
+        review (``open_review``), and what uploading would then do — signed in only, like the
+        rest of this route, since ``yours`` is relative to the session's login."""
         wpid = parse_wpid(wpid)
         wpid_str = f"WP{wpid}"
         path = layout_paths(wpid)["gpml"]
@@ -2092,6 +2097,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
                     f"https://raw.githubusercontent.com/{settings.content_repo}/"
                     f"{settings.default_branch}/pathways/{wpid_str}/{wpid_str}.gpml"
                 ),
+                open_review=_open_review_on(request, wpid, login),
             )
         # Not on main — is there still an open new-submission PR to revise? Ask our own registry
         # first. It answers in both publish modes and costs no GitHub call, where the branch scan
@@ -2111,6 +2117,42 @@ def build_app(settings: Settings | None = None) -> FastAPI:
                 exists=False, state="pending_new", wpid=wpid_str, pr_number=pr.number
             )
         return PathwayInfo(exists=False, state="absent", wpid=wpid_str)
+
+    def _open_review_on(request: Request, wpid: int, login: str) -> OpenReview | None:
+        """The edit of this pathway already under review, and what an update upload would do.
+
+        Mirrors the update route rather than restating it: ``_update_precheck`` refuses while the
+        live review is past the point of taking a commit, and ``PathwayLockRegistry.acquire``
+        refuses while someone else holds the pathway; otherwise the submitter's own pull request
+        takes the upload as a new version (``own_pr``). Someone else's actionable review is
+        refused too, by the lock or, once that has expired, by the open-pull-request scan, which
+        finds their pull request. Reads the database only; no GitHub call.
+        """
+        review = _curation(request).find_open_review_for_pathway(wpid)
+        lock = request.app.state.locks.live(wpid)
+        if review is None and (lock is None or lock.held_by == login):
+            return None
+        if review is not None and review.status.value not in ACTIONABLE:
+            outcome = "wait"
+        elif lock is not None and lock.held_by != login:
+            outcome = "locked"
+        elif review is not None and review.submitter == login:
+            outcome = "revise"
+        else:
+            outcome = "locked"
+        return OpenReview(
+            pr_number=review.pr_number if review is not None else lock.pr_number,
+            kind=review.kind if review is not None else None,
+            status=review.status.value if review is not None else None,
+            status_label=(
+                presentation(review.status.value).label if review is not None else None
+            ),
+            yours=review is not None and review.submitter == login,
+            submitter=review.submitter if review is not None else lock.held_by,
+            # Who the refusal would name: the lock's holder when the lock is what refuses.
+            held_by=lock.held_by if outcome == "locked" and lock is not None else None,
+            outcome=outcome,
+        )
 
     # -- Curation dashboard (MVP-4) --------------------------------------------------------
 
@@ -2770,6 +2812,26 @@ class SubmitResponse(BaseModel):
     path: str
 
 
+class OpenReview(BaseModel):
+    """An edit of a pathway already under review, as the update form needs to describe it."""
+
+    #: The pull request. None only when a check-out lock is held with none recorded yet.
+    pr_number: int | None = None
+    #: "new" | "update"; None when only the check-out lock is known.
+    kind: str | None = None
+    status: str | None = None
+    status_label: str | None = None
+    #: The signed-in user submitted it.
+    yours: bool = False
+    #: Whose edit it is: the review's submitter, or the lock's holder when there is no review.
+    submitter: str | None = None
+    #: Someone else holds the pathway's check-out lock, which is what refuses the upload.
+    held_by: str | None = None
+    #: What an update upload would do: "revise" (adds a new version to this pull request),
+    #: "wait" (refused until this review finishes) or "locked" (refused: someone else's edit).
+    outcome: str
+
+
 class PathwayInfo(BaseModel):
     exists: bool  # present on the base branch (an update target)
     wpid: str
@@ -2778,6 +2840,8 @@ class PathwayInfo(BaseModel):
     pr_number: int | None = None  # the open new-submission PR, when state == pending_new
     #: Where to download the current GPML, when state == on_main.
     gpml_url: str | None = None
+    #: An edit of this pathway already under review, when state == on_main.
+    open_review: OpenReview | None = None
 
 
 class ReviewSummary(BaseModel):
