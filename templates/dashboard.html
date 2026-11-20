@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block title %}{% if mine %}Your submissions{% elif assigned %}Assigned to you{% else %}Curation queue{% endif %} &middot; WikiPathways Curation Portal{% endblock %}
 {% from "_review_card.html" import review_card with context %}
+{% block tour_page %}queue{% endblock %}
 
 {% block content %}
 <h1>{% if mine %}Your submissions{% elif assigned %}Assigned to you{% else %}Curation queue{% endif %}</h1>
@@ -13,7 +14,7 @@
 {% if not login %}
   <p><a href="/auth/login">Log in</a> to review pathway submissions.</p>
 {% else %}
-  <nav class="queue-filter" aria-label="Filter by status">
+  <nav class="queue-filter" aria-label="Filter by status" data-tour="queue-filter">
     {% for tab in tabs %}
     <a href="/dashboard?status={{ tab.status }}"{% if not mine and not assigned and status == tab.status %} aria-current="page"{% endif %}>{{ tab.label }}{% if tab.count %} <span class="queue-filter__count">{{ tab.count }}</span>{% endif %}</a>
     {% endfor %}

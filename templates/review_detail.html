@@ -8,6 +8,7 @@
    queue page's empty state on every review page, against a context that has no queue in it. #}
 {% from "_review_card.html" import review_card with context %}
 {% block title %}{{ review.wpid_str }} &middot; PR #{{ review.pr_number }} &middot; WikiPathways Curation Portal{% endblock %}
+{% block tour_page %}review{% endblock %}
 
 {% block content %}
 <a class="breadcrumb" href="/dashboard">
@@ -30,7 +31,7 @@
 
   {# The thread is where contributors answer and the repository's workflows report. Loaded after
      the page so a slow GitHub never holds up the review itself; rendered as text, never HTML. #}
-  <section class="conversation" data-pr="{{ review.pr_number }}" aria-labelledby="conversation-title">
+  <section class="conversation" data-pr="{{ review.pr_number }}" aria-labelledby="conversation-title" data-tour="conversation">
     <h2 class="conversation__title" id="conversation-title">Conversation on the pull request</h2>
     <p class="conversation__status" role="status">Loading the conversation from GitHub&hellip;</p>
     <ol class="conversation__list"></ol>
