@@ -663,6 +663,12 @@
     this.animateTo([cx - w / 2, cy - h / 2, w, h], opts);
   };
 
+  Viewer.prototype.shows = function (bbox) {
+    var b = this.vb;
+    return !!b && bbox[0] >= b[0] && bbox[1] >= b[1] && bbox[0] + bbox[2] <= b[0] + b[2]
+      && bbox[1] + bbox[3] <= b[1] + b[3];
+  };
+
   // ---------- selection ----------
   Viewer.prototype.clearHighlight = function () {
     this.hl.forEach(function (e) { e.classList.remove('is-hl', 'is-selected'); });
@@ -977,17 +983,26 @@
     if (isHttps(l.href)) labelRow(dl, 'Link', { href: l.href, text: l.href });
   };
 
-  Viewer.prototype.closePanel = function () {
+  // opts.restoreFocus false: close without touching focus (the other side of a pair let go of
+  // its selection; the reader is over there, on the node they just picked).
+  Viewer.prototype.closePanel = function (opts) {
     if (this.panel.hidden) return false;
+    // Focus goes back only if it was in this viewer, or on nothing because it sat in the panel
+    // that is about to go. Anywhere else, the reader has moved on and taking it would be theft.
+    var a = document.activeElement;
+    var restore = !(opts && opts.restoreFocus === false)
+      && (!a || a === document.body || this.root.contains(a));
     this.panel.hidden = true;
-    // Hand focus back to where the reader was, not to <body> at the top of the page. If that was
-    // a node, it is the node the arrows have since moved to, not the one the panel opened on.
-    var node = this.order[this.current] && this.order[this.current].el;
-    var back = this.lastFocus;
-    if (!back || !this.root.contains(back) || (this.svg && this.svg.contains(back))) back = node || this.canvas;
-    this.restoring = true;
-    try { back.focus({ preventScroll: true }); } catch (e) { /* detached */ }
-    this.restoring = false;
+    if (restore) {
+      // Hand focus back to where the reader was, not to <body> at the top of the page. If that
+      // was a node, it is the node the arrows have since moved to, not the one the panel opened on.
+      var node = this.order[this.current] && this.order[this.current].el;
+      var back = this.lastFocus;
+      if (!back || !this.root.contains(back) || (this.svg && this.svg.contains(back))) back = node || this.canvas;
+      this.restoring = true;
+      try { back.focus({ preventScroll: true }); } catch (e) { /* detached */ }
+      this.restoring = false;
+    }
     this.lastFocus = null;
     return true;
   };
@@ -1161,6 +1176,36 @@
     this.root.querySelectorAll('[data-v="prev-change"], [data-v="next-change"]').forEach(function (b) {
       b.disabled = !!(this.svg && !list.length);
     }, this);
+    // A disabled button cannot take focus, so it cannot be the toolbar's one tab stop either.
+    if (!this.toolbarButtons().some(function (b) { return b.tabIndex === 0; })) {
+      var first = this.toolbarButtons()[0];
+      if (first) this.setToolbarStop(first, false);
+    }
+  };
+
+  // ---------- toolbar ----------
+  // A roving tabindex, as over the nodes: one stop for the toolbar, the arrows for the rest.
+  Viewer.prototype.toolbarButtons = function () {
+    return Array.prototype.filter.call(this.root.querySelectorAll('.viewer__toolbar button'), function (b) {
+      return !b.disabled && !b.hidden;
+    });
+  };
+
+  Viewer.prototype.setToolbarStop = function (btn, focus) {
+    this.root.querySelectorAll('.viewer__toolbar button').forEach(function (b) {
+      b.setAttribute('tabindex', b === btn ? '0' : '-1');
+    });
+    if (focus) btn.focus();
+  };
+
+  Viewer.prototype.roveToolbar = function (from, key) {
+    var list = this.toolbarButtons();
+    var n = list.length;
+    if (!n) return;
+    var i = list.indexOf(from);
+    var j = key === 'Home' ? 0 : key === 'End' ? n - 1
+      : ((i + (key === 'ArrowRight' ? 1 : -1)) % n + n) % n;
+    this.setToolbarStop(list[j], true);
   };
 
   Viewer.prototype.stepChange = function (dir) {
@@ -1172,6 +1217,13 @@
     var self = this;
     var root = this.root;
     var canvas = this.canvas;
+    // Every listener is kept so destroy() can take it off again. unmountAll() then mountAll() on
+    // the same element would otherwise leave the old handlers running next to the new ones.
+    var listeners = this.listeners = [];
+    function on(target, type, fn, opts) {
+      target.addEventListener(type, fn, opts);
+      listeners.push([target, type, fn, opts]);
+    }
 
     // Lite mode (the queue): nothing is fetched beyond the <img> until somebody reaches for the
     // diagram. A queue of forty cards would otherwise fire some eighty requests on load for
@@ -1182,11 +1234,11 @@
         ['pointerenter', 'focusin', 'click', 'wheel'].forEach(function (t) { root.removeEventListener(t, activate); });
         self.activate();
       };
-      ['pointerenter', 'focusin', 'click'].forEach(function (t) { root.addEventListener(t, activate); });
-      root.addEventListener('wheel', activate, { passive: true });
+      ['pointerenter', 'focusin', 'click'].forEach(function (t) { on(root, t, activate); });
+      on(root, 'wheel', activate, { passive: true });
     }
 
-    root.addEventListener('click', function (e) {
+    on(root, 'click', function (e) {
       var btn = e.target.closest('[data-v]');
       if (btn && root.contains(btn) && btn.tagName === 'BUTTON') { self.onButton(btn.getAttribute('data-v'), btn); return; }
       var link = e.target.closest('[data-select]');
@@ -1203,10 +1255,10 @@
     });
 
     if (this.search) {
-      this.search.addEventListener('input', function () {
+      on(this.search, 'input', function () {
         self.activate().then(function () { self.runSearch(self.search.value); });
       });
-      this.search.addEventListener('keydown', function (e) {
+      on(this.search, 'keydown', function (e) {
         if (e.key === 'Enter') { e.preventDefault(); self.nextMatch(e.shiftKey); }
         else if (e.key === 'Escape') {
           e.preventDefault();
@@ -1218,8 +1270,15 @@
       });
     }
 
-    canvas.addEventListener('wheel', function (e) {
-      if (!self.svg) return;
+    on(canvas, 'wheel', function (e) {
+      if (!self.svg) {
+        // Ctrl+wheel and a trackpad pinch are how a lite viewer is woken, and the drawing takes a
+        // moment to arrive. Left alone, those first events zoom the whole page instead. Dropped,
+        // not queued: the next one zooms the diagram. A viewer that gave up on its drawing hands
+        // the gesture back to the browser.
+        if ((e.ctrlKey || e.metaKey) && !root.classList.contains('viewer--static')) e.preventDefault();
+        return;
+      }
       // A queue card is mostly diagram, so swallowing every wheel event would trap the page
       // scroll. Ctrl/Meta+wheel (also what a trackpad pinch sends) zooms from any scale; a plain
       // wheel only once zoomed in and navigating inside the diagram.
@@ -1229,7 +1288,7 @@
     }, { passive: false });
 
     var drag = null;
-    canvas.addEventListener('pointerdown', function (e) {
+    on(canvas, 'pointerdown', function (e) {
       if (!self.svg || (e.pointerType === 'mouse' && e.button !== 0)) return;
       self.pointers[e.pointerId] = { x: e.clientX, y: e.clientY };
       var ids = Object.keys(self.pointers);
@@ -1241,7 +1300,7 @@
         try { canvas.setPointerCapture(e.pointerId); } catch (err) { /* gone */ }
       }
     });
-    canvas.addEventListener('pointermove', function (e) {
+    on(canvas, 'pointermove', function (e) {
       if (!self.svg) return;
       if (!self.pointers[e.pointerId]) { self.hover(e); return; }
       var last = self.pointers[e.pointerId];
@@ -1274,14 +1333,20 @@
       if (e.type === 'pointerup' && drag && !drag.moved && drag.id === e.pointerId) self.clickAt(drag.target);
       if (!Object.keys(self.pointers).length) drag = null;
     }
-    canvas.addEventListener('pointerup', end);
-    canvas.addEventListener('pointercancel', end);
-    canvas.addEventListener('pointerleave', function () { self.hideTooltip(); });
+    on(canvas, 'pointerup', end);
+    on(canvas, 'pointercancel', end);
+    on(canvas, 'pointerleave', function () { self.hideTooltip(); });
 
-    root.addEventListener('keydown', function (e) { self.onKey(e); });
+    on(root, 'keydown', function (e) { self.onKey(e); });
+
+    // Whichever toolbar button was used last, by mouse or keyboard, is where Tab comes back to.
+    on(root, 'focusin', function (e) {
+      var b = e.target;
+      if (b.tagName === 'BUTTON' && b.closest('.viewer__toolbar') && b.tabIndex !== 0) self.setToolbarStop(b, false);
+    });
 
     // Tabbing onto a node makes it the roving stop, wherever it was in the order.
-    canvas.addEventListener('focusin', function (e) {
+    on(canvas, 'focusin', function (e) {
       var t = e.target.closest && e.target.closest('[data-id]');
       if (!t || !self.byId) return;
       var hit = self.byId[t.getAttribute('data-id')];
@@ -1379,6 +1444,12 @@
     var onNode = nodeEl && this.byId[nodeEl.getAttribute('data-id')]
       && this.byId[nodeEl.getAttribute('data-id')].kind === 'node';
     var onButton = t.closest('button, a');
+    if (onButton && onButton.tagName === 'BUTTON' && onButton.closest('.viewer__toolbar')
+      && (key === 'ArrowLeft' || key === 'ArrowRight' || key === 'Home' || key === 'End')) {
+      this.roveToolbar(onButton, key);
+      e.preventDefault();
+      return;
+    }
     var handled = true;
     if (/^Arrow/.test(key)) {
       if (onNode) {
@@ -1418,8 +1489,19 @@
     this.destroyed = true;
     cancelAnimationFrame(this.anim);
     if (this.abort) { try { this.abort.abort(); } catch (e) { /* already done */ } }
+    (this.listeners || []).forEach(function (l) { l[0].removeEventListener(l[1], l[2], l[3]); });
+    this.listeners = [];
     if (this.svg && this.svg.parentNode) this.svg.parentNode.removeChild(this.svg);
+    // Anything still holding this instance (a pending promise, a frame) finds nothing to draw on.
+    this.svg = null;
     if (this.img) this.img.hidden = false;
+    // Back to the markup the server sent, so a later mountAll() starts from the same place.
+    this.panel.hidden = true;
+    this.panelBody.textContent = '';
+    this.legend.hidden = true;
+    this.legend.textContent = '';
+    this.root.querySelectorAll('[data-v="legend"]').forEach(function (b) { b.setAttribute('aria-expanded', 'false'); });
+    this.hideTooltip();
     this.root.classList.remove('viewer--ready', 'viewer--loading', 'viewer--focus', 'viewer--zoomed');
     if (this.pair) this.pair.remove(this);
     delete this.root.__wpViewer;
@@ -1458,25 +1540,34 @@
     }
   };
 
-  // The counterpart is centred only when the source is not already moving the shared view: two
-  // animations writing one linked viewBox would fight frame by frame.
+  // The two sides share one viewBox, so the counterpart is never centred on its own: that would
+  // leave the sides showing different parts of the pathway. When the source is centring, the
+  // shared view already follows it. When it is not (a click, a keypress) and the counterpart sits
+  // outside the view, as a node that moved can, the counterpart's side pans and the source
+  // follows. A side that only lets go of its selection never takes focus: the reader is on the
+  // other side, on the node they just picked.
   Pair.prototype.mirrorSelection = function (src, hit, srcCentring) {
     if (this.syncing) return;
     this.syncing = true;
+    var pan = null;
     try {
       this.each(src, function (v) {
         if (!v.svg) return;
         var other = hit.kind === 'node' ? src.counterpart[hit.item.id] : null;
         if (other && v.byId[other]) {
-          v.select(other, { fromPair: true, centre: !srcCentring, ifNeeded: true, sync: false });
+          v.select(other, { fromPair: true });
+          var box = v.boxOf(v.byId[other]);
+          if (!srcCentring && !pan && box && !v.shows(box)) pan = { viewer: v, box: box };
         } else {
           v.clearHighlight();
-          v.closePanel();
+          v.closePanel({ restoreFocus: false });
         }
       });
     } finally {
       this.syncing = false;
     }
+    // Outside the guard, so follow() can drag the source along.
+    if (pan) pan.viewer.reveal(pan.box, {});
   };
 
   // The change list in reading order across both sides: what changed on the "after" side, and

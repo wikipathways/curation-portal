@@ -816,14 +816,32 @@ a.pager__step:hover { background: var(--surface); border-color: var(--moss); }
 /* ---------- before/after diff (issue #24) ---------- */
 /* The colours are the summary. Kept as variables so the legend swatch, the diagram outline and
    the panel tag cannot drift into three different greens. Okabe-Ito hues, picked to stay apart
-   under the common colour-vision deficiencies; the outline style (solid, dotted, double, dashed)
-   and the badge on each changed node carry the same distinction for anyone they still fail. */
+   under the common colour-vision deficiencies; the outline's dash pattern (added solid, removed
+   dotted, re-annotated dash-dot, relabelled dashed, moved fine dashes) and the badge on each
+   changed node carry the same distinction for anyone they still fail.
+   The hues are for strokes and swatches. Small text needs 4.5:1, which three of them miss on
+   white, so text uses the --diff-*-ink shade of the same hue (all 5.1:1 or better on --surface
+   and --surface-2, in both themes). */
 :root {
   --diff-added: #009e73;
   --diff-removed: #d55e00;
   --diff-reannotated: #0072b2;
   --diff-relabelled: #cc79a7;
   --diff-moved: #6b7785;
+  --diff-added-ink: #007a5a;
+  --diff-removed-ink: #b14d00;
+  --diff-reannotated-ink: #0072b2;
+  --diff-relabelled-ink: #a24b7d;
+  --diff-moved-ink: #5f6b78;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --diff-added-ink: #2fc595;
+    --diff-removed-ink: #f08a4b;
+    --diff-reannotated-ink: #56b4e9;
+    --diff-relabelled-ink: #e0a4c6;
+    --diff-moved-ink: #a6b0be;
+  }
 }
 
 .diff-summary {
@@ -847,17 +865,39 @@ a.pager__step:hover { background: var(--surface); border-color: var(--moss); }
   color: var(--ink-muted);
 }
 .diff-legend__item { display: flex; align-items: center; gap: 0.3rem; }
+/* The swatch is the diagram's outline in miniature: a small SVG rect with the same stroke width
+   and dash pattern as .viewer__mark--* in viewer.css (both in screen pixels; the marks are
+   non-scaling), used as a mask over the hue, so the colour still comes from the token and follows
+   the theme. CSS borders have no dash-dot, and a swatch that differs from the drawing would undo
+   the point of the patterns. tests/test_viewer_markup.py keeps the two in step. */
 .diff-legend__swatch {
-  width: 0.75rem;
-  height: 0.75rem;
-  border-radius: 2px;
-  border: 2px solid currentColor;
+  flex: none;
+  width: 1.25rem;
+  height: 0.875rem;
+  background: currentColor;
+  -webkit-mask: var(--swatch) center / 100% 100% no-repeat;
+  mask: var(--swatch) center / 100% 100% no-repeat;
 }
-.diff-legend__item--added .diff-legend__swatch { color: var(--diff-added); background: color-mix(in srgb, var(--diff-added) 20%, transparent); }
-.diff-legend__item--removed .diff-legend__swatch { color: var(--diff-removed); border-style: dotted; background: color-mix(in srgb, var(--diff-removed) 20%, transparent); }
-.diff-legend__item--reannotated .diff-legend__swatch { color: var(--diff-reannotated); border-style: double; border-width: 3px; background: color-mix(in srgb, var(--diff-reannotated) 24%, transparent); }
-.diff-legend__item--relabelled .diff-legend__swatch { color: var(--diff-relabelled); background: color-mix(in srgb, var(--diff-relabelled) 20%, transparent); }
-.diff-legend__item--moved .diff-legend__swatch { color: var(--diff-moved); border-style: dashed; background: color-mix(in srgb, var(--diff-moved) 14%, transparent); }
+.diff-legend__item--added .diff-legend__swatch {
+  color: var(--diff-added);
+  --swatch: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 14'%3E%3Crect x='2' y='2' width='16' height='10' rx='1.5' fill='%23000' fill-opacity='.2' stroke='%23000' stroke-width='2.5'/%3E%3C/svg%3E");
+}
+.diff-legend__item--removed .diff-legend__swatch {
+  color: var(--diff-removed);
+  --swatch: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 14'%3E%3Crect x='2' y='2' width='16' height='10' rx='1.5' fill='%23000' fill-opacity='.2' stroke='%23000' stroke-width='3' stroke-linecap='round' stroke-dasharray='1 4'/%3E%3C/svg%3E");
+}
+.diff-legend__item--reannotated .diff-legend__swatch {
+  color: var(--diff-reannotated);
+  --swatch: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 14'%3E%3Crect x='2' y='2' width='16' height='10' rx='1.5' fill='%23000' fill-opacity='.2' stroke='%23000' stroke-width='4' stroke-dasharray='10 3 2 3'/%3E%3C/svg%3E");
+}
+.diff-legend__item--relabelled .diff-legend__swatch {
+  color: var(--diff-relabelled);
+  --swatch: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 14'%3E%3Crect x='2' y='2' width='16' height='10' rx='1.5' fill='%23000' fill-opacity='.2' stroke='%23000' stroke-width='2.5' stroke-dasharray='6 3'/%3E%3C/svg%3E");
+}
+.diff-legend__item--moved .diff-legend__swatch {
+  color: var(--diff-moved);
+  --swatch: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 14'%3E%3Crect x='2' y='2' width='16' height='10' rx='1.5' fill='none' stroke='%23000' stroke-width='1.5' stroke-dasharray='3 3'/%3E%3C/svg%3E");
+}
 .diff-summary__toggle {
   display: flex;
   align-items: center;
@@ -876,11 +916,11 @@ a.pager__step:hover { background: var(--surface); border-color: var(--moss); }
   font-weight: 600;
   text-transform: lowercase;
 }
-.node-panel__change--added { color: var(--diff-added); }
-.node-panel__change--removed { color: var(--diff-removed); }
-.node-panel__change--reannotated { color: var(--diff-reannotated); }
-.node-panel__change--relabelled { color: var(--diff-relabelled); }
-.node-panel__change--moved { color: var(--diff-moved); }
+.node-panel__change--added { color: var(--diff-added-ink); }
+.node-panel__change--removed { color: var(--diff-removed-ink); }
+.node-panel__change--reannotated { color: var(--diff-reannotated-ink); }
+.node-panel__change--relabelled { color: var(--diff-relabelled-ink); }
+.node-panel__change--moved { color: var(--diff-moved-ink); }
 .node-panel__props s { color: var(--ink-muted); }
 
 .node-panel {

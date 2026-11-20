@@ -343,3 +343,94 @@ def test_viewer_markup_carries_no_inline_script_or_handlers():
     html = _render_pair(r)
     assert "<script" not in html
     assert not re.search(r"\son[a-z]+\s*=", html)
+
+
+def test_each_viewer_is_two_tab_stops_before_its_drawing_loads():
+    # Issue #19 again, for the controls: the toolbar is a role=toolbar with a roving tabindex
+    # (viewer.js moves it with the arrows), so a lite queue viewer is the toolbar plus the canvas.
+    # Once the drawing loads, its first node is one more stop.
+    r = {
+        "pr_number": 11,
+        "kind": "update",
+        "pipeline": {"render_svg_url": "/previews/11/pipeline.svg"},
+        "preview": _preview(11, diff_url="/previews/11/diff.json"),
+    }
+    for mode, extra in (("lite", 0), ("full", 1)):
+        html = _render_pair(r, mode)
+        chunks = html.split('<div class="viewer viewer--')[1:]
+        assert len(chunks) == 2
+        for chunk in chunks:
+            toolbar = re.search(r'<div class="viewer__toolbar"([^>]*)>(.*?)\n  </div>', chunk, re.S)
+            assert toolbar and 'role="toolbar"' in toolbar.group(1)
+            buttons = re.findall(r"<button[^>]*>", toolbar.group(2))
+            assert len(buttons) >= 7
+            assert sum('tabindex="0"' in b for b in buttons) == 1
+            assert all('tabindex="-1"' in b for b in buttons if 'tabindex="0"' not in b)
+            # The toolbar's one stop, the canvas, and in full mode the search box.
+            assert chunk.count('tabindex="0"') == 2
+            assert chunk.count('class="viewer__search-input"') == extra
+
+
+# -- the diff colours (app.css / viewer.css) ----------------------------------------------------
+
+APP_CSS = (ROOT / "static" / "app.css").read_text(encoding="utf-8")
+VIEWER_CSS = (ROOT / "static" / "viewer.css").read_text(encoding="utf-8")
+KINDS = ("added", "removed", "reannotated", "relabelled", "moved")
+
+
+def _contrast(a: str, b: str) -> float:
+    def lum(h: str) -> float:
+        rgb = [int(h.lstrip("#")[i : i + 2], 16) / 255 for i in (0, 2, 4)]
+        lin = [c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4 for c in rgb]
+        return 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2]
+
+    hi, lo = sorted((lum(a), lum(b)), reverse=True)
+    return (hi + 0.05) / (lo + 0.05)
+
+
+def _tokens(css: str) -> dict[str, str]:
+    return dict(re.findall(r"(--[a-z0-9-]+):\s*(#[0-9a-fA-F]{6})\s*;", css))
+
+
+def test_change_tags_are_readable_text():
+    # The tag in the properties panel is 0.7rem text, so it needs 4.5:1 in both themes. The
+    # Okabe-Ito hues themselves are for strokes and swatches; text uses the -ink shade.
+    dark_root = r"@media \(prefers-color-scheme: dark\)\s*\{\s*:root\s*\{(.*?)\}"
+    light = _tokens(re.sub(dark_root, "", APP_CSS, flags=re.S))
+    dark = dict(light)
+    for block in re.findall(dark_root, APP_CSS, re.S):
+        dark.update(_tokens(block))
+    assert dark["--surface"] != light["--surface"]
+    for kind in KINDS:
+        rule = re.search(rf"\.node-panel__change--{kind}\s*\{{([^}}]*)\}}", APP_CSS)
+        assert rule and f"var(--diff-{kind}-ink)" in rule.group(1), kind
+        for theme in (light, dark):
+            ink = theme[f"--diff-{kind}-ink"]
+            for surface in ("--surface", "--surface-2"):
+                assert _contrast(ink, theme[surface]) >= 4.5, (kind, ink, theme[surface])
+
+
+def _stroke(decls: str) -> tuple[str | None, str | None]:
+    width = re.search(r"stroke-width:\s*([\d.]+)px", decls)
+    dash = re.search(r"stroke-dasharray:\s*([\d. ]+);", decls)
+    return (width.group(1) if width else None, dash.group(1).strip() if dash else None)
+
+
+def test_legend_swatches_draw_the_same_outline_as_the_diagram():
+    # The dash pattern is what tells the kinds apart without colour, so the legend has to show
+    # the pattern the diagram draws.
+    base = re.search(r"\.viewer__mark\s*\{([^}]*)\}", VIEWER_CSS).group(1)
+    base_width, _ = _stroke(base)
+    for kind in KINDS:
+        mark = re.search(rf"\.viewer__mark--{kind}\s*\{{([^}}]*)\}}", VIEWER_CSS).group(1)
+        width, dash = _stroke(mark)
+        swatch = re.search(
+            rf"\.diff-legend__item--{kind} \.diff-legend__swatch\s*\{{([^}}]*)\}}", APP_CSS
+        ).group(1)
+        assert f"var(--diff-{kind})" in swatch
+        svg = re.search(r'url\("data:image/svg\+xml,([^"]*)"\)', swatch).group(1)
+        s_width = re.search(r"stroke-width='([\d.]+)'", svg).group(1)
+        s_dash = re.search(r"stroke-dasharray='([\d. ]+)'", svg)
+        assert float(s_width) == float(width or base_width), kind
+        assert (s_dash.group(1) if s_dash else None) == dash, kind
+    assert "solid, dotted, double, dashed" not in APP_CSS

@@ -29,11 +29,15 @@
      data-svg-url="{{ svg_url or '' }}" data-graph-url="{{ graph_url or '' }}"
      data-diff-url="{{ diff_url or '' }}" data-render-svg-url="{{ render_svg_url or '' }}"
      data-mode="{{ mode }}" data-tour="viewer">
-  <div class="viewer__toolbar" role="group" aria-label="Diagram controls" data-tour="viewer-toolbar">
-    <button type="button" class="viewer__btn" data-v="zoom-out" aria-label="Zoom out" title="Zoom out (−)">&minus;</button>
-    <button type="button" class="viewer__btn" data-v="fit" title="Fit the whole diagram (0)">Fit</button>
-    <button type="button" class="viewer__btn" data-v="zoom-in" aria-label="Zoom in" title="Zoom in (+)">+</button>
-    <button type="button" class="viewer__btn" data-v="fullscreen" aria-pressed="false" title="Full screen (F)">Full screen</button>
+  {# One tab stop for the whole toolbar (issue #19): the left and right arrows move between its
+     buttons (viewer.js keeps the roving tabindex). An update card has two of these, and seven
+     stops on each would put fourteen between the reader and the checklist. The search box is
+     a text field, where the arrows move the caret, so it keeps a stop of its own. #}
+  <div class="viewer__toolbar" role="toolbar" aria-label="Diagram controls" data-tour="viewer-toolbar">
+    <button type="button" class="viewer__btn" data-v="zoom-out" aria-label="Zoom out" title="Zoom out (−)" tabindex="0">&minus;</button>
+    <button type="button" class="viewer__btn" data-v="fit" title="Fit the whole diagram (0)" tabindex="-1">Fit</button>
+    <button type="button" class="viewer__btn" data-v="zoom-in" aria-label="Zoom in" title="Zoom in (+)" tabindex="-1">+</button>
+    <button type="button" class="viewer__btn" data-v="fullscreen" aria-pressed="false" title="Full screen (F)" tabindex="-1">Full screen</button>
     {% if full %}
     {# Search reads labels and identifiers; "Ensembl:ENSG…" style finds an annotation. #}
     <span class="viewer__search">
@@ -41,11 +45,11 @@
              aria-label="Find a node by label or identifier" aria-describedby="{{ vid }}-status" autocomplete="off">
     </span>
     {% endif %}
-    <button type="button" class="viewer__btn" data-v="legend" aria-expanded="false" aria-controls="{{ vid }}-legend">Legend</button>
+    <button type="button" class="viewer__btn" data-v="legend" aria-expanded="false" aria-controls="{{ vid }}-legend" tabindex="-1">Legend</button>
     {% if diff_url %}
     <span class="viewer__changes" role="group" aria-label="Step through the changes">
-      <button type="button" class="viewer__btn" data-v="prev-change" aria-label="Previous change" title="Previous change (P)">&lsaquo; Change</button>
-      <button type="button" class="viewer__btn" data-v="next-change" aria-label="Next change" title="Next change (N)">Change &rsaquo;</button>
+      <button type="button" class="viewer__btn" data-v="prev-change" aria-label="Previous change" title="Previous change (P)" tabindex="-1">&lsaquo; Change</button>
+      <button type="button" class="viewer__btn" data-v="next-change" aria-label="Next change" title="Next change (N)" tabindex="-1">Change &rsaquo;</button>
     </span>
     {% endif %}
     {% if render_svg_url %}
@@ -53,8 +57,8 @@
        produced. The second is what the site will show, so a curator can check them against each
        other; it is only ever an <img>, never inlined. #}
     <span class="viewer__source" role="group" aria-label="Which drawing to show">
-      <button type="button" class="viewer__btn" data-v="source-portal" aria-pressed="true">Portal render</button>
-      <button type="button" class="viewer__btn" data-v="source-db" aria-pressed="false">Database render</button>
+      <button type="button" class="viewer__btn" data-v="source-portal" aria-pressed="true" tabindex="-1">Portal render</button>
+      <button type="button" class="viewer__btn" data-v="source-db" aria-pressed="false" tabindex="-1">Database render</button>
     </span>
     {% endif %}
   </div>

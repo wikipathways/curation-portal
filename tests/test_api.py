@@ -866,6 +866,13 @@ def test_viewer_is_one_tab_stop_and_announces_itself(tmp_path):
 
     assert "data-viewer " in page
     assert "the arrow keys move between them and Enter shows a node" in page
+    # The toolbar is one stop too (a roving tabindex, the arrows inside it), so before its
+    # drawing loads each viewer is two: the toolbar and the canvas.
+    viewers = page.split('<div class="viewer viewer--')[1:]
+    assert viewers
+    for v in viewers:
+        assert 'role="toolbar"' in v
+        assert v.count('tabindex="0"') == 2
     assert 'class="node-panel__body" aria-live="polite" aria-atomic="true"' in page
     # Not a dialog: focus stays on the node so the arrow keys keep working, which a dialog's
     # focus trap would break.
