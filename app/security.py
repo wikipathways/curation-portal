@@ -3,8 +3,9 @@
 The review page now inlines the pathway drawing into the DOM (the viewer), so a mistake in the
 renderer's escaping would no longer be contained by ``<img>``. A Content-Security-Policy that
 forbids inline script is the second line of defence. It starts as *Report-Only* so a policy that
-blocks something legitimate shows up in the browser console instead of breaking the page; switch
-``enforce`` on once a browser pass over every page shows a clean console.
+blocks something legitimate shows up in the browser console instead of breaking the page. Enforced
+since the browser pass of 2026-11-20 showed every page clean; ``PORTAL_CSP_REPORT_ONLY=true``
+turns it back to report-only.
 
 The templates carry no inline ``<script>`` bodies and no ``on*=`` handlers, which is what makes
 ``script-src 'self'`` possible at all. Keep it that way.

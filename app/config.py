@@ -274,6 +274,12 @@ class Settings(BaseSettings):
     # depends on credentials held by other repositories, which this app cannot see.
     site_notice: str = ""
 
+    # The pages' Content-Security-Policy (app/security.py) is enforced. True sends it as
+    # Report-Only instead: the escape hatch if a policy violation ever breaks a page in
+    # production, without a code change. The review page inlines the pathway drawing, so the
+    # enforced policy is the second line of defence behind the renderer's escaping.
+    csp_report_only: bool = False
+
     # Per-user OAuth (submitter identity, scaffolding-plan §3). Absent → auth routes 503.
     github_oauth_client_id: str | None = None
     github_oauth_client_secret: str | None = None

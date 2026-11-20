@@ -17,9 +17,10 @@ def client(tmp_path):
         yield c
 
 
-def test_pages_carry_a_report_only_csp_without_inline_script(client):
+def test_pages_carry_an_enforced_csp_without_inline_script(client):
     r = client.get("/")
-    csp = r.headers["content-security-policy-report-only"]
+    assert "content-security-policy-report-only" not in r.headers
+    csp = r.headers["content-security-policy"]
     script_src = csp.split("script-src")[1].split(";")[0]
     assert script_src.strip() == "'self'"
     assert r.headers["x-content-type-options"] == "nosniff"
@@ -27,7 +28,17 @@ def test_pages_carry_a_report_only_csp_without_inline_script(client):
 
 def test_json_responses_get_no_csp(client):
     r = client.get("/health")
-    assert "content-security-policy-report-only" not in r.headers
+    assert "content-security-policy" not in r.headers
+
+
+def test_report_only_is_a_setting(tmp_path):
+    settings = Settings(
+        _env_file=None, database_url=f"sqlite:///{tmp_path / 'r.db'}", csp_report_only=True
+    )
+    with TestClient(build_app(settings)) as c:
+        r = c.get("/")
+    assert "content-security-policy-report-only" in r.headers
+    assert "content-security-policy" not in r.headers
 
 
 def test_templates_have_no_inline_script_or_handlers():
