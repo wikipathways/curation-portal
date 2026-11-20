@@ -751,6 +751,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         after_gpml: bytes,
         before_gpml: bytes | None = None,
         submitter_note: str | None = None,
+        head_sha: str | None = None,
     ) -> None:
         """Instantly render the before/after preview at PR-creation time (issue #11, 1a).
 
@@ -764,6 +765,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
                 after_gpml=after_gpml,
                 before_gpml=before_gpml,
                 submitter_note=submitter_note,
+                head_sha=head_sha,
             )
         except Exception:  # noqa: BLE001 — preview is cosmetic; never fail the write path on it
             logging.getLogger("wpsubmit.preview").warning(
@@ -919,16 +921,37 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         preview = None
         status = request.app.state.preview.status(r.pr_number)
         if status == "ready":
+            cache = request.app.state.preview
+            stamp = cache.stamp(r.pr_number) or {}
+            rev = stamp.get("rev") if isinstance(stamp.get("rev"), str) else None
+            # Every preview URL carries the render's revision, so the files can be cached for
+            # good and a redraw is still picked up at once (the URL changes with it).
+            q = f"?rev={rev}" if rev else ""
+            base = f"/previews/{r.pr_number}"
+            diff = cache.diff(r.pr_number)
             preview = {
                 "status": "ready",
-                "before_svg_url": f"/previews/{r.pr_number}/before.svg",
-                "after_svg_url": f"/previews/{r.pr_number}/after.svg",
+                "before_svg_url": f"{base}/before.svg{q}",
+                "after_svg_url": f"{base}/after.svg{q}",
                 "datanodes_url": f"{pr_url}/files",
                 "validation_url": f"{pr_url}/checks",
                 # What changed, in words, above the two frames (issue #24). Server-rendered
                 # because it is the sentence a curator reads *before* deciding whether to look at
                 # the pictures at all — waiting on a fetch to say "nothing changed" defeats it.
-                "diff": _diff_summary(request.app.state.preview.diff(r.pr_number)),
+                "diff": _diff_summary(diff),
+                "rev": rev,
+                "renderer": stamp.get("renderer"),
+                # None when the side has no graph on file (a new pathway's "before", or a cache
+                # drawn before renderer 2): the viewer then falls back to the -nodes.json data.
+                "before_graph_url": (
+                    f"{base}/before-graph.json{q}"
+                    if cache.graph_path(r.pr_number, "before") else None
+                ),
+                "after_graph_url": (
+                    f"{base}/after-graph.json{q}"
+                    if cache.graph_path(r.pr_number, "after") else None
+                ),
+                "diff_url": f"{base}/diff.json{q}" if diff is not None else None,
             }
         elif status == "failed":
             preview = {"status": "failed"}
@@ -1169,7 +1192,24 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             return Response(
                 content=_PREVIEW_PLACEHOLDER, media_type="image/svg+xml", headers=_SVG_HEADERS
             )
-        return FileResponse(path, media_type="image/svg+xml", headers=_SVG_HEADERS)
+        return FileResponse(
+            path,
+            media_type="image/svg+xml",
+            headers={**_SVG_HEADERS, "Cache-Control": _preview_cache_control(request, pr_number)},
+        )
+
+    def _preview_cache_control(request: Request, pr_number: int) -> str:
+        """Immutable when the URL names the render on disk, else revalidate every time.
+
+        The page puts the render's ``rev`` in every preview URL, so a matching one can never
+        go stale: a redraw changes the rev, and with it the URL. Anything else (an old link, a
+        hand-typed URL, a rev from before a redraw) must not be cached as if it were current.
+        """
+        rev = request.query_params.get("rev")
+        stamp = request.app.state.preview.stamp(pr_number) or {}
+        if rev and rev == stamp.get("rev"):
+            return "public, max-age=31536000, immutable"
+        return "no-cache"
 
     @app.get("/previews/{pr_number}/{side}-nodes.json")
     def preview_nodes(request: Request, pr_number: int, side: str):
@@ -1193,6 +1233,29 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         if data is None:
             raise HTTPException(status_code=404, detail="no hotspots on file for this side")
         return JSONResponse(data)
+
+    @app.get("/previews/{pr_number}/{side}-graph.json")
+    def preview_graph(request: Request, pr_number: int, side: str):
+        """The viewer's graph for one side: every element's id, geometry and meaning, and what
+        each line connects (``app.preview.render``, contract K2).
+
+        Same guards as the hotspots route. 404 when the side has no graph on file (never drawn,
+        or drawn before renderer 2), which tells the viewer to fall back to ``-nodes.json``.
+        """
+        if side not in ("before", "after"):
+            raise HTTPException(status_code=404, detail="unknown preview side")
+        try:
+            _curation(request).get(pr_number)
+        except ReviewNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        path = request.app.state.preview.graph_path(pr_number, side)
+        if path is None:
+            raise HTTPException(status_code=404, detail="no graph on file for this side")
+        return FileResponse(
+            path,
+            media_type="application/json",
+            headers={"Cache-Control": _preview_cache_control(request, pr_number)},
+        )
 
     @app.get("/previews/{pr_number}/diff.json")
     def preview_diff(request: Request, pr_number: int):
@@ -1452,6 +1515,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             after_gpml=content,
             before_gpml=None,  # new pathway has no base version
             submitter_note=description,
+            head_sha=result.head_sha,
         )
         _curation(request, bot).register(
             pr_number=result.pr_number,
@@ -1596,6 +1660,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             after_gpml=content,
             before_gpml=before_gpml,
             submitter_note=description,
+            head_sha=result.head_sha,
         )
         _curation(request, bot).register(
             pr_number=result.pr_number,
@@ -1722,6 +1787,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             after_gpml=content,
             before_gpml=None,
             submitter_note=description,
+            head_sha=result.head_sha,
         )
         # Re-open the review and rebuild its checklist from the revised content.
         with acting_as(submitter):
