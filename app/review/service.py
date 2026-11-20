@@ -2400,6 +2400,18 @@ class CurationService:
         if previous.get("head") == head_sha and "unexpected_files" in previous:
             guards.setdefault("unexpected_files", previous["unexpected_files"])
         guards["head"] = head_sha
+        with self._session_factory() as s:
+            review = s.get(Review, pr_number)
+            if review is None:
+                return False
+            publishing = status == ReviewStatus.APPROVED and self._publication_started(review)
+        if publishing:
+            # The publish workflow writes this very update to the default branch, so the base
+            # "moves" as a matter of course once it has started. Read as somebody else's edit,
+            # that withdrew the approval and pulled `accepted` mid-run (sandbox #92, 2026-11-20:
+            # withdrawn at 11:41:08, published at 11:41:15). Before the run starts the guard
+            # stands; from then on the base belongs to the publication.
+            guards.pop("base_moved", None)
         refusal = self._guard_refusal(pr_number, guards)
         withdraw = refusal is not None and status == ReviewStatus.APPROVED
         with self._session_factory() as s:
@@ -2417,6 +2429,28 @@ class CurationService:
             self._take_back_accepted(pr_number)
             self._maybe_mirror(self.get(pr_number))
         return withdraw
+
+    def _publication_started(self, review: Review) -> bool:
+        """Has a publish run started since this review was approved? From the row only.
+
+        The run is the repository's latest publish run (``_publish_run_state``), recorded on the
+        row earlier in the same reconcile pass; it carries no pull request, so "started after
+        this approval" is the tie. A parallel publication of another pathway can satisfy it too,
+        which costs only the base guard's last few seconds for this one.
+        """
+        if not self.is_pipeline_mode or review.approved_at is None:
+            return False
+        created = ((review.pipeline_run or {}).get("publish") or {}).get("created_at")
+        if not created:
+            return False
+        try:
+            started = datetime.fromisoformat(str(created).replace("Z", "+00:00"))
+        except ValueError:
+            return False
+        approved = _aware(review.approved_at).replace(microsecond=0)
+        if started.tzinfo is None:
+            started = started.replace(tzinfo=UTC)
+        return started >= approved
 
     def _take_back_accepted(self, pr_number: int) -> None:
         """Remove ``accepted`` after an approval was withdrawn, or remember to.

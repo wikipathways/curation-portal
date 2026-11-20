@@ -219,15 +219,18 @@
   {% endif %}
 
   {# What approval would refuse, found by the background check (CurationService._check_guards).
-     Shown before anything else about the submission: no amount of checklist work gets past it. #}
-  {% if r.guards and r.guards.unexpected_files %}
+     Shown before anything else about the submission: no amount of checklist work gets past it.
+     Only while approval is still a question: on a published review the pathway "changed on main"
+     because this update was published there (sandbox #92). #}
+  {% set guards_apply = r.status in ('open', 'changes_requested', 'approved') %}
+  {% if guards_apply and r.guards and r.guards.unexpected_files %}
   <p class="review-state review-state--bad">
     <strong>This pull request changes other files too.</strong>
     Besides the pathway it touches {% for p in r.guards.unexpected_files[:5] %}<code>{{ p }}</code>{% if not loop.last %}, {% endif %}{% endfor %}{% if r.guards.unexpected_files | length > 5 %} and {{ r.guards.unexpected_files | length - 5 }} more{% endif %}.
     Approval is refused until those changes are removed. A fork that has drifted from the main repository is the usual cause.
   </p>
   {% endif %}
-  {% if r.guards and r.guards.base_moved %}
+  {% if guards_apply and r.guards and r.guards.base_moved %}
   <p class="review-state review-state--bad">
     <strong>The pathway changed on the main branch after this update was made.</strong>
     Approving would overwrite that change, so approval is refused. The submitter should download the current version, redo the edit on it and upload again.

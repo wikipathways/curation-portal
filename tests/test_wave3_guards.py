@@ -307,3 +307,66 @@ def test_a_non_ascii_digit_wpid_is_ignored_not_a_500(tmp_path):
             data={"wpid": "WP²"},
         )
         assert r.status_code == 200
+
+
+def test_the_publication_itself_does_not_withdraw_the_approval(tmp_path):
+    # Sandbox #92 (2026-11-20): approved at 11:40:34, the publish workflow wrote the update to
+    # main, the reconcile read that as somebody else's edit, withdrew the approval and pulled
+    # `accepted` at 11:41:08, seven seconds before the repository announced the publication.
+    app, current, fake, repo = _app(tmp_path)
+    with TestClient(app) as c:
+        pr = _update(c, current)
+        svc = CurationService(
+            app.state.session_factory,
+            fake,
+            repo=repo,
+            curators=ConfigCurators(["curator"]),
+            publish_mode="pipeline",
+            require_preview_check=False,
+            reconcile_min_interval=timedelta(seconds=0),
+            publish_workflow_file="3a_approved_pull_request.yml",
+        )
+        for item in svc.get(pr).checklist:
+            if item.get("required"):
+                svc.set_checklist_item(pr, item["key"], ChecklistState.PASS.value)
+        svc.approve(pr, "curator")
+        approved_at = svc.get(pr).approved_at
+        # The publish run starts after the approval and writes the pathway to main.
+        started = (approved_at + timedelta(seconds=5)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        fake.record_workflow_run(
+            repo, svc._publish_workflow_file, conclusion=None, created_at=started
+        )
+        fake.existing_files[(repo, PATH)] = "blob-published"
+        svc.reconcile()
+
+        review = svc.get(pr)
+        assert review.status == ReviewStatus.APPROVED
+        assert "accepted" in fake.list_labels(repo, pr)
+        assert "base_moved" not in (review.pipeline_run.get("guards") or {})
+
+
+def test_a_publish_run_from_before_the_approval_does_not_disarm_the_guard(tmp_path):
+    app, current, fake, repo = _app(tmp_path)
+    with TestClient(app) as c:
+        pr = _update(c, current)
+        svc = CurationService(
+            app.state.session_factory,
+            fake,
+            repo=repo,
+            curators=ConfigCurators(["curator"]),
+            publish_mode="pipeline",
+            require_preview_check=False,
+            reconcile_min_interval=timedelta(seconds=0),
+            publish_workflow_file="3a_approved_pull_request.yml",
+        )
+        for item in svc.get(pr).checklist:
+            if item.get("required"):
+                svc.set_checklist_item(pr, item["key"], ChecklistState.PASS.value)
+        # Somebody else's publication, finished an hour before this approval.
+        fake.record_workflow_run(
+            repo, svc._publish_workflow_file, created_at="2020-01-01T00:00:00Z"
+        )
+        svc.approve(pr, "curator")
+        fake.existing_files[(repo, PATH)] = "blob-v2"
+        svc.reconcile()
+        assert svc.get(pr).status == ReviewStatus.OPEN
