@@ -2169,6 +2169,8 @@ class CurationService:
             "conclusion": run.conclusion,
             "url": run.html_url,
             "created_at": run.created_at,
+            # For a completed run, about when it finished: the fallback form's clock starts there.
+            "updated_at": run.updated_at,
         }
 
     def _pipeline_testing_state(self, pr_number: int) -> dict | None:

@@ -27,9 +27,11 @@ def _review(**kw):
     return SimpleNamespace(**base)
 
 
-def _run(status="completed", conclusion="success", created_at=RUN_AT):
-    return {"publish": {"status": status, "conclusion": conclusion, "url": "u",
-                        "created_at": created_at}}
+def _run(status="completed", conclusion="success", created_at=RUN_AT, updated_at=None):
+    publish = {"status": status, "conclusion": conclusion, "url": "u", "created_at": created_at}
+    if updated_at is not None:
+        publish["updated_at"] = updated_at
+    return {"publish": publish}
 
 
 def test_not_offered_while_the_automatic_path_is_still_working():
@@ -48,6 +50,63 @@ def test_offered_ten_minutes_after_a_completed_run_with_no_wpid():
     assert wpid_fallback_due(_review(), _run(), due)
     # A failed run counts as completed too: nothing more is coming from it.
     assert wpid_fallback_due(_review(), _run(conclusion="failure"), due)
+
+
+def test_the_ten_minutes_count_from_when_a_long_run_finished():
+    # A run that sat queued and ran long: created at 12:00:30, finished at 12:10:20. Counted from
+    # its start, the form appeared 20 seconds after it finished, before its announcement had any
+    # time to arrive, which is the normal flow the form is meant to stay out of.
+    approved = datetime(2026, 11, 20, 12, 0, 0, tzinfo=UTC)
+    finished = datetime(2026, 11, 20, 12, 10, 20, tzinfo=UTC)
+    run = _run(created_at="2026-11-20T12:00:30Z", updated_at="2026-11-20T12:10:20Z")
+    review = _review(approved_at=approved)
+    assert not wpid_fallback_due(review, run, finished + timedelta(seconds=20))
+    assert not wpid_fallback_due(
+        review, run, finished + timedelta(seconds=WPID_FALLBACK_AFTER_SECONDS - 1)
+    )
+    assert wpid_fallback_due(review, run, finished + timedelta(seconds=WPID_FALLBACK_AFTER_SECONDS))
+
+
+def test_a_run_recorded_without_updated_at_counts_from_its_start():
+    # Rows written before the finish time was recorded keep the older rule.
+    due = RUN_START + timedelta(seconds=WPID_FALLBACK_AFTER_SECONDS)
+    assert wpid_fallback_due(_review(), _run(), due)
+
+
+def test_the_background_loop_records_when_the_publish_run_finished(tmp_path):
+    # The finish time comes from GitHub's run (updated_at) by way of the loop, so the page that
+    # decides on the form makes no GitHub call. The fake models a run that finished well after it
+    # was created, as a queued run does.
+    from tests.test_pipeline_api import REPO
+
+    app = _pipeline_app(tmp_path, curators=["marvinm2"])
+    with TestClient(app) as client:
+        # A deployment that waits longer than ten minutes before calling a publication failed, so
+        # the review is still ``approved`` half an hour on and only the form's clock decides.
+        app.state.settings.publish_timeout_minutes = 120
+        fake = app.state._fake
+        pr = _submit(client)["pr_number"]
+        _approve(client, app, pr)
+        approved_at = datetime.now(UTC) - timedelta(minutes=30)
+        with app.state.session_factory() as s:
+            review = s.get(Review, pr)
+            review.approved_at = approved_at
+            s.commit()
+        started = (approved_at + timedelta(minutes=1)).isoformat()
+        finished = (datetime.now(UTC) - timedelta(minutes=1)).isoformat()
+        fake.record_workflow_run(
+            REPO, "3a_approved_pull_request.yml", conclusion="success",
+            created_at=started, updated_at=finished,
+        )
+        app.state.worker.tick(github=fake)
+        with app.state.session_factory() as s:
+            publish = (s.get(Review, pr).pipeline_run or {}).get("publish") or {}
+            status = s.get(Review, pr).status.value
+        page = client.get(f"/dashboard/{pr}").text
+    assert status == "approved"
+    assert publish.get("updated_at") == finished
+    # Started 29 minutes ago but finished a minute ago: not overdue yet.
+    assert "Record the published WPID" not in page
 
 
 def test_a_run_from_before_the_approval_does_not_count():
@@ -114,3 +173,13 @@ def test_the_route_still_accepts_a_wpid_while_the_form_is_hidden(tmp_path):
         _approve(client, app, pr)
         recorded = client.post(f"/api/reviews/{pr}/published-wpid", data={"wpid": "5430"})
     assert recorded.status_code == 200, recorded.text
+
+
+def test_the_http_client_reads_a_runs_updated_at():
+    from app.github.client import _workflow_run
+
+    run = _workflow_run({
+        "id": 1, "html_url": "u", "status": "completed", "conclusion": "success",
+        "created_at": "2026-11-20T12:00:30Z", "updated_at": "2026-11-20T12:10:20Z",
+    })
+    assert run.updated_at == "2026-11-20T12:10:20Z"

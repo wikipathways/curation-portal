@@ -145,6 +145,9 @@ class WorkflowRun:
     status: str  # "queued" | "in_progress" | "completed"
     conclusion: str | None  # "success" | "failure" | ... | None while running
     created_at: str
+    #: When GitHub last changed the run: for a completed run, about when it finished. Empty where
+    #: a caller built the run by hand.
+    updated_at: str = ""
 
 
 def _workflow_run(data: dict) -> WorkflowRun:
@@ -154,6 +157,7 @@ def _workflow_run(data: dict) -> WorkflowRun:
         status=data.get("status", ""),
         conclusion=data.get("conclusion"),
         created_at=data.get("created_at", ""),
+        updated_at=data.get("updated_at") or "",
     )
 
 
@@ -1009,14 +1013,23 @@ class FakeGitHubClient(GitHubClient):
     # that sequence there is nothing to test.
 
     def record_workflow_run(
-        self, repo: str, workflow_file: str, *, conclusion: str | None = "success"
+        self,
+        repo: str,
+        workflow_file: str,
+        *,
+        conclusion: str | None = "success",
+        created_at: str = "2026-07-27T12:00:00Z",
+        updated_at: str | None = None,
     ) -> WorkflowRun:
+        # GitHub moves ``updated_at`` with every change of the run, so a run that took a while
+        # (queued, then slow) finishes well after it was created. Defaults to ``created_at``.
         run = WorkflowRun(
             id=self._next_run,
             html_url=f"https://github.com/{repo}/actions/runs/{self._next_run}",
             status="completed" if conclusion else "in_progress",
             conclusion=conclusion,
-            created_at="2026-07-27T12:00:00Z",
+            created_at=created_at,
+            updated_at=updated_at or created_at,
         )
         self._next_run += 1
         self.workflow_runs.setdefault((repo, workflow_file), []).append(run)

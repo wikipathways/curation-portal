@@ -168,9 +168,9 @@ def publish_pending(review, pipeline_run: dict | None, now: datetime | None = No
 PENDING_WINDOW_SECONDS = 30 * 60
 
 
-#: How long after the publish workflow started the portal waits for its announcement before
-#: offering the hand-recording form. The workflow takes about a minute and the marker comment
-#: arrives with it; ten minutes past that, the automatic path has visibly not delivered.
+#: How long after the publish workflow finished the portal waits for its announcement before
+#: offering the hand-recording form. The marker comment arrives with the end of the run; ten
+#: minutes past that, the automatic path has visibly not delivered.
 WPID_FALLBACK_AFTER_SECONDS = 10 * 60
 
 
@@ -183,7 +183,12 @@ def wpid_fallback_due(review, pipeline_run: dict | None, now: datetime | None = 
 
     - the review is ``publish_failed``; or
     - it is ``approved``, the publish workflow that started after the approval has completed,
-      and no WPID has arrived ``WPID_FALLBACK_AFTER_SECONDS`` after that run started.
+      and no WPID has arrived ``WPID_FALLBACK_AFTER_SECONDS`` after that run finished.
+
+    "Finished" is the run's ``updated_at`` (GitHub moves it with every change, so for a completed
+    run it is about the end). Not ``created_at``: a run that sat queued or ran long would offer
+    the form the moment it completed, before its announcement had any time to arrive. A row
+    recorded before ``updated_at`` was kept falls back to the start, which is the older rule.
 
     Reads only what the review row already records (``pipeline_run["publish"]`` is written by
     the background loop), so a page load costs no GitHub call. Same notion of "our run" as
@@ -208,5 +213,6 @@ def wpid_fallback_due(review, pipeline_run: dict | None, now: datetime | None = 
     if not completed:
         return False
     now = now or datetime.now(UTC)
-    started = max(run_at or approved_at, approved_at)
-    return (now - started).total_seconds() >= WPID_FALLBACK_AFTER_SECONDS
+    finished = _when(publish.get("updated_at")) or run_at
+    since = max(finished or approved_at, approved_at)
+    return (now - since).total_seconds() >= WPID_FALLBACK_AFTER_SECONDS
