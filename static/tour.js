@@ -1,7 +1,9 @@
 // tour.js: a short guided tour of each page, for someone using the portal for the first time.
 //
 // Steps are keyed by <main data-tour-page="submit|review|queue"> and point at elements carrying
-// data-tour="<name>". A step whose element is absent or hidden is skipped, which is how one list
+// data-tour="<name>". A step whose element is hidden but that names a `near` anchor points there
+// instead (for something that only appears later, such as the file check's findings). Any other
+// step whose element is absent or hidden is skipped, which is how one list
 // serves curators and submitters (only curators have the decision buttons) and pages before and
 // after a feature lands. No overlay blocks the page: the target gets an outline and the popover
 // sits beside it, so the tour never stands between someone and what they came to do.
@@ -16,13 +18,15 @@
   var STEPS = {
     submit: [
       { anchor: 'submit-file', title: 'Choose your pathway',
-        body: 'Pick the .gpml file you saved from PathVisio. Nothing is sent yet: the portal checks the file and lists anything worth fixing right below.' },
-      { anchor: 'preflight', title: 'What the checks found',
-        body: 'Only a "Blocked" finding stops a submission. The rest is advice; fixing it now saves a round trip with a curator.' },
+        body: 'Pick the .gpml file you saved from PathVisio. Nothing goes to GitHub yet: the portal checks the file and lists anything worth fixing right below.' },
+      // The findings box stays hidden until a file is chosen, which on a first visit it never is;
+      // the step then points at the file picker the findings appear under.
+      { anchor: 'preflight', near: 'submit-file', title: 'What the checks found',
+        body: 'The findings appear right under the file picker once a file is chosen. Only a "Blocked" finding stops a submission. The rest is advice; fixing it now saves a round trip with a curator.' },
       { anchor: 'note', title: 'A note for the curators',
         body: 'Optional. Say where the pathway comes from, what it covers or what you are unsure about. Curators read it first.' },
       { anchor: 'submit', title: 'Submit',
-        body: 'Opens a pull request in your name. Nothing is published until a curator approves it.' },
+        body: 'Opens a pull request for your pathway. Nothing is published until a curator approves it.' },
       { anchor: 'tab-update', title: 'Changing a published pathway?',
         body: 'Use Update existing: type the WPID, download the current version, make your edit on that copy and upload it.' },
       { anchor: 'nav-mine', title: 'Your submissions',
@@ -86,20 +90,37 @@
     return !!el && el.isConnected && !el.closest('[hidden]') && el.getClientRects().length > 0;
   }
 
-  function locate(step) {
-    var el = step.anchor
-      ? document.querySelector('[data-tour="' + step.anchor + '"]')
-      : document.querySelector(step.selector);
+  function byAnchor(name) {
+    return document.querySelector('[data-tour="' + name + '"]');
+  }
+
+  function own(step) {
+    var el = step.anchor ? byAnchor(step.anchor) : document.querySelector(step.selector);
     return visible(el) ? el : null;
   }
 
-  // The steps that have something to point at right now, in order, never the same element twice.
+  function locate(step) {
+    var el = own(step);
+    if (!el && step.near) {
+      var near = byAnchor(step.near);
+      if (visible(near)) el = near;
+    }
+    return el;
+  }
+
+  // The steps that have something to point at right now, in order. Never the same element twice
+  // by its own anchor (one element found by two selectors); a `near` stand-in may repeat one,
+  // since it says something different about it.
   function available() {
     var out = [];
     var seen = [];
     (STEPS[page] || []).forEach(function (step) {
-      var el = locate(step);
-      if (el && seen.indexOf(el) === -1) { seen.push(el); out.push(step); }
+      var el = own(step);
+      if (el) {
+        if (seen.indexOf(el) === -1) { seen.push(el); out.push(step); }
+      } else if (locate(step)) {
+        out.push(step);
+      }
     });
     return out;
   }
@@ -163,11 +184,11 @@
     pop.appendChild(arrow);
 
     skip.addEventListener('click', function () { finish('dismissed'); });
-    back.addEventListener('click', function () { go(index - 1); });
-    next.addEventListener('click', function () { go(index + 1); });
+    back.addEventListener('click', function () { go(index - 1, -1); });
+    next.addEventListener('click', function () { go(index + 1, 1); });
     pop.addEventListener('keydown', function (e) {
       // Enter on Back or Skip does what that button says; anywhere else in the popover it moves on.
-      if (e.key === 'Enter' && e.target.tagName !== 'BUTTON') { e.preventDefault(); go(index + 1); }
+      if (e.key === 'Enter' && e.target.tagName !== 'BUTTON') { e.preventDefault(); go(index + 1, 1); }
     });
     document.body.appendChild(pop);
   }
@@ -186,7 +207,7 @@
     if (!visible(target)) {
       // A card refreshed under the tour replaces its elements; follow the step to the new one.
       var again = locate(steps[index]);
-      if (!again) { go(index + 1); return; }
+      if (!again) { vanished(); return; }
       mark(again);
     }
     if (window.innerWidth < 520) {
@@ -222,15 +243,44 @@
     target.classList.add('tour-target');
   }
 
-  function go(i) {
+  // The step on screen lost its element without the visitor doing anything in the tour. Drop it,
+  // and any other step that has lost its element too, then show the next step that is left, or
+  // the previous one when it was the last. The tour only counts as done when the visitor presses
+  // Done themselves; if nothing at all is left it ended without them.
+  function vanished() {
+    var kept = [];
+    var before = 0;
+    steps.forEach(function (step, k) {
+      if (k === index || !locate(step)) return;
+      kept.push(step);
+      if (k < index) before += 1;
+    });
+    steps = kept;
+    if (before < steps.length) go(before, 1);
+    else if (before > 0) go(before - 1, -1);
+    else finish('interrupted');
+  }
+
+  // Show step i. `dir` is the way the visitor is moving (1 forward, -1 back): a step whose element
+  // has gone since the tour started (a panel closed, a card moved tabs) is dropped and the one
+  // beyond it in that direction is shown instead.
+  function go(i, dir) {
+    dir = dir < 0 ? -1 : 1;
     if (i < 0) return;
     if (i >= steps.length) { finish('done'); return; }
     var el = locate(steps[i]);
     if (!el) {
-      // Gone since the tour started (a panel closed, a card moved tabs). Skip it in the same
-      // direction the visitor was going.
       steps.splice(i, 1);
-      go(i >= steps.length ? steps.length : i);
+      if (dir > 0) {
+        // Step i is now the one after; running off the end means the visitor pressed Next on
+        // the last step that is left, which is finishing the tour.
+        go(i, 1);
+      } else {
+        // Everything after i moved down one, the step on screen included.
+        if (index > i) index -= 1;
+        if (i - 1 >= 0) go(i - 1, -1);
+        else go(index, 1);  // nothing earlier is left: stay on the current step
+      }
       return;
     }
     index = i;
@@ -259,7 +309,7 @@
     document.addEventListener('keydown', onKey);
     window.addEventListener('scroll', schedule, { passive: true });
     window.addEventListener('resize', schedule);
-    go(0);
+    go(0, 1);
     return true;
   }
 
