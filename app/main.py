@@ -1010,6 +1010,24 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             "meta": diff.get("meta") if isinstance(diff.get("meta"), dict) else None,
         }
 
+    def _loose_end_count(metadata: dict | None) -> dict | None:
+        """How many interaction ends on the after side attach to nothing, from the metadata
+        sidecar, and how many of them the version an update replaces did not have (``new``,
+        None when the sidecar holds no base). None for a cache written before they were counted.
+        """
+        if not isinstance(metadata, dict) or not isinstance(metadata.get("interaction_count"), int):
+            return None
+        ends = metadata.get("loose_ends")
+        if not isinstance(ends, list):
+            return None
+        before = metadata.get("before_loose_ends")
+        new = None
+        if isinstance(before, list):
+            from app.quality import split_loose_ends
+
+            new = len(split_loose_ends(ends, before)[0])
+        return {"total": len(ends), "new": new}
+
     def _review_view(request: Request, r) -> dict:
         """The per-review dict the templates consume (design §4.5) — enriched beyond the API model.
 
@@ -1059,6 +1077,10 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         # 'pending' → leave None so the template shows the "generating" empty state
         shown = presentation(r.status.value)
         metadata = request.app.state.preview.metadata(r.pr_number)
+        if preview is not None and preview["status"] == "ready":
+            # For the change summary's "Unconnected line ends" line. The sidecar is read here
+            # anyway, so the count costs nothing.
+            preview["after_loose_ends"] = _loose_end_count(metadata)
         return {
             **_detail(r).model_dump(),
             # Which pathway this is, in words. Stored on the row since Wave 2; older rows fall

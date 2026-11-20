@@ -28,7 +28,7 @@ import tempfile
 import threading
 import time
 from collections.abc import Container, Iterator
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -212,7 +212,7 @@ class PreviewService:
                 pass  # the overlay is an enhancement; never fail a render on it
             rendered[side] = True
         self._write_diff(out, drawn_nodes, before_gpml=before_gpml, after_gpml=after_gpml)
-        self._write_metadata(out, after_gpml, submitter_note)
+        self._write_metadata(out, after_gpml, submitter_note, before_gpml=before_gpml)
         drawn = rendered["before"] or rendered["after"]
         # The one moment the renderer's verdict is in hand for free. ``app.quality`` will not run
         # the renderer itself — that would break the offline-and-cheap rule its rules work under —
@@ -429,11 +429,26 @@ class PreviewService:
 
     # -- curation metadata sidecar (dashboard panel) --------------------------------------
     @staticmethod
-    def _write_metadata(out: Path, after_gpml: bytes, submitter_note: str | None) -> None:
-        """Cache the parsed curation metadata + submitter note next to the SVGs (best-effort)."""
+    def _write_metadata(
+        out: Path,
+        after_gpml: bytes,
+        submitter_note: str | None,
+        *,
+        before_gpml: bytes | None = None,
+    ) -> None:
+        """Cache the parsed curation metadata + submitter note next to the SVGs (best-effort).
+
+        For an update, also the loose interaction ends of the version it replaces
+        (``before_loose_ends``), so the review card can say which of the new version's were
+        already there without reparsing the base on every page load.
+        """
         try:
             data = parse_curation_metadata(after_gpml).as_dict()
             data["submitter_note"] = (submitter_note or "").strip()
+            if before_gpml:
+                before = parse_curation_metadata(before_gpml)
+                if before.interaction_count is not None:
+                    data["before_loose_ends"] = [asdict(e) for e in before.loose_ends]
             _write_atomic(out / "metadata.json", json.dumps(data).encode("utf-8"))
         except (OSError, ValueError):
             pass  # the panel is cosmetic; never fail the write path on it

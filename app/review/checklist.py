@@ -79,9 +79,9 @@ class ChecklistItemDef:
 
 # ---- auto-check implementations (offline, cheap) -----------------------------------------
 #
-# Three of the four are adapters over ``app.quality``, which holds the same rules the submit form
-# and the mirror comment run. Before that, the review card's "3 of 12 data nodes have no
-# identifier" and the pull request's "Datanode annotation | WARN" were two separately-maintained
+# All but the naming check are adapters over ``app.quality``, which holds the same rules the
+# submit form and the mirror comment run. Before that, the review card's "3 of 12 data nodes have
+# no identifier" and the pull request's "Datanode annotation | WARN" were two separately-maintained
 # descriptions of one problem, and only ever one of them got updated.
 
 
@@ -110,6 +110,9 @@ def _auto_from(key: str) -> MetaFn:
 _auto_datanodes = _auto_from("datanodes_mapped")
 _auto_references = _auto_from("references_valid")
 _auto_ontology = _auto_from("ontology_tags")
+#: Whether every interaction's ends attach to something, read from the loose ends the metadata
+#: parser lists. On an update only the ends the edit leaves loose count against it.
+_auto_interactions = _auto_from("interactions_connected")
 #: New. "Meaningful" stays a human judgement — this can never return ``pass`` (see the binding in
 #: ``app.quality.rules``) — but a missing description, or one below the length the repository asks
 #: for, is a fact the app can state instead of leaving the curator to notice.
@@ -249,17 +252,22 @@ CURATION_CHECKLIST: list[ChecklistItemDef] = [
             "short; whether it is meaningful is your call."
         ),
     ),
-    # No auto_check, and there cannot be one: whether an interaction is *connected* is about the
-    # graph the diagram draws, not about the annotation the parser reads. It is here because the
-    # repository asks every reviewer for it and the portal was the only place not asking.
+    # It is here because the repository asks every reviewer for it and the portal was the only
+    # place not asking. The hint comes from the parsed metadata, which lists every interaction end
+    # that attaches to nothing (the same question the viewer's "Show unconnected line ends" asks
+    # of the drawing). It cannot see an arrow attached to the wrong node, so the curator still
+    # looks.
     ChecklistItemDef(
         "interactions_connected",
         "Interactions are connected",
         required=True,
+        auto_check=_auto_interactions,
         help=(
             "Do the arrows really attach to the nodes they point at? A line that only ends near "
             "a node looks connected in the drawing but is not linked in the data, so the "
-            "interaction is lost to anyone analysing the pathway. No automatic check exists."
+            "interaction is lost to anyone analysing the pathway. The automated check lists "
+            "every interaction end attached to nothing, and for an update only the ones the edit "
+            "adds count; whether each arrow is attached to the right node is your call."
         ),
     ),
     ChecklistItemDef(

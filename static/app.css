@@ -854,6 +854,7 @@ a.pager__step:hover { background: var(--surface); border-color: var(--moss); }
 }
 .diff-summary--quiet { border-left-color: var(--line-strong); }
 .diff-summary__line { margin: 0; font-size: 0.88rem; }
+.diff-summary__show-ends { margin-left: 0.4rem; }
 .diff-legend {
   display: flex;
   flex-wrap: wrap;

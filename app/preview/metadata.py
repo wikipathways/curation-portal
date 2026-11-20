@@ -13,8 +13,13 @@ The attributes the panel reads are taken in either spelling, GPML2013a (``Name``
 """
 from __future__ import annotations
 
+import math
 import xml.etree.ElementTree as ET
 from dataclasses import asdict, dataclass, field
+
+from app.preview.gpml import _f as _gpml_f
+from app.preview.gpml import _rect as _gpml_rect
+from app.preview.gpml import get as _gpml_get
 
 #: ElementTree expands the rdf prefix, so the attribute arrives fully qualified.
 _RDF_ID = "{http://www.w3.org/1999/02/22-rdf-syntax-ns#}id"
@@ -106,6 +111,23 @@ class OntologyTag:
 
 
 @dataclass(frozen=True)
+class LooseEnd:
+    """One end of an ``<Interaction>`` that is attached to nothing.
+
+    ``end`` is ``source`` or ``target`` the way the viewer reads them: following the arrowhead, so
+    a line whose only arrow sits on its first point points from its last point to its first.
+    ``attached`` is the label of what the *other* end is attached to and ``near`` the label of the
+    data node or label the free end lies on or close beside; either is "" when there is none.
+    Both are on one line and shortened when long.
+    """
+
+    interaction: str
+    end: str
+    attached: str = ""
+    near: str = ""
+
+
+@dataclass(frozen=True)
 class CurationMetadata:
     name: str | None = None
     organism: str | None = None
@@ -119,6 +141,11 @@ class CurationMetadata:
     #: Comparing a generator's output against ``len(references)`` therefore reports a shortfall
     #: that is not one. Defaulted so a metadata blob cached before this field existed still loads.
     cited_reference_count: int = 0
+    #: How many ``<Interaction>`` elements have both ends to look at, and which of their ends
+    #: attach to nothing (``loose_ends``). ``None`` means not counted: a metadata blob cached
+    #: before this existed, where "no loose ends" would be a claim nobody checked.
+    interaction_count: int | None = None
+    loose_ends: list[LooseEnd] = field(default_factory=list)
 
     def as_dict(self) -> dict:
         return asdict(self)
@@ -230,6 +257,7 @@ def parse_curation_metadata(gpml: bytes | str) -> CurationMetadata:
             comments.append(child.text.strip())
 
     description = "\n\n".join(comments) or None
+    interaction_count, loose_ends = _loose_ends(root)
     return CurationMetadata(
         name=name,
         organism=organism,
@@ -238,4 +266,163 @@ def parse_curation_metadata(gpml: bytes | str) -> CurationMetadata:
         references=references,
         ontology_tags=_dedupe_ontology_tags(ontology_tags),
         cited_reference_count=sum(1 for rid in reference_ids if rid and rid in cited_ids),
+        interaction_count=interaction_count,
+        loose_ends=loose_ends,
     )
+
+
+#: The elements an end may attach to, and the lines that have ends.
+_WALKED = frozenset(
+    {"DataNode", "Label", "Shape", "State", "Group", "Interaction", "GraphicalLine"}
+)
+#: What "ends near" may name: the boxes a reader sees labelled on the diagram.
+_NEAR_KINDS = frozenset({"DataNode", "Label"})
+#: How far outside a node's box a free end may lie and still be said to end "near" it. Further
+#: than this the arrow is unfinished rather than dropped short of something, and naming the
+#: closest node anyway tells the curator to attach it to a node it never pointed at.
+_NEAR_MARGIN = 30.0
+#: Labels are free text: a Label can run to a paragraph. A finding names it, it does not quote it.
+_MAX_LABEL = 40
+
+
+def _short_label(text: str | None) -> str:
+    """A label as a finding names it: on one line, and cut short when long."""
+    label = " ".join((text or "").split())
+    return label if len(label) <= _MAX_LABEL else label[: _MAX_LABEL - 1].rstrip() + "\u2026"
+
+
+def _coord(v: str | None) -> float | None:
+    try:
+        f = float(v) if v is not None else None
+    except ValueError:
+        return None
+    return f if f is not None and math.isfinite(f) else None
+
+
+def _points(el: ET.Element) -> tuple[ET.Element | None, list[ET.Element]]:
+    """A line's point holder and its points, where the renderer finds them: under
+    ``<Waypoints>`` in 2021, under ``<Graphics>`` in 2013a."""
+    holder = _find_child(el, "Waypoints")
+    if holder is None:
+        holder = _find_child(el, "Graphics")
+    points = [p for p in (holder if holder is not None else []) if _localname(p.tag) == "Point"]
+    return holder, points
+
+
+def _state_placed(el: ET.Element) -> bool:
+    """Whether the renderer can place a state: the condition ``app.preview.gpml`` applies."""
+    g = _find_child(el, "Graphics")
+    rel_x, rel_y = _gpml_f(_gpml_get(g, "RelX")), _gpml_f(_gpml_get(g, "RelY"))
+    w, h = _gpml_f(_gpml_get(g, "Width")), _gpml_f(_gpml_get(g, "Height"))
+    return None not in (rel_x, rel_y, w, h) and w >= 0 and h >= 0  # type: ignore[operator]
+
+
+def _loose_ends(root: ET.Element) -> tuple[int, list[LooseEnd]]:
+    """Count the interactions and list every end of one that attaches to nothing.
+
+    The question the viewer's "Show unconnected line ends" answers, asked of the GPML so a rule
+    can ask it too: an end is attached when its point carries a ``GraphRef`` (2021:
+    ``elementRef``) naming an element the renderer draws. A reference to an id nothing declares,
+    or to an element the renderer cannot place (a data node without ``<Graphics>``), is as loose
+    as no reference: the attachment targets are exactly the ones ``app.preview.render`` resolves
+    a ``GraphRef`` against (``_ids``), so this count and the viewer's never disagree. Points are
+    not among them: in GPML2021 they carry an ``elementId`` of their own, and a line ending on a
+    point is not attached to anything. Both dialects are read through ``app.preview.gpml``'s
+    alias table. Only ``<Interaction>``: a graphical line is decoration, and loose ends are what
+    it is for. One walk of the tree already parsed, nothing reparsed.
+    """
+    from app.preview.render import canonical_arrow  # render imports this module
+
+    targets: dict[str, str] = {}  # id -> its label, "" when it has none
+    boxes: list[tuple[str, str, tuple[float, float, float, float]]] = []  # (id, label, rect)
+    interactions: list[ET.Element] = []
+    pending_states: list[tuple[str, str, str]] = []  # (id, label, the node it sits on)
+    nodes: set[str] = set()  # ids of the data nodes, labels and shapes the renderer draws
+
+    def declare(gid: str, label: str) -> None:
+        if gid and gid not in targets:  # first declaration wins, as in the renderer
+            targets[gid] = label
+
+    for el in root.iter():
+        kind = _localname(el.tag) if isinstance(el.tag, str) else ""
+        if kind not in _WALKED:
+            continue
+        gid = (_gpml_get(el, "GraphId") or "").strip()
+        label = _short_label(_gpml_get(el, "TextLabel"))
+        if kind in ("DataNode", "Label", "Shape"):
+            rect = _gpml_rect(_find_child(el, "Graphics"))
+            if rect is None:
+                continue  # not drawn, so nothing an end can attach to
+            declare(gid, label)
+            if gid:
+                nodes.add(gid)
+            if kind in _NEAR_KINDS and label:
+                boxes.append((gid, label, rect))
+            states = _find_child(el, "States") if kind == "DataNode" else None
+            for s in states if states is not None else []:
+                if _localname(s.tag) == "State" and _state_placed(s):
+                    declare((_gpml_get(s, "GraphId") or "").strip(), "")
+        elif kind == "State":
+            # A 2013a state names its node; a nested 2021 one was declared with its node above.
+            ref = (_gpml_get(el, "GraphRef") or "").strip()
+            if ref and _state_placed(el):
+                pending_states.append((gid, "", ref))
+        elif kind == "Group":
+            declare(gid, label)
+        elif kind in ("Interaction", "GraphicalLine"):
+            holder, points = _points(el)
+            if len(points) < 2:
+                continue  # the renderer draws no line, so neither it nor its anchors exist
+            declare(gid, "")
+            for a in holder if holder is not None else []:
+                if _localname(a.tag) == "Anchor":
+                    declare((_gpml_get(a, "GraphId") or "").strip(), "")
+            if kind == "Interaction":
+                interactions.append(el)
+    for gid, label, ref in pending_states:
+        if ref in nodes:  # a state is placed on its node, so that node must be drawn
+            declare(gid, label)
+
+    def near(p: ET.Element, skip: str) -> str:
+        x, y = _coord(_gpml_get(p, "X")), _coord(_gpml_get(p, "Y"))
+        if x is None or y is None:
+            return ""
+        best, best_d = "", _NEAR_MARGIN
+        for gid, label, (bx, by, bw, bh) in boxes:
+            if skip and gid == skip:
+                continue
+            # Distance from the point to the box, 0 inside it.
+            d = math.hypot(max(bx - x, 0.0, x - bx - bw), max(by - y, 0.0, y - by - bh))
+            if d <= best_d:
+                best, best_d = label, d
+        return best
+
+    count = 0
+    loose: list[LooseEnd] = []
+    for el in interactions:
+        _, points = _points(el)
+        count += 1
+        ends = []
+        for p in (points[0], points[-1]):
+            ref = (_gpml_get(p, "GraphRef") or "").strip()
+            ends.append((p, ref if ref in targets else ""))
+        # Direction follows the arrowhead, as in the viewer: an arrow only on the first point
+        # makes the last point the source.
+        reverse = bool(canonical_arrow(_gpml_get(points[0], "ArrowHead"))) and not (
+            canonical_arrow(_gpml_get(points[-1], "ArrowHead"))
+        )
+        if reverse:
+            ends.reverse()
+        gid = (_gpml_get(el, "GraphId") or "").strip()
+        for (p, ref), (_, other), role in zip(ends, ends[::-1], ("source", "target"), strict=True):
+            if ref:
+                continue
+            loose.append(
+                LooseEnd(
+                    interaction=gid,
+                    end=role,
+                    attached=targets.get(other, "") if other else "",
+                    near=near(p, other),
+                )
+            )
+    return count, loose

@@ -21,6 +21,7 @@ The severities here are ``mvp1``'s three, plus the two it does not need:
 from __future__ import annotations
 
 import enum
+import re
 from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 
@@ -56,6 +57,26 @@ def worst(severities: Iterable[str]) -> str:
         if _RANK.get(severity, 0) > _RANK[top]:
             top = severity
     return top
+
+
+#: An ``@`` that GitHub would read as a mention: not inside a word, as in an e-mail address.
+_MENTION = re.compile(r"(?<![\w`])@(?=[A-Za-z0-9-])")
+
+
+def table_cell(text: str) -> str:
+    """Text made safe for one cell of a GitHub markdown table, read as it was written.
+
+    On one line, with ``|`` escaped, or the table breaks. GPML element names are the subject of
+    half the findings, and GitHub's markdown treats ``<Pathway>`` as an unknown HTML tag and drops
+    it, leaving "The file has a root element.", so ``&``, ``<`` and ``>`` are escaped too. Escaped
+    here rather than in the detail strings, because the same text is rendered as plain content on
+    the dashboard, where a literal &lt; would be the bug instead. And an ``@handle`` gets a
+    zero-width space after the ``@``: the text quotes labels from the submitted file, and the
+    bot's comment must not ping whoever a label names.
+    """
+    text = " ".join(text.splitlines()).replace("|", "\\|")
+    text = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    return _MENTION.sub("@\u200b", text)
 
 
 @dataclass(frozen=True)
@@ -167,14 +188,7 @@ class QualityReport:
             "|---|---|---|",
         ]
         for f in self.findings:
-            detail = f.detail.replace("\n", " ").replace("|", "\\|")
-            # GPML element names are the subject of half these findings, and GitHub's markdown
-            # treats `<Pathway>` as an unknown HTML tag and drops it — leaving "The file has a
-            # root element." Escaped here rather than in the detail strings, because the same
-            # text is rendered as plain content on the dashboard, where a literal &lt; would be
-            # the bug instead.
-            detail = detail.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-            lines.append(f"| {f.severity.upper()} | {f.title} | {detail} |")
+            lines.append(f"| {f.severity.upper()} | {f.title} | {table_cell(f.detail)} |")
         lines.append("")
         lines.append(
             "These checks are automated and gate nothing. A curator decides."
