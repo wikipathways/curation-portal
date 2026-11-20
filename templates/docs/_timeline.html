@@ -30,8 +30,8 @@
     <tr>
       <td>Publish workflow</td>
       <td>about 1 minute</td>
-      <td>Starts when the <code>accepted</code> label is applied. It assigns the WPID, publishes
-        the files and closes the pull request.</td>
+      <td>Starts when the <code>accepted</code> label is applied. It assigns a new pathway its
+        WPID, publishes the files and closes the pull request.</td>
     </tr>
     <tr>
       <td>Site rebuild</td>
@@ -63,7 +63,8 @@
   <dd>The repository's publish workflow is queued or running. If it fails, the stage says so with
     a link to the run.</dd>
   <dt>Published</dt>
-  <dd>The workflow reported back with the pathway's WPID and closed the pull request.</dd>
+  <dd>The workflow reported back with the pathway's WPID (a new one, for a new pathway) and closed
+    the pull request.</dd>
   <dt>Site live</dt>
   <dd>The pathway's page on {{ site_host or 'the site' }} answers with the new version. This is
     the last step to turn green, a few minutes after Published.</dd>

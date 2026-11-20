@@ -63,6 +63,7 @@ def publish_stages(review, pipeline_run: dict | None, now: datetime | None = Non
     published_at = _when(getattr(review, "published_at", None))
     live_at = _when(run.get("live_at"))
     wpid = getattr(review, "wpid", None)
+    is_update = getattr(review, "kind", None) == "update" and wpid is not None
 
     stages = [
         {
@@ -122,9 +123,24 @@ def publish_stages(review, pipeline_run: dict | None, now: datetime | None = Non
             "at": published_at,
         }
     elif status == "publish_failed":
-        published = {"state": "failed", "detail": "The repository did not announce a WPID."}
+        published = {
+            "state": "failed",
+            "detail": (
+                "The repository did not announce the publication."
+                if is_update
+                else "The repository did not announce a WPID."
+            ),
+        }
     else:
-        published = {"state": "waiting", "detail": "The WPID is assigned when it publishes."}
+        published = {
+            "state": "waiting",
+            # An update has its WPID already; only a new pathway gets one at publication.
+            "detail": (
+                f"It goes to WP{wpid} when it publishes."
+                if is_update
+                else "The WPID is assigned when it publishes."
+            ),
+        }
     stages.append({"key": "published", "label": "Published", "at": None, **published})
 
     # 4. the site

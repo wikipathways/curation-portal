@@ -1057,7 +1057,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         elif status == "failed":
             preview = {"status": "failed"}
         # 'pending' → leave None so the template shows the "generating" empty state
-        shown = presentation(r.status.value)
+        shown = presentation(r.status.value, kind=r.kind, wpid=r.wpid)
         metadata = request.app.state.preview.metadata(r.pr_number)
         return {
             **_detail(r).model_dump(),

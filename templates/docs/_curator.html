@@ -48,8 +48,8 @@
   <dd>
     {% if pipeline_mode %}
     The portal applies the repository's <code>accepted</code> label. The repository's publish
-    workflow then assigns the WPID, publishes the pathway and closes the pull request without
-    merging it; the portal reads the result back and the review becomes
+    workflow then publishes the pathway, assigning its WPID if it is new (an update keeps the one
+    it has), and closes the pull request without merging it; the portal reads the result back and the review becomes
     <em>Published</em>. If the workflow fails, the review says <em>Not published</em>: approve
     again to start a fresh run, or record the WPID by hand if someone published it another way.
     {% else %}

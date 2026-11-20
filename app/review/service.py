@@ -286,6 +286,26 @@ def render_mirror_comment(
     return "\n".join(lines)
 
 
+def approval_comment(curator: str, *, kind: str, wpid: int | None) -> str:
+    """The comment a pipeline-mode approval posts on the pull request.
+
+    An update already has its WPID, so it is not told the repository assigns one.
+    """
+    if kind == "update" and wpid is not None:
+        return (
+            f"@{curator} approved this edit of WP{wpid} in the WikiPathways curation portal."
+            "\n\n"
+            f"The repository's publication workflow takes it from here: it publishes the edit to "
+            f"WP{wpid} and closes this pull request without merging it. That is expected."
+        )
+    return (
+        f"@{curator} approved this pathway in the WikiPathways curation portal.\n\n"
+        "The repository's publication workflow takes it from here: it assigns the WPID, "
+        "publishes the pathway, and closes this pull request without merging it. "
+        "That is expected — the GPML on this branch is not what gets published."
+    )
+
+
 def _plain(status: ReviewStatus) -> str:
     """The status in words, for an error message a curator reads."""
     return _PLAIN_STATUS.get(status.value, status.value)
@@ -1432,7 +1452,7 @@ class CurationService:
 
         if self.is_pipeline_mode:
             self._require_draft_page(pr_number, kind=kind, wpid=wpid)
-            return self._approve_by_label(pr_number, curator)
+            return self._approve_by_label(pr_number, curator, kind=kind, wpid=wpid)
 
         # Merge first; only mutate our state if GitHub accepts the merge. The sha guard closes
         # the window between the head check above and the merge itself.
@@ -1492,7 +1512,9 @@ class CurationService:
                 "revision. If they finished only minutes ago, try again shortly."
             )
 
-    def _approve_by_label(self, pr_number: int, curator: str) -> Review:
+    def _approve_by_label(
+        self, pr_number: int, curator: str, *, kind: str = "new", wpid: int | None = None
+    ) -> Review:
         """Hand the PR to the target repo's own publish workflow by labelling it.
 
         The label is applied *before* the state change and is deliberately not best-effort: if
@@ -1512,9 +1534,9 @@ class CurationService:
         # without a comment the submitter has no way to know a curator acted. After the response
         # when it can be: the label is what hands the pull request over, this only reports it.
         if self._defer is not None:
-            self._defer(self._post_approval_comment, pr_number, curator)
+            self._defer(self._post_approval_comment, pr_number, curator, kind, wpid)
         else:
-            self._post_approval_comment(pr_number, curator)
+            self._post_approval_comment(pr_number, curator, kind, wpid)
 
         with self._session_factory() as s:
             review = s.get(Review, pr_number)
@@ -1526,15 +1548,14 @@ class CurationService:
             self._maybe_mirror(review)
             return review
 
-    def _post_approval_comment(self, pr_number: int, curator: str) -> None:
+    def _post_approval_comment(
+        self, pr_number: int, curator: str, kind: str = "new", wpid: int | None = None
+    ) -> None:
         try:
             self._github.create_issue_comment(
                 self._repo,
                 pr_number,
-                f"@{curator} approved this pathway in the WikiPathways curation portal.\n\n"
-                "The repository's publication workflow takes it from here: it assigns the WPID, "
-                "publishes the pathway, and closes this pull request without merging it. "
-                "That is expected — the GPML on this branch is not what gets published.",
+                approval_comment(curator, kind=kind, wpid=wpid),
             )
         except (GitHubError, httpx.HTTPError):
             logger.warning(

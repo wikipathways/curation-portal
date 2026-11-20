@@ -10,7 +10,7 @@ and say the same things in prose; these are the short forms.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from app.models import ReviewStatus
 
@@ -46,9 +46,10 @@ STATUS: dict[str, StatusPresentation] = {
     ),
     ReviewStatus.APPROVED.value: StatusPresentation(
         label="Approved",
+        # Both kinds, for the docs' table of states; a card uses ``_KIND_BLURB``.
         blurb=(
-            "Approved and handed to the repository. It assigns the WPID, publishes the pathway "
-            "and closes the pull request without merging it."
+            "Approved and handed to the repository. It publishes the pathway, assigning the WPID "
+            "if it is new, and closes the pull request without merging it."
         ),
         empty_heading="Nothing is waiting to be published",
         empty_body="No approved submission is sitting with the repository right now.",
@@ -56,7 +57,7 @@ STATUS: dict[str, StatusPresentation] = {
     ),
     ReviewStatus.PUBLISHED.value: StatusPresentation(
         label="Published",
-        blurb="Published by the repository, with the WPID it assigned.",
+        blurb="Published by the repository. A new pathway has the WPID it assigned.",
         empty_heading="Nothing has been published yet",
         empty_body="No submission has come back from the repository with an assigned WPID.",
         tone="ok",
@@ -156,10 +157,39 @@ def queue_tabs(*, pipeline_mode: bool, counts: dict[str, int]) -> list[dict]:
     ]
 
 
-def presentation(status: str) -> StatusPresentation:
-    return STATUS.get(status) or StatusPresentation(
+#: The banner sentence on a card, by the review's kind, where the generic one hedges for the docs'
+#: table. A new pathway gets its WPID from the repository; an update has had its WPID all along,
+#: and ``{wpid}`` is filled in from the review.
+_KIND_BLURB = {
+    "new": {
+        ReviewStatus.APPROVED.value: (
+            "Approved and handed to the repository. It assigns the WPID, publishes the pathway "
+            "and closes the pull request without merging it."
+        ),
+        ReviewStatus.PUBLISHED.value: "Published by the repository, with the WPID it assigned.",
+    },
+    "update": {
+        ReviewStatus.APPROVED.value: (
+            "Approved and handed to the repository. It publishes the edit to {wpid} and closes "
+            "the pull request without merging it."
+        ),
+        ReviewStatus.PUBLISHED.value: "Published to {wpid} by the repository.",
+    },
+}
+
+
+def presentation(
+    status: str, *, kind: str | None = None, wpid: int | None = None
+) -> StatusPresentation:
+    """How ``status`` is named on screen. Given the review's ``kind`` (and an update's ``wpid``),
+    the banner sentence is the one for that kind rather than the generic one covering both."""
+    shown = STATUS.get(status) or StatusPresentation(
         label=status.replace("_", " ").capitalize(),
         blurb="",
         empty_heading="Nothing here",
         empty_body="No review is in this state.",
     )
+    blurb = _KIND_BLURB.get(kind or "", {}).get(status)
+    if blurb is not None and not (kind == "update" and wpid is None):
+        shown = replace(shown, blurb=blurb.format(wpid=f"WP{wpid}"))
+    return shown

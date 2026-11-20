@@ -727,9 +727,13 @@
             toast(describeError(res.status, res.body), 'error');
             return;
           }
-          toast(PIPELINE_MODE
-            ? 'Approved. The repository assigns the WPID and publishes it from here.'
-            : 'Approved and merged.', 'success');
+          // The response is the review (ReviewDetail): an update has its WPID already, so it is
+          // not told the repository assigns one.
+          var approved = res.body || {};
+          var isUpdate = approved.kind === 'update' && approved.wpid;
+          toast(!PIPELINE_MODE ? 'Approved and merged.'
+            : isUpdate ? 'Approved. The repository publishes it to WP' + approved.wpid + ' from here.'
+            : 'Approved. The repository assigns the WPID and publishes it from here.', 'success');
           refreshCard(card2);
         })
         .catch(function () {
