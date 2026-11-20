@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Hostile input for the renderer: every GPML value that reaches the SVG tries to break out of
+     where it is written. The test asserts the output passes assert_safe_svg and carries none of
+     the payloads in a live position. -->
+<Pathway xmlns="http://pathvisio.org/GPML/2013a" Name="&quot;&gt;&lt;script&gt;alert(1)&lt;/script&gt; javascript:alert(2) url(evil)" Organism="Homo sapiens">
+  <Graphics BoardWidth="NaN" BoardHeight="1e300" />
+  <DataNode TextLabel="&lt;script&gt;alert(3)&lt;/script&gt;" GraphId="&quot;&gt;&lt;x onload=alert(4)" Type="Gene&quot; onclick=&quot;alert(5)" GroupRef="loopA">
+    <Graphics CenterX="100" CenterY="100" Width="80" Height="25" Color="red&quot; onload=&quot;alert(6)" FillColor="url(javascript:alert(7))" FontName="Arial;}&lt;/style&gt;&lt;script&gt;alert(8)&lt;/script&gt;" FontSize="1e300" ShapeType="&lt;script&gt;" Rotation="NaN" LineThickness="100000" />
+    <Xref Database="Ensembl" ID="javascript:alert(9)" />
+  </DataNode>
+  <DataNode TextLabel="control&#x85;chars&#x9F;here&#x9;tab" GraphId="dup" Type="GeneProduct" GroupRef="self">
+    <Graphics CenterX="200" CenterY="100" Width="80" Height="25" Color="0000ffzz" />
+  </DataNode>
+  <DataNode TextLabel="duplicate id" GraphId="dup" Type="GeneProduct" GroupRef="loopB">
+    <Graphics CenterX="300" CenterY="100" Width="80" Height="25" Color="#00ff00" />
+  </DataNode>
+  <DataNode TextLabel="not a number" GraphId="nan" Type="GeneProduct">
+    <Graphics CenterX="NaN" CenterY="100" Width="80" Height="25" />
+  </DataNode>
+  <DataNode TextLabel="far away" GraphId="far" Type="GeneProduct">
+    <Graphics CenterX="1e300" CenterY="-1e300" Width="80" Height="25" />
+  </DataNode>
+  <DataNode TextLabel="infinite" GraphId="inf" Type="GeneProduct">
+    <Graphics CenterX="inf" CenterY="100" Width="-80" Height="25" />
+  </DataNode>
+  <Group GroupId="loopA" GraphId="gA" Style="Complex" GroupRef="loopB" />
+  <Group GroupId="loopB" GraphId="gB" Style="Group&quot; onmouseover=&quot;alert(10)" GroupRef="loopA" />
+  <Group GroupId="self" GraphId="gS" Style="Complex" GroupRef="self" />
+  <Interaction GraphId="i1">
+    <Graphics ConnectorType="javascript:alert(11)" Color="expression(alert(12))" LineStyle="&quot;/&gt;">
+      <Point X="140" Y="100" GraphRef="dup" />
+      <Point X="NaN" Y="100" />
+      <Point X="260" Y="100" GraphRef="nowhere" ArrowHead="javascript:alert(13)" />
+      <Anchor Position="NaN" Shape="Circle" GraphId="&lt;anchor&gt;" />
+    </Graphics>
+  </Interaction>
+  <Interaction GraphId="i2">
+    <Graphics>
+      <Point X="1e300" Y="1e300" />
+      <Point X="100" Y="200" ArrowHead="Arrow" />
+    </Graphics>
+  </Interaction>
+  <Label TextLabel="click me" GraphId="l1" Href="javascript:alert(14)">
+    <Graphics CenterX="100" CenterY="300" Width="80" Height="20" />
+  </Label>
+  <Label TextLabel="data url" GraphId="l2" Href="data:text/html,&lt;script&gt;alert(15)&lt;/script&gt;">
+    <Graphics CenterX="200" CenterY="300" Width="80" Height="20" />
+  </Label>
+</Pathway>
