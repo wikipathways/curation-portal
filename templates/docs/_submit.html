@@ -1,0 +1,67 @@
+<ol class="docs-steps">
+  <li>
+    <strong>Sign in</strong> with GitHub (top right), then stay on the <a href="/">Submit</a>
+    page with the <em>New pathway</em> tab selected.
+  </li>
+  <li>
+    <strong>Choose your <code>.gpml</code> file.</strong> The portal checks it at once, before
+    anything is sent anywhere, and lists what it found right under the file picker. Each finding
+    is marked <em>Blocked</em>, <em>Problem</em> or <em>Worth a look</em>
+    (<a href="#rules">what the checks are</a>). Only a <em>Blocked</em> finding stops the
+    submission: the file is not a readable pathway, or it has no title or organism. Everything
+    else is advice, and fixing it now saves a round trip with a curator.
+  </li>
+  <li>
+    <strong>Add a note for reviewers</strong> if there is something a curator should know: where
+    the pathway comes from, what it covers, open questions. It is optional, and it is shown on the
+    review page and on the pull request.
+  </li>
+  <li>
+    <strong>Press <em>Submit new pathway</em>.</strong> The portal files the pathway where the
+    repository expects it, opens the pull request in your name and shows you its number, with a
+    link to <em>Follow the review</em>.
+  </li>
+</ol>
+
+<h3>What happens next</h3>
+<ul>
+  <li>
+    {% if pipeline_mode %}
+    Your pathway does not have a WPID yet. The repository assigns one when a curator approves it
+    and it is published; until then the review shows a placeholder.
+    {% else %}
+    Your pathway gets its WPID straight away; the confirmation names it.
+    {% endif %}
+  </li>
+  <li>
+    The submission appears under <a href="/dashboard?mine=1">My submissions</a>, where you can
+    follow it through review. GitHub emails you about comments on the pull request, as it does for
+    any pull request you open.
+  </li>
+  {% if pipeline_mode %}
+  <li>
+    The repository runs its own processing on the pull request: it extracts the identifiers and
+    references, draws its own version of the diagram and builds a <em>draft page</em> showing how
+    the pathway will look once published. This takes several minutes
+    (<a href="#timeline">how long things take</a>), and a curator cannot approve until the draft
+    page exists.
+  </li>
+  {% endif %}
+</ul>
+
+<h3>Where your pull request comes from</h3>
+<p>
+  Most people cannot write to the WikiPathways repository directly, so on your first submission
+  the portal creates your own copy of it on GitHub (a <em>fork</em>) and opens the pull request
+  from there. You do not have to do anything with the fork. Before each submission the portal
+  tries to bring it up to date with the repository. If your fork carries changes of its own that
+  the repository does not have, the portal opens the pull request through its own GitHub account
+  instead, so those changes cannot slip into your submission; you are still named as the author.
+</p>
+
+<h3>Limits</h3>
+<ul>
+  <li>One pathway per submission. To submit several, upload them one at a time.</li>
+  <li>To stop runaway retries, one account can open a limited number of pull requests per hour.
+    Uploading a correction to an existing pull request does not count.</li>
+</ul>

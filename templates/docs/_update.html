@@ -1,0 +1,39 @@
+<p>
+  To change a pathway that is already on WikiPathways, use the <em>Update existing</em> tab on
+  the <a href="/">Submit</a> page.
+</p>
+<ol class="docs-steps">
+  <li>
+    <strong>Type the pathway's WPID</strong>, for example <code>WP554</code>. When you leave the
+    field the portal looks it up and shows its title.
+  </li>
+  <li>
+    <strong>Download the current version</strong> with the link that appears, and make your edit
+    on that copy in PathVisio. This matters: an update replaces the whole file, so an edit made on
+    an older copy would quietly undo whatever changed since, and the portal refuses to approve it
+    (see <a href="#troubleshooting-base-moved">the pathway changed after you started</a>).
+  </li>
+  <li>
+    <strong>Choose your edited file.</strong> The same checks as for a new pathway run at once,
+    plus one more: whether the file says it is the pathway you typed. An update is judged on what
+    it changes, so problems the pathway already had are reported as such and do not count against
+    your edit.
+  </li>
+  <li>
+    <strong>Tick what you changed</strong> and add a few words if it helps. This becomes the
+    summary a curator reads first. <em>Other</em> needs a sentence of explanation.
+  </li>
+  <li><strong>Press <em>Submit update</em>.</strong></li>
+</ol>
+
+<h3>One editor at a time</h3>
+<p>
+  GPML files cannot be merged line by line the way text can, so while one update of a pathway is
+  open nobody else can start another. If someone else is editing the pathway, the portal says who;
+  wait until their update is finished. If you upload again while your own update is still open,
+  the new file goes onto the same pull request instead of opening a second one.
+</p>
+<p>
+  While an update is approved and being published it cannot be changed. Wait for it to finish,
+  then start a new update from the published version.
+</p>

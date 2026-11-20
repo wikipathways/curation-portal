@@ -1055,6 +1055,8 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             "Disallow: /api\n"
             "Disallow: /webhooks\n"
             "Allow: /$\n"
+            # The help pages are public prose meant to be found.
+            "Allow: /docs\n"
         )
         return Response(content=body, media_type="text/plain; charset=utf-8")
 
@@ -2300,6 +2302,9 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             "tracked": review is not None,
         }
 
+    from app.docs import register_docs  # its own module so the help page stays out of here
+
+    register_docs(app, _page_ctx, templates=templates, settings=settings)
     return app
 
 

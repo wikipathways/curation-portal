@@ -1,0 +1,56 @@
+<p>
+  WikiPathways keeps every pathway as a GPML file in a GitHub repository. This portal lets you add
+  or change one without using git: you upload the file in your browser, and the portal files it
+  in the right place and opens a <em>pull request</em> for you, a proposed change that curators
+  review before it becomes part of WikiPathways.
+</p>
+
+<h3>What you need</h3>
+<ul>
+  <li>
+    <strong>A GitHub account.</strong> You sign in with it, and your submission is made under
+    your name. When you sign in for the first time GitHub asks you to allow access to your public
+    repositories. It offers no smaller option; the portal uses it only to submit the pathways you
+    upload.
+  </li>
+  <li>
+    <strong>A pathway saved as GPML</strong>, normally from
+    <a href="https://pathvisio.org" target="_blank" rel="noopener">PathVisio</a>. Files in the
+    current WikiPathways format (GPML 2013a) are accepted.
+  </li>
+</ul>
+
+<h3>Try it with an example</h3>
+<p>
+  Two small example files show what a complete pathway looks like. The second is a revision of
+  the first: it adds the AHR repressor, two interactions, a reference and a cell-type tag, so it
+  is also handy for seeing how an update is compared with what came before.
+</p>
+<ul>
+  <li><a href="/static/examples/example-pathway.gpml" download>example-pathway.gpml</a>, aryl hydrocarbon receptor activation by dioxin</li>
+  <li><a href="/static/examples/example-pathway-revision.gpml" download>example-pathway-revision.gpml</a>, the same pathway, revised</li>
+</ul>
+<p>
+  Choosing one in the submit form shows the checks without sending anything. The only remark
+  you should see is about the missing Author, which the examples leave out on purpose: the
+  portal fills in your name.
+</p>
+
+<h3>The short version</h3>
+<ol>
+  <li>Sign in and choose your file on the <a href="/">Submit</a> page. The portal checks it
+    straight away and tells you what, if anything, is worth fixing.</li>
+  <li>Submit. A pull request opens in your name and appears under
+    <a href="/dashboard?mine=1">My submissions</a>.</li>
+  <li>A curator reviews the drawn pathway and works through a checklist. They may ask you for
+    changes, which you answer by uploading a corrected file.</li>
+  <li>{% if pipeline_mode %}When a curator approves, the repository gives the pathway its WPID
+    (its WikiPathways identifier) and publishes it.{% else %}When a curator approves, the pull
+    request is merged and the pathway is part of WikiPathways.{% endif %}</li>
+</ol>
+<p>
+  Everything you upload is released under
+  <a href="https://creativecommons.org/publicdomain/zero/1.0/" target="_blank" rel="noopener">CC0</a>,
+  like all WikiPathways content. For help with drawing pathways and with GPML itself, see the
+  <a href="https://www.wikipathways.org/help.html" target="_blank" rel="noopener">WikiPathways help pages</a>.
+</p>

@@ -1,0 +1,109 @@
+<p>
+  Curators are a configured list of GitHub accounts. Signed in as one, the header shows a
+  <span class="badge badge--curator">Curator</span> badge, the queue becomes the
+  <a href="/dashboard">Curation queue</a>, and review pages gain the checklist controls and the
+  decision buttons. Everyone else can read every review but not change it.
+</p>
+
+<h3>The queue</h3>
+<p>
+  The tabs filter by state; <em>Assigned to me</em> lists the unfinished reviews you lead. Each
+  card shows the pathway's name, organism, age and assignee, a summary of the automated checks
+  and a small diagram. <em>Open full review</em> opens the page where the work is done.
+</p>
+<p>
+  <em>On GitHub, not in the portal</em> lists open pull requests that change pathway files but
+  were not made through the portal, for example from the PathVisio plugin. <em>Adopt</em> builds a
+  review from one and posts a short comment on the pull request. An adopted pull request is
+  reviewed like any other, except that the portal cannot change its file: the author pushes fixes
+  to it.
+</p>
+
+<h3>Working through a review</h3>
+<ol class="docs-steps">
+  <li>
+    <strong>Assign yourself</strong> (or someone else) with <em>Assign reviewer</em>, so others
+    know who is leading it. Any curator can still act on it.
+  </li>
+  <li>
+    <strong>Read the automated checks and the diagram.</strong> For an update, start from what
+    changed.
+  </li>
+  <li>
+    <strong>Answer the checklist.</strong> Mark each item <em>Pass</em>, <em>Fail</em> or
+    <em>N/A</em>. Required items carry a dot. Items marked <em>auto</em> were filled in from the
+    file; they are suggestions, and you can overrule any of them. An item marked <em>N/A</em> never
+    blocks approval. For an update, items the edit did not touch are set to N/A for you.
+  </li>
+  <li>
+    <strong>Decide.</strong> Approve becomes available when every required item is marked Pass;
+    until then, hovering over it names the items still to do.
+  </li>
+</ol>
+
+<h3>The three decisions</h3>
+<dl class="docs-defs">
+  <dt>{% if pipeline_mode %}Approve for publication{% else %}Approve &amp; merge{% endif %}</dt>
+  <dd>
+    {% if pipeline_mode %}
+    The portal applies the repository's <code>accepted</code> label. The repository's publish
+    workflow then assigns the WPID, publishes the pathway and closes the pull request without
+    merging it; the portal reads the result back and the review becomes
+    <em>Published</em>. If the workflow fails, the review says <em>Not published</em>: approve
+    again to start a fresh run, or record the WPID by hand if someone published it another way.
+    {% else %}
+    The portal merges the pull request and the pathway is part of WikiPathways.
+    {% endif %}
+  </dd>
+  <dt>Request changes</dt>
+  <dd>
+    Sends the submission back to its author with your note, posted as a comment on the pull
+    request so they are emailed. A <em>Request changes</em> review left on GitHub has the same
+    effect. (An approval left on GitHub does not approve here: approval always goes through the
+    portal.)
+  </dd>
+  <dt>Reject</dt>
+  <dd>
+    Asks for a reason, posted on the pull request.
+    {% if pipeline_mode %}The portal applies the repository's <code>rejected</code> label; its
+    workflow deletes the drafts and closes the pull request.{% else %}The pull request is closed
+    and its WPID returned to the pool.{% endif %} There is no undo.
+  </dd>
+</dl>
+
+<h3>When approval is refused</h3>
+<p>The portal refuses to approve in a few situations, each of which would publish the wrong thing:</p>
+<ul>
+  <li><strong>The pull request changed after you loaded the page.</strong> Approval applies to
+    the version you looked at. Reload and check the new one.</li>
+  <li><strong>The pathway changed on the main branch after the update was made.</strong> Approving
+    would undo that change. The submitter redoes the edit on the current version.</li>
+  <li><strong>The pull request changes other files too.</strong> Only the pathway may be
+    published. Usually the submitter's fork has drifted (see
+    <a href="#troubleshooting-unexpected-files">unexpected files</a>).</li>
+  {% if pipeline_mode %}
+  <li><strong>The draft page is not built yet.</strong> The repository's publish workflow needs it.
+    If the repository's processing failed, the submitter has to fix the file; if it just finished,
+    try again in a few minutes.</li>
+  {% endif %}
+</ul>
+
+{% if pipeline_mode %}
+<h3>Recording a WPID by hand</h3>
+<p>
+  An approved submission whose publication never reported back offers a
+  <em>Record the published WPID</em> box. Once you have confirmed on GitHub or {{ site_host or 'the site' }}
+  which identifier the repository assigned, enter it there to close the review.
+</p>
+
+<h3>Labels on the pull request</h3>
+<p>The labels you will see on the pull requests, and who sets them:</p>
+<table class="docs-table">
+  <thead><tr><th scope="col">Label</th><th scope="col">Meaning</th></tr></thead>
+  <tbody>
+    {% for l in labels %}
+    <tr><td><span class="gh-label">{{ l.name }}</span></td><td>{{ l.meaning }}</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
