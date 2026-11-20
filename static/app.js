@@ -1394,10 +1394,15 @@
             (items.length > people ? ', and ' + (items.length - people) + ' from bots, folded.' : '.');
         items.forEach(function (i) { list.appendChild(conversationEntry(i)); });
         // A cached copy past its minute is answered at once and re-read on the server; ask
-        // again once, shortly, to show the fresh one.
-        if (res.body.stale && !section.hasAttribute('data-refetched')) {
-          section.setAttribute('data-refetched', '');
-          setTimeout(function () { loadConversation(section); }, 2000);
+        // again shortly to show the fresh one. The re-read makes three GitHub calls and can
+        // take longer than the first wait, so keep asking while the answer is still stale:
+        // after 2, 4 and 8 seconds, then leave it.
+        var tries = parseInt(section.getAttribute('data-stale-tries') || '0', 10);
+        if (res.body.stale && tries < 3) {
+          section.setAttribute('data-stale-tries', String(tries + 1));
+          setTimeout(function () { loadConversation(section); }, 2000 * Math.pow(2, tries));
+        } else if (!res.body.stale) {
+          section.removeAttribute('data-stale-tries');
         }
       })
       .catch(function () { status.textContent = 'Could not load the conversation. Reload to try again.'; });

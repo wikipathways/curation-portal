@@ -197,7 +197,9 @@
     {# The card is drawn from the database; this says how fresh that is against GitHub, and the
        button redraws just this card (refresh.js) instead of reloading the page. #}
     <div class="review-card__fresh">
-      <span class="review-card__checked" aria-live="polite">
+      {# Not a live region: it is rewritten every minute by the timer. A Refresh press is
+         announced once, by refresh.js. #}
+      <span class="review-card__checked">
         {%- if r.checked_at %}Checked {{ r.checked_at | ago }}{% elif r.actionable or r.awaiting_wpid %}Checking with GitHub{% endif -%}
       </span>
       <button type="button" class="btn btn--ghost btn--sm review-card__refresh" data-refresh-card data-tour="refresh" aria-label="Refresh this review">Refresh</button>

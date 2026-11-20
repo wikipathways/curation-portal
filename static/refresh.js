@@ -62,41 +62,119 @@
     });
   }
 
-  // Focus is restored to the equivalent control: same class list and same data-key/data-state,
-  // falling back to the card itself so a keyboard user is not dropped at the top of the page.
-  function focusKey(el) {
+  // The last element that had focus. A button disabled while its request runs drops focus to
+  // <body>; this is how a swap still knows the person was working in that card.
+  var lastFocused = null;
+  document.addEventListener('focusin', function (e) { lastFocused = e.target; });
+
+  // The element focus is (or, if it fell to <body>, was last) on, when that is inside `el`.
+  function focusedIn(el) {
     var a = document.activeElement;
-    if (!a || !el.contains(a) || a === el) return null;
+    if (a && a !== document.body && a !== document.documentElement) {
+      return el.contains(a) ? a : null;
+    }
+    // Only a control that lost focus by being disabled (its request is running), not one the
+    // person simply clicked away from.
+    return lastFocused && lastFocused.disabled && el.contains(lastFocused) ? lastFocused : null;
+  }
+
+  // Focus is restored to the equivalent control: same tag, class list and data-key/data-state.
+  // Failing that (an SVG node of the viewer, a button that is gone), to the card's Refresh
+  // button or its heading, so a keyboard user is not dropped at the top of the page.
+  function focusKey(el) {
+    var a = focusedIn(el);
+    if (!a) return null;
     var item = a.closest('[data-key]');
     return {
-      cls: (a.className || '').toString(),
+      // getAttribute, not className: an SVG element's className is an object, not a string.
+      cls: a.getAttribute('class') || '',
       tag: a.tagName,
       key: item ? item.getAttribute('data-key') : null,
-      state: a.getAttribute('data-state')
+      state: a.getAttribute('data-state'),
+      self: a === el
     };
+  }
+
+  function focusFallback(el) {
+    var target = el.querySelector('[data-refresh-card]:not([disabled])') ||
+      el.querySelector('.review-card__title');
+    if (!target) target = el;
+    if (!target.matches('a[href], button, input, select, textarea, [tabindex]')) {
+      target.setAttribute('tabindex', '-1');
+    }
+    target.focus({ preventScroll: true });
   }
 
   function restoreFocus(el, key) {
     if (!key) return;
-    var candidates = el.querySelectorAll(key.tag);
-    for (var i = 0; i < candidates.length; i++) {
-      var c = candidates[i];
-      if ((c.className || '').toString() !== key.cls) continue;
-      if (key.state !== null && c.getAttribute('data-state') !== key.state) continue;
-      var item = c.closest('[data-key]');
-      if (key.key !== null && (!item || item.getAttribute('data-key') !== key.key)) continue;
-      c.focus({ preventScroll: true });
-      return;
+    if (!key.self) {
+      var candidates = el.querySelectorAll(key.tag);
+      for (var i = 0; i < candidates.length; i++) {
+        var c = candidates[i];
+        if ((c.getAttribute('class') || '') !== key.cls) continue;
+        if (key.state !== null && c.getAttribute('data-state') !== key.state) continue;
+        var item = c.closest('[data-key]');
+        if (key.key !== null && (!item || item.getAttribute('data-key') !== key.key)) continue;
+        if (c.disabled) break;
+        c.focus({ preventScroll: true });
+        if (document.activeElement === c) return;
+        break;
+      }
     }
+    focusFallback(el);
+  }
+
+  // One polite live region for the whole page. The "Checked …" text on each card is rewritten
+  // by the timer and is deliberately not live; only a Refresh press is announced, here.
+  var liveRegion = null;
+  function announce(msg) {
+    if (!liveRegion) {
+      liveRegion = document.createElement('div');
+      liveRegion.className = 'visually-hidden';
+      liveRegion.setAttribute('role', 'status');
+      liveRegion.setAttribute('aria-live', 'polite');
+      document.body.appendChild(liveRegion);
+    }
+    liveRegion.textContent = '';
+    // A fresh text node after clearing, so the same words twice are still read out.
+    setTimeout(function () { liveRegion.textContent = msg; }, 50);
+  }
+
+  // "4 min ago", as the server's `ago` filter words it (main.py _ago). For <time data-ago>,
+  // whose wording is left out of the card's ETag and so kept current here.
+  function ago(iso) {
+    var t = Date.parse(iso);
+    if (isNaN(t)) return null;
+    var s = Math.max(0, Math.floor((Date.now() - t) / 1000));
+    if (s < 45) return 'just now';
+    if (s < 3600) return Math.max(1, Math.round(s / 60)) + ' min ago';
+    if (s < 86400) return Math.floor(s / 3600) + ' h ago';
+    return null; // older: the server's day-level wording stands
+  }
+
+  function refreshTimes(el) {
+    el.querySelectorAll('time[data-ago][datetime]').forEach(function (t) {
+      var words = ago(t.getAttribute('datetime'));
+      if (words !== null && t.textContent !== words) t.textContent = words;
+    });
   }
 
   // Something the person is in the middle of: an open decision panel, a chosen revision file,
-  // focus in a text field. The timer leaves such a card alone; the Refresh button does not.
+  // focus in a text field, or the diagram in use (fullscreen, a node's panel open, focus or the
+  // pointer on the viewer). A swap re-mounts the viewer and would lose its zoom, pan and
+  // selection. The timer leaves such a card alone; the Refresh button does not.
   function busy(el) {
     if (el.querySelector('.changes-panel:not([hidden]), .reject-panel:not([hidden])')) return true;
     var file = el.querySelector('.revise-file');
     if (file && file.files && file.files.length) return true;
+    var fs = document.fullscreenElement;
+    if (fs && (el.contains(fs) || fs.contains(el))) return true;
+    if (el.querySelector('.node-panel:not([hidden])')) return true;
     var a = document.activeElement;
+    if (a && el.contains(a) && a.closest('[data-viewer]')) return true;
+    try {
+      if (el.querySelector('[data-viewer]:hover')) return true;
+    } catch (e) { /* :hover unsupported in querySelector: ignore */ }
     return !!(a && el.contains(a) && /^(TEXTAREA|INPUT|SELECT)$/.test(a.tagName));
   }
 
@@ -126,9 +204,13 @@
     a.href = '/dashboard/' + newEl.getAttribute('data-pr');
     a.textContent = 'Open it';
     note.appendChild(a);
+    // Focus was in the card (on the button just pressed, perhaps): move it to the note's link,
+    // or it falls to <body> along with the card.
+    var hadFocus = !!focusedIn(oldEl);
     if (window.WPViewer && window.WPViewer.unmountAll) window.WPViewer.unmountAll(oldEl);
     oldEl.replaceWith(note);
     clearTimeout(timers.get(oldEl));
+    if (hadFocus) a.focus({ preventScroll: true });
     return note;
   }
 
@@ -166,6 +248,7 @@
           var checked = r.headers.get('X-Checked');
           var span = el.querySelector('.review-card__checked');
           if (checked !== null && span) span.textContent = checked;
+          refreshTimes(el);
           if (!isNaN(after)) el.setAttribute('data-poll-after', String(after));
           schedule(el);
           return el;
@@ -266,8 +349,15 @@
       one.disabled = true;
       card(el, { recheck: true })
         .then(function (now) {
-          var btn = now && now.querySelector('[data-refresh-card]');
-          if (btn) { btn.disabled = false; if (now !== el) btn.focus({ preventScroll: true }); }
+          var btn = now && now.querySelector && now.querySelector('[data-refresh-card]');
+          if (btn) {
+            btn.disabled = false;
+            // Disabling it dropped focus (a 304 keeps the same button); a swap brought a new one.
+            var a = document.activeElement;
+            if (now !== el || !a || a === document.body || a === btn) btn.focus({ preventScroll: true });
+          }
+          var span = now && now.querySelector && now.querySelector('.review-card__checked');
+          announce('Review refreshed.' + (span && span.textContent.trim() ? ' ' + span.textContent.trim() + '.' : ''));
         })
         .catch(function () {
           one.disabled = false;

@@ -22,6 +22,7 @@ from collections.abc import Callable
 from contextlib import asynccontextmanager
 from datetime import timedelta
 from pathlib import Path
+from typing import NamedTuple
 from urllib.parse import urlparse
 
 import httpx
@@ -44,6 +45,7 @@ from fastapi.responses import (
 )
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from markupsafe import Markup, escape
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 from starlette.middleware.gzip import GZipMiddleware
@@ -571,6 +573,9 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         session_factory = make_session_factory(engine)
         # GitHub App (bot) identity — privileged merge/comment. None → those routes 503 (dev).
         bot_app = _make_bot_app(settings)
+        # Whether the background loop will run (below). Decided once, here, because the curator
+        # registry's refresh depends on it as well as the loop itself.
+        loop_on = bot_app is not None and settings.background_interval_seconds > 0
         app.state.settings = settings
         app.state.session_factory = session_factory
         app.state.bot_app = bot_app
@@ -596,8 +601,10 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             config_logins=settings.curators,
             bot_client_provider=lambda: app.state.bot_client_provider(),
             # An expired team membership is re-read by the background loop, not by the page
-            # that happens to notice (C10).
-            background=True,
+            # that happens to notice (C10). Only when there is a loop: without one, nothing
+            # would ever re-read it, and a curator removed from the team would keep their
+            # rights until a restart.
+            background=loop_on,
         )
         # Pathway preview: the app draws before/after itself and caches it (issue #11).
         app.state.preview = PreviewService(cache_dir=settings.preview_cache_dir)
@@ -703,7 +710,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         # Only with an App identity: without one there is nothing to reconcile against, and the
         # tests (which wire no App) drive ``worker.tick`` themselves.
         loop_task = None
-        if bot_app is not None and settings.background_interval_seconds > 0:
+        if loop_on:
             loop_task = asyncio.create_task(
                 app.state.worker.run(settings.background_interval_seconds)
             )
@@ -1219,6 +1226,8 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         else:
             matching = sum(counts.values()) if status is None else counts.get(status.value, 0)
         pager = _pager(request, page=page, total=matching)
+        page_ctx = _page_ctx(request)
+        curators = sorted(request.app.state.curators.members())
         reviews = [
             _review_view(request, r)
             for r in curation.list_queue(
@@ -1237,9 +1246,14 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             request,
             "dashboard.html",
             {
-                **_page_ctx(request),
+                **page_ctx,
                 "reviews": reviews,
-                "curators": sorted(request.app.state.curators.members()),
+                # Each card rendered as the card route renders it, ETag included (_render_card).
+                "cards": {
+                    v["pr_number"]: _render_card(page_ctx, v, curators, expanded=False).html
+                    for v in reviews
+                },
+                "curators": curators,
                 "repo": settings.content_repo,
                 "status": status.value if status is not None else None,
                 "mine": bool(submitter),
@@ -1326,23 +1340,39 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="no diff on file for this pull request")
         return JSONResponse(data)
 
-    def _ask_for_a_recheck(request: Request, curation: CurationService, r, *, anyone=False):
-        """Queue a re-check of this review on the background loop when it is due. True if asked.
+    def _ask_for_a_recheck(
+        request: Request, curation: CurationService, r, *, anyone=False
+    ) -> str | None:
+        """Have this review re-checked against GitHub when it is due.
 
-        What a page does instead of reconciling inline: it renders from the database at once and
-        its card asks for itself again a moment later. Curators ask for any due review; with
-        ``anyone`` (the card's own polling while a publication runs), any signed-in viewer may.
-        Never anonymous, so a visitor cannot spend the portal's GitHub quota.
+        Returns ``"queued"`` when the background loop was asked (the page renders from the
+        database at once and its card asks for itself again a moment later), ``"checked"`` when
+        it was re-checked inline here, and None when nothing was done.
+
+        Curators ask for any due review; with ``anyone`` (the card's own polling while a
+        publication runs), any signed-in viewer may queue one. Never anonymous, so a visitor
+        cannot spend the portal's GitHub quota.
+
+        Without a running loop (no App identity, or PORTAL_BACKGROUND_INTERVAL_SECONDS=0) a
+        queued request would never be taken, so a curator's request re-checks inline, as the
+        page did before the loop existed. Other viewers get nothing then: their card keeps its
+        normal interval and shows what the next curator visit or webhook records.
         """
         login = request.session.get("gh_login")
         if not login:
-            return False
-        if not (anyone or request.app.state.curators.is_curator(login)):
-            return False
+            return None
+        curator = request.app.state.curators.is_curator(login)
+        if not (anyone or curator):
+            return None
         if not curation.is_due(r):
-            return False
-        request.app.state.worker.request_review(r.pr_number)
-        return True
+            return None
+        worker = request.app.state.worker
+        if worker.loop_running:
+            worker.request_review(r.pr_number)
+            return "queued"
+        if curator and worker.recheck_now(r.pr_number):
+            return "checked"
+        return None
 
     @app.get("/dashboard/{pr_number}", response_class=HTMLResponse)
     def review_page(request: Request, pr_number: int):
@@ -1354,18 +1384,28 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             r = curation.get(pr_number)
         except ReviewNotFound as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
-        asked = _ask_for_a_recheck(request, curation, r)
+        if _ask_for_a_recheck(request, curation, r) == "checked":
+            r = curation.get(pr_number)  # re-checked inline (no loop): show what it found
         events = review_history(request.app.state.session_factory, pr_number)
         view = _review_view(request, r)
-        if asked or request.app.state.worker.is_pending(pr_number):
+        if request.app.state.worker.is_pending(pr_number):
             view["poll_after"] = 2  # the loop is on it; show its answer as soon as it lands
+        curators = sorted(request.app.state.curators.members())
+        page_ctx = _page_ctx(request)
         return templates.TemplateResponse(
             request,
             "review_detail.html",
             {
-                **_page_ctx(request),
+                **page_ctx,
                 "review": view,
-                "curators": sorted(request.app.state.curators.members()),
+                # Rendered once, the way the card route renders it, so the page's card carries
+                # the same ETag and the first timer poll is a 304 rather than a swap (K5).
+                "card_html": (
+                    _render_card(page_ctx, view, curators, expanded=True).html
+                    if page_ctx["login"]
+                    else None
+                ),
+                "curators": curators,
                 "repo": settings.content_repo,
                 "history": [_event_view(e) for e in events],
             },
@@ -1390,38 +1430,54 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             r = curation.get(pr_number)
         except ReviewNotFound as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        busy = _poll_after(r) == 5
+        if (recheck or busy) and _ask_for_a_recheck(
+            request, curation, r, anyone=busy
+        ) == "checked":
+            r = curation.get(pr_number)  # re-checked inline (no loop): show what it found
         view = _review_view(request, r)
-        busy = view["poll_after"] == 5
-        if recheck or busy:
-            _ask_for_a_recheck(request, curation, r, anyone=busy)
         if request.app.state.worker.is_pending(pr_number):
             view["poll_after"] = 2  # the loop is on it; show its answer as soon as it lands
-        body = templates.get_template("_card_fragment.html").render(
-            {
-                **_page_ctx(request),
-                "review": view,
-                "expanded": bool(expanded),
-                "curators": sorted(request.app.state.curators.members()),
-            }
+        card = _render_card(
+            _page_ctx(request),
+            view,
+            sorted(request.app.state.curators.members()),
+            expanded=bool(expanded),
         )
-        # "Checked 2 min ago" changes every minute, and every pass of the loop moves it, so it is
-        # left out of the ETag and sent as a header the client applies to the card it has; the
-        # poll interval travels in X-Poll-After the same way. A card otherwise unchanged is then
-        # a 304, not a swap that re-mounts the diagram.
-        checked = _CHECKED_SPAN_RE.search(body)
-        etag_body = _POLL_ATTR_RE.sub("", _CHECKED_SPAN_RE.sub("", body))
-        etag = 'W/"' + hashlib.sha1(etag_body.encode("utf-8")).hexdigest()[:20] + '"'
         # No Vary here: SessionMiddleware adds "Vary: Cookie" to any response that read the
         # session, which this one always does, and a second copy only repeats it.
         headers = {
-            "ETag": etag,
+            "ETag": card.etag,
             "Cache-Control": "private, no-cache",
             "X-Poll-After": str(view["poll_after"]),
-            "X-Checked": checked.group(1).strip() if checked else "",
+            "X-Checked": card.checked,
         }
-        if etag in [t.strip() for t in request.headers.get("if-none-match", "").split(",")]:
+        if card.etag in [t.strip() for t in request.headers.get("if-none-match", "").split(",")]:
             return Response(status_code=304, headers=headers)
-        return HTMLResponse(body, headers=headers)
+        return HTMLResponse(card.html, headers=headers)
+
+    def _render_card(page_ctx: dict, view: dict, curators: list[str], *, expanded: bool):
+        """One review card as the card route serves it, with its ETag on the ``<article>``.
+
+        The review page and the queue render their cards through this too, so a card on a page
+        is byte-for-byte what the route would answer and carries the same ``data-etag``: the
+        first timer poll is then a 304, not a swap that re-mounts the diagram for nothing.
+
+        Left out of the ETag, because they change with the clock and not with the review:
+        "Checked 2 min ago" (sent as X-Checked, which the client applies on a 304), the poll
+        interval (X-Poll-After), and the relative times inside ``<time data-ago>``, which the
+        client rewrites from their ``datetime``.
+        """
+        body = templates.get_template("_card_fragment.html").render(
+            {**page_ctx, "review": view, "expanded": expanded, "curators": curators}
+        )
+        checked = _CHECKED_SPAN_RE.search(body)
+        etag_body = _AGO_TIME_RE.sub(
+            r"\1</time>", _POLL_ATTR_RE.sub("", _CHECKED_SPAN_RE.sub("", body))
+        )
+        etag = 'W/"' + hashlib.sha1(etag_body.encode("utf-8")).hexdigest()[:20] + '"'
+        html = body.replace("<article ", f'<article data-etag="{escape(etag)}" ', 1)
+        return _Card(Markup(html), etag, checked.group(1).strip() if checked else "")
 
     def _event_view(e) -> dict:
         """One audit event as a sentence's worth of parts."""
@@ -2539,6 +2595,15 @@ _CHECKED_SPAN_RE = re.compile(
     r'<span class="review-card__checked"[^>]*>([^<]*)</span>', re.DOTALL
 )
 _POLL_ATTR_RE = re.compile(r' data-poll-after="\d+"')
+#: A relative time the client keeps current itself ("4 min ago"); its text is kept out of the
+#: card's ETag, its ``datetime`` is not.
+_AGO_TIME_RE = re.compile(r"(<time [^>]*data-ago[^>]*>)[^<]*</time>")
+
+
+class _Card(NamedTuple):
+    html: Markup
+    etag: str
+    checked: str
 
 
 class ValidateResponse(BaseModel):

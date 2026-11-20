@@ -15,7 +15,11 @@ fallback when no team is set (and for tests / local dev without the bot).
 With ``background=True`` (how the app builds it) an expired membership is served as it stands and
 the background loop re-reads it (``refresh_if_stale``). Every page asks ``is_curator``, so the
 read used to land on whichever request happened to arrive after the TTL, holding it for a token
-exchange and a team listing. Only a cold start, with nothing cached at all, still reads inline.
+exchange and a team listing. Only a cold start, with nothing cached at all, still reads inline,
+and so does a membership past ``_HARD_CEILING_TTLS`` times the TTL: the loop is evidently not
+refreshing it, and a curator removed from the team must not keep their rights indefinitely. Past
+that ceiling a read that fails is fail-closed. The app passes ``background=True`` only when its
+loop actually runs.
 
 Since 2026-11-13 the two **add up** when both are set. Setting a team used to drop the configured
 list silently, so turning the team on (which needs an org owner to create it and the App to be
@@ -35,6 +39,10 @@ from app.github import GitHubClient, GitHubError
 
 #: How often a request may retry a team read that failed with nothing cached.
 _COLD_RETRY_SECONDS = 60.0
+
+#: In background mode, how many TTLs old a membership may get before a request stops trusting
+#: the loop to refresh it and reads it inline.
+_HARD_CEILING_TTLS = 3
 
 
 class CuratorRegistry(ABC):
@@ -91,16 +99,24 @@ class GitHubTeamCurators(CuratorRegistry):
     def _stale(self) -> bool:
         return self._cache is None or self._clock() - self._fetched_at >= self._ttl
 
+    def _past_ceiling(self) -> bool:
+        return self._clock() - self._fetched_at >= self._ttl * _HARD_CEILING_TTLS
+
     def members(self) -> set[str]:
-        if self._cache is not None and (self._background or not self._stale()):
+        if self._cache is not None and not self._stale():
             return set(self._cache)
+        if self._cache is not None and self._background and not self._past_ceiling():
+            return set(self._cache)  # expired, and the loop re-reads it
+        if not self._background:
+            return self._fetch()
+        # Background mode with nothing cached (a cold start) or a membership the loop has let
+        # go far past its TTL: read inline, fail-closed, at most once a minute.
         if (
-            self._background
-            and self._attempted_at is not None
+            self._attempted_at is not None
             and self._clock() - self._attempted_at < _COLD_RETRY_SECONDS
         ):
-            return set()  # fail-closed, and the loop retries
-        return self._fetch()
+            return set()
+        return self._fetch(fail_closed=True)
 
     def refresh_if_stale(self) -> bool:
         if not self._stale():
@@ -108,21 +124,24 @@ class GitHubTeamCurators(CuratorRegistry):
         self._fetch()
         return True
 
-    def _fetch(self) -> set[str]:
+    def _fetch(self, *, fail_closed: bool = False) -> set[str]:
+        """Read the team. On failure, the last membership, or nobody with ``fail_closed``."""
         now = self._clock()
         self._attempted_at = now
+        fallback = set() if fail_closed or self._cache is None else set(self._cache)
         try:
             client = self._client_provider()
         except Exception:  # noqa: BLE001 — minting the bot token failed; same as no bot
             client = None
         if client is None:
             # No bot configured: can't resolve. Keep any prior cache; else nobody is a curator.
-            return set(self._cache) if self._cache is not None else set()
+            return fallback
         try:
             logins = set(client.list_team_members(self._org, self._team_slug))
         except (GitHubError, httpx.HTTPError):
-            # Transient failure: serve stale membership rather than lock everyone out.
-            return set(self._cache) if self._cache is not None else set()
+            # Transient failure: serve stale membership rather than lock everyone out (unless
+            # it is already far too old to trust).
+            return fallback
         self._cache = logins
         self._fetched_at = now
         return set(logins)

@@ -149,8 +149,10 @@ class Settings(BaseSettings):
     reconcile_min_interval_seconds: int = 30
 
     # The background loop that keeps reviews in line with GitHub (app.background). Pages render
-    # from the database; this is what refreshes it. 0 turns the loop off, which leaves webhooks
-    # and a curator's own page loads as the only refresh.
+    # from the database; this is what refreshes it. 0 turns the loop off (as does running without
+    # an App identity). Then webhooks only mark a review due, and a curator's own page load or
+    # Refresh press re-checks it inline, as pages did before the loop; the curator team is
+    # re-read on a request once its cache expires rather than by the loop.
     background_interval_seconds: int = 60
     # How often the loop re-lists open pull requests the portal has no review for. A pull_request
     # webhook for an untracked pull request also triggers a re-list.

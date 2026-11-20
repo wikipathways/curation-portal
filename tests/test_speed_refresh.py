@@ -18,9 +18,11 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import httpx
+import pytest
 from fastapi.testclient import TestClient
 
 from app import obs
+from app.background import BackgroundWorker
 from app.curators import GitHubTeamCurators
 from app.github import ConversationItem, FakeGitHubClient, HttpGitHubClient, WorkflowRun
 from app.models import Review, ReviewStatus, utcnow
@@ -31,6 +33,20 @@ from app.review.tracker import publish_pending, publish_stages
 from tests.test_api import _login
 from tests.test_pipeline_api import REPO, _pass_every_required_item, _pipeline_app, _submit
 from tests.test_wave2_visibility import CountingFake, _hook
+
+
+@pytest.fixture(autouse=True)
+def _the_tests_stand_in_for_the_loop(monkeypatch):
+    """These tests call ``worker.tick`` themselves, in place of the background loop, so the
+    worker is told it has one: a page then queues its re-check rather than doing it inline.
+    The tests of the loop-less fallback set ``loop_running`` back to False."""
+    init = BackgroundWorker.__init__
+
+    def init_with_a_loop(self, *args, **kwargs):
+        init(self, *args, **kwargs)
+        self.loop_running = True
+
+    monkeypatch.setattr(BackgroundWorker, "__init__", init_with_a_loop)
 
 
 def _counting_fake() -> CountingFake:
@@ -672,7 +688,7 @@ def test_an_expired_team_is_served_as_it_stands_and_refreshed_by_the_loop():
     )
     assert reg.members() == {"alice"} and calls["n"] == 1  # a cold start reads inline
     gh.team_members["org/cur"] = ["alice", "bob"]
-    clock["t"] = 3600
+    clock["t"] = 360  # past the 5 min TTL, inside the 15 min ceiling
     assert reg.members() == {"alice"} and calls["n"] == 1  # stale, but no request waits
     assert reg.refresh_if_stale() is True
     assert reg.members() == {"alice", "bob"} and calls["n"] == 2
@@ -728,3 +744,257 @@ def test_a_run_record_carries_when_it_started():
     run = WorkflowRun(id=1, html_url="u", status="queued", conclusion=None,
                       created_at="2026-11-20T12:00:00Z")
     assert run.created_at
+
+
+# -- review fixes ----------------------------------------------------------------------------
+
+
+def test_without_a_loop_a_curator_page_rechecks_inline_and_never_polls_at_2s(tmp_path):
+    """No App, or PORTAL_BACKGROUND_INTERVAL_SECONDS=0: nothing would take a queued request, so
+    the page re-checks inline as it used to, and no card is told to ask every 2 s forever."""
+    app, fake = _pipeline(tmp_path)
+    with TestClient(app) as c:
+        app.state.worker.loop_running = False
+        app.state.bot_client_provider = lambda: fake
+        app.state.drafts = _site(tmp_path, [])
+        pr = _submit(c)["pr_number"]
+        assert _last_checked(app, pr) is None
+
+        _login(c, "curator")
+        page = c.get(f"/dashboard/{pr}")
+
+        assert app.state.worker.priority_pending() == set()
+        assert _last_checked(app, pr) is not None  # reconciled on the spot
+        assert 'data-poll-after="2"' not in page.text
+        card = f"/dashboard/{pr}/card?expanded=1"
+        polls = {c.get(card).headers["x-poll-after"] for _ in range(3)}
+        assert polls == {"30"}
+
+
+def test_without_a_loop_a_refresh_press_rechecks_inline(tmp_path):
+    app, fake = _pipeline(tmp_path)
+    with TestClient(app) as c:
+        app.state.worker.loop_running = False
+        app.state.bot_client_provider = lambda: fake
+        app.state.drafts = _site(tmp_path, [])
+        pr = _submit(c)["pr_number"]
+        _login(c, "curator")
+        app.state.worker.tick(github=fake)
+        with app.state.session_factory() as s:
+            s.get(Review, pr).last_checked_at = None
+            s.commit()
+        click = c.get(f"/dashboard/{pr}/card?recheck=1")
+        assert click.headers["x-poll-after"] == "30"
+        assert app.state.worker.priority_pending() == set()
+        assert _last_checked(app, pr) is not None
+
+
+def test_without_a_loop_a_non_curator_spends_nothing(tmp_path):
+    app, fake = _pipeline(tmp_path)
+    with TestClient(app) as c:
+        app.state.worker.loop_running = False
+        app.state.bot_client_provider = lambda: fake
+        app.state.drafts = _site(tmp_path, [])
+        pr = _submit(c)["pr_number"]
+        fake.calls.clear()
+        _login(c, "marvinm2")  # the submitter
+        c.get(f"/dashboard/{pr}")
+        c.get(f"/dashboard/{pr}/card?recheck=1")
+        assert fake.calls == []
+        assert _last_checked(app, pr) is None
+
+
+def test_a_request_the_loop_never_takes_stops_the_2s_polls_after_half_a_minute(tmp_path):
+    app, _ = _pipeline(tmp_path)
+    with TestClient(app) as c:
+        now = {"t": 1000.0}
+        app.state.worker._clock = lambda: now["t"]
+        app.state.drafts = _site(tmp_path, [])
+        pr = _submit(c)["pr_number"]
+        _login(c, "curator")
+        assert 'data-poll-after="2"' in c.get(f"/dashboard/{pr}").text
+        assert c.get(f"/dashboard/{pr}/card").headers["x-poll-after"] == "2"
+        now["t"] += 31  # the loop is stuck, or busy with a long tick
+        assert app.state.worker.priority_pending() == {pr}  # still asked for
+        assert c.get(f"/dashboard/{pr}/card").headers["x-poll-after"] == "30"
+        # Pressing Refresh again does not restart the clock on a request still waiting.
+        c.get(f"/dashboard/{pr}/card?recheck=1")
+        assert c.get(f"/dashboard/{pr}/card").headers["x-poll-after"] == "30"
+
+
+def test_the_team_is_read_by_requests_when_there_is_no_loop(tmp_path):
+    from app.config import Settings
+    from app.main import build_app
+
+    app = build_app(
+        Settings(
+            _env_file=None,
+            database_url=f"sqlite:///{tmp_path / 'team.db'}",
+            curator_team="org/cur",
+            preview_cache_dir=str(tmp_path / "pc"),
+        )
+    )
+    with TestClient(app):
+        # No App identity, so no loop: an expired membership must expire on its own.
+        assert app.state.curators._background is False
+
+
+def test_a_team_membership_the_loop_lets_go_stale_is_read_inline_past_the_ceiling():
+    members = {"alice", "bob"}
+    now = {"t": 0.0}
+
+    class Client:
+        fail = False
+
+        def list_team_members(self, org, slug):
+            if Client.fail:
+                raise httpx.ConnectError("down")
+            return set(members)
+
+    reg = GitHubTeamCurators(
+        lambda: Client(), "org", "cur", clock=lambda: now["t"], background=True
+    )
+    assert reg.is_curator("bob")
+    members.discard("bob")  # removed from the team; the loop is not running
+    now["t"] += 10 * 60
+    assert reg.is_curator("bob")  # past the TTL, inside the ceiling: the loop's job
+    now["t"] += 24 * 3600
+    assert not reg.is_curator("bob")  # past the ceiling: read inline
+    assert reg.is_curator("alice")
+
+    # Past the ceiling, a read that fails does not keep serving a day-old membership.
+    Client.fail = True
+    now["t"] += 24 * 3600
+    assert reg.members() == set()
+
+
+def test_the_cards_on_both_pages_carry_the_etag_the_card_route_answers(tmp_path):
+    import re
+
+    app, fake = _pipeline(tmp_path)
+    with TestClient(app) as c:
+        app.state.drafts = _site(tmp_path, [])
+        pr = _submit(c)["pr_number"]
+        _login(c, "curator")
+        app.state.worker.tick(github=fake)
+
+        page = c.get(f"/dashboard/{pr}").text
+        tag = re.search(r'<article [^>]*data-etag="([^"]+)"', page)
+        assert tag, "the review page's card carries no ETag"
+        etag = tag.group(1).replace("&#34;", '"').replace("&quot;", '"')
+        card = c.get(f"/dashboard/{pr}/card?expanded=1", headers={"If-None-Match": etag})
+        assert card.status_code == 304  # the first timer poll swaps nothing
+
+        queue = c.get("/dashboard").text
+        tag = re.search(r'<article [^>]*data-etag="([^"]+)"', queue)
+        assert tag, "the queue's card carries no ETag"
+        etag = tag.group(1).replace("&#34;", '"').replace("&quot;", '"')
+        card = c.get(f"/dashboard/{pr}/card?expanded=0", headers={"If-None-Match": etag})
+        assert card.status_code == 304
+
+
+def test_the_tracker_passing_minutes_do_not_change_the_card(tmp_path, monkeypatch):
+    from app import main as main_module
+    from app.review import tracker
+
+    app, fake = _pipeline(tmp_path, curators=("marvinm2",))
+    with TestClient(app) as c:
+        app.state.drafts = _site(tmp_path, [])
+        pr = _submit(c)["pr_number"]
+        _login(c, "marvinm2")
+        with app.state.session_factory() as s:
+            r = s.get(Review, pr)
+            r.status = ReviewStatus.APPROVED
+            r.approved_by = "marvinm2"
+            r.approved_at = utcnow() - timedelta(minutes=6)
+            r.last_checked_at = utcnow()
+            s.commit()
+        first = c.get(f"/dashboard/{pr}/card?expanded=1")
+        assert "data-ago" in first.text
+        assert first.headers["x-poll-after"] == "5"  # a publication is being tracked
+
+        # A minute passes, and nothing else does.
+        class Later(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return datetime.now(tz) + timedelta(minutes=1)
+
+        monkeypatch.setattr(tracker, "datetime", Later)
+        monkeypatch.setitem(main_module.templates.env.filters, "ago", lambda v: "7 min ago")
+        again = c.get(
+            f"/dashboard/{pr}/card?expanded=1", headers={"If-None-Match": first.headers["etag"]}
+        )
+        assert again.status_code == 304
+
+
+def test_a_failed_publication_does_not_wait_for_the_site_or_keep_polling():
+    approved = _review(status="publish_failed", approved_at=NOW - timedelta(minutes=3))
+    stages = {s["key"]: s for s in publish_stages(approved, {}, NOW)}
+    assert stages["live"]["state"] == "skipped"
+    assert not publish_pending(approved, {}, NOW)
+
+
+def test_the_checked_time_is_not_a_live_region(tmp_path):
+    app, fake = _pipeline(tmp_path)
+    with TestClient(app) as c:
+        app.state.drafts = _site(tmp_path, [])
+        pr = _submit(c)["pr_number"]
+        _login(c, "curator")
+        app.state.worker.tick(github=fake)
+        card = c.get(f"/dashboard/{pr}/card").text
+    import re
+
+    span = re.search(r'<span class="review-card__checked"[^>]*>', card).group(0)
+    assert "aria-live" not in span
+
+
+def test_the_sweep_keeps_a_live_reviews_last_good_payload_and_drawing(tmp_path):
+    import os
+
+    svg = b'<svg xmlns="http://www.w3.org/2000/svg"/>'
+    info = b'{"wpid": "WP0__PR3", "title": "T", "description": "D"}'
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("-info.json"):
+            return httpx.Response(200, content=info)
+        if request.url.path.endswith(".svg"):
+            return httpx.Response(200, content=svg)
+        return httpx.Response(404)
+
+    reader = DraftsReader(
+        repo="o/site", branch="main", site_base_url="https://s", cache_dir=tmp_path / "c",
+        ttl_seconds=60, transport=httpx.MockTransport(handler),
+    )
+    for slug in ("WP0__PR3", "WP0__PR4"):
+        reader.fetch(slug)
+        assert reader.fetch_svg(slug)
+    for path in (tmp_path / "c").iterdir():
+        stamp = path.stat().st_mtime - 3600
+        os.utime(path, (stamp, stamp))
+
+    assert reader.sweep({3}, force=True) == 2  # PR 4 is finished; PR 3 is live
+    assert reader.cached("WP0__PR3").available is True
+    assert reader.svg_path("WP0__PR3") is not None
+    assert reader.svg_path("WP0__PR4") is None
+
+
+def test_an_unchanged_pipeline_svg_costs_a_304_not_the_file(tmp_path):
+    svg = b'<svg xmlns="http://www.w3.org/2000/svg"/>'
+    clock = {"t": 1000.0}
+    asked: list[str | None] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        asked.append(request.headers.get("if-none-match"))
+        if request.headers.get("if-none-match") == '"v1"':
+            return httpx.Response(304)
+        return httpx.Response(200, content=svg, headers={"ETag": '"v1"'})
+
+    reader = DraftsReader(
+        repo="o/site", branch="main", site_base_url="https://s", cache_dir=tmp_path / "c",
+        ttl_seconds=60, transport=httpx.MockTransport(handler), clock=lambda: clock["t"],
+    )
+    assert reader.fetch_svg("WP0__PR3") is True
+    clock["t"] += 61
+    assert reader.fetch_svg("WP0__PR3") is False  # not modified
+    assert asked == [None, '"v1"']
+    assert reader.svg_path("WP0__PR3").read_bytes() == svg

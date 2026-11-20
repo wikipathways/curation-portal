@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block title %}{% if mine %}Your submissions{% elif assigned %}Assigned to you{% else %}Curation queue{% endif %} &middot; WikiPathways Curation Portal{% endblock %}
-{% from "_review_card.html" import review_card with context %}
+{# The cards arrive pre-rendered (main.py _render_card), each as the card route serves it. #}
 
 {% block content %}
 <div class="page-head">
@@ -89,7 +89,7 @@
        show every state. #}
     <div class="review-list" data-queue-status="{{ status or '' }}">
       {% for r in reviews %}
-        {{ review_card(r, is_curator, curators) }}
+        {{ cards[r.pr_number] }}
       {% endfor %}
     </div>
     {% if pager.pages > 1 %}

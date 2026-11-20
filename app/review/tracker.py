@@ -48,7 +48,7 @@ def publish_stages(review, pipeline_run: dict | None, now: datetime | None = Non
     """The four stages as ``{key, label, state, detail, at}``, or [] when not tracked.
 
     ``state`` is one of ``done``, ``active`` (happening now), ``waiting`` (not started),
-    ``failed`` and ``unknown``.
+    ``failed``, ``skipped`` (will not happen, because an earlier stage failed) and ``unknown``.
     """
     status = _status_value(review)
     approved_at = _when(getattr(review, "approved_at", None))
@@ -99,7 +99,9 @@ def publish_stages(review, pipeline_run: dict | None, now: datetime | None = Non
             "detail": (
                 "Waiting for the repository to start its publish workflow."
                 if minutes < 5
-                else f"No publish run seen in the {minutes} minutes since approval."
+                # No count of minutes: it would change the card every minute (and its ETag), and
+                # the Accepted stage already says how long ago the approval was.
+                else "No publish run has been seen since the approval."
             ),
         }
     stages.append(
@@ -138,6 +140,10 @@ def publish_stages(review, pipeline_run: dict | None, now: datetime | None = Non
                 else "The page was not seen to update; open it to check."
             ),
         }
+    elif status == "publish_failed":
+        # Nothing was published, so nothing is coming; "Not yet" would say otherwise, and a
+        # waiting stage would keep the card polling every few seconds for half an hour.
+        site = {"state": "skipped", "detail": "Nothing was published, so the site has not changed."}
     else:
         site = {"state": "waiting", "detail": "After publication the site rebuilds."}
     stages.append({"key": "live", "label": "Site live", "at": None, **site})

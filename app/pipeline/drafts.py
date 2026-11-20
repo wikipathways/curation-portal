@@ -27,7 +27,7 @@ import io
 import json
 import re
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
@@ -68,8 +68,8 @@ _PLACEHOLDER_GPML = "WP0001.gpml"
 _UNMAPPED_VALUES = {"", "na", "null", "none"}
 
 # How often the cache sweep may run, and how far past the TTL an entry must be before it is
-# taken. See `DraftsReader.sweep` — the margin is for mtime across a GlusterFS replica, not for
-# anything about the cache, since past the TTL nothing can serve the file anyway.
+# taken. See `DraftsReader.sweep` — the margin is for mtime across a GlusterFS replica. Entries of
+# a live review are never taken, since `cached` serves them however old they are.
 _DRAFT_SWEEP_INTERVAL_SECONDS = 3600.0
 _DRAFT_SWEEP_TTL_MARGIN = 4
 
@@ -80,6 +80,9 @@ _ERROR_BACKOFF_SECONDS = 120.0
 #: The pipeline's own drawing, served same-origin at ``/previews/{pr}/pipeline.svg``. Capped so a
 #: runaway render cannot fill the cache volume; real ones are a few hundred kB.
 _MAX_PIPELINE_SVG_BYTES = 5 * 1024 * 1024
+
+#: The pull request a cache file belongs to: ``WP0__PR54.<scope>.json`` / ``.svg``.
+_CACHE_PR_RE = re.compile(r"__PR(\d+)\.")
 
 
 def _checklist_auto_check(key: str):
@@ -223,6 +226,9 @@ class DraftsReader:
         #: slug -> when the pipeline SVG was last asked for, so a missing one is not re-asked on
         #: every background pass.
         self._svg_checked: dict[str, float] = {}
+        #: slug -> the ETag the cached SVG was served with, so an unchanged drawing costs a 304
+        #: rather than the whole file on every pass. In memory: a restart re-reads each once.
+        self._svg_etag: dict[str, str] = {}
 
     # -- slugs -----------------------------------------------------------------------------
     @staticmethod
@@ -357,13 +363,22 @@ class DraftsReader:
         if now < self._error_until.get(slug, 0.0):
             return False
         self._svg_checked[slug] = now
+        path = self._svg_cache_path(slug)
+        headers = {}
+        etag = self._svg_etag.get(slug)
+        if etag and path.is_file():
+            headers["If-None-Match"] = etag
         try:
-            resp = self._client.get(self._raw_url(f"draft_assets/{slug}/{slug}.svg"))
+            resp = self._client.get(
+                self._raw_url(f"draft_assets/{slug}/{slug}.svg"), headers=headers
+            )
         except Exception:  # noqa: BLE001 - transport trouble: keep what is on disk
             return False
-        path = self._svg_cache_path(slug)
+        if resp.status_code == 304:
+            return False  # the copy on disk is current
         if resp.status_code == 404:
             path.unlink(missing_ok=True)
+            self._svg_etag.pop(slug, None)
             return False
         body = resp.content
         head = body[:256].lstrip()
@@ -380,6 +395,10 @@ class DraftsReader:
             tmp.replace(path)
         except OSError:
             return False
+        if resp.headers.get("etag"):
+            self._svg_etag[slug] = resp.headers["etag"]
+        else:
+            self._svg_etag.pop(slug, None)
         return True
 
     # -- the published page --------------------------------------------------------------------
@@ -546,8 +565,8 @@ class DraftsReader:
         except (OSError, ValueError):
             pass  # the cache is an optimisation; losing it costs requests, not correctness
 
-    def sweep(self, *, force: bool = False) -> int:
-        """Delete cache entries too old to be served. Returns how many went.
+    def sweep(self, keep: Iterable[int] | None = None, *, force: bool = False) -> int:
+        """Delete cache entries nobody will read again. Returns how many went.
 
         The same leak issue #18 fixed next door, in the other cache under the same directory:
         entries expire by the TTL but nothing ever removed the file, so the disk kept one per
@@ -555,10 +574,11 @@ class DraftsReader:
         carries a whole scope's worth from before its drafts repo was repointed at the fork, which
         nothing will ever read again.
 
-        Deleting past the TTL is behaviour-neutral by construction: ``_read_cache`` already
-        refuses anything that old, so the file was going to be refetched and rewritten either way.
-        The margin on top of the TTL is for mtime across a GlusterFS replica rather than for any
-        property of the cache.
+        ``keep`` is every live review's pull request number, and their entries stay whatever
+        their age: ``cached`` serves the last good payload and SVG however old, which is what
+        carries a page through a raw.githubusercontent.com outage, and the back-off after a failed
+        read does not rewrite the file. Everything else past the TTL (with a margin for mtime
+        across a GlusterFS replica) belongs to a finished review or a dead scope and goes.
         """
         now = time.monotonic()
         if (
@@ -575,7 +595,11 @@ class DraftsReader:
             entries = sorted([*self._cache_dir.glob("*.json"), *self._cache_dir.glob("*.svg")])
         except OSError:
             return 0
+        live = {int(n) for n in keep or ()}
         for path in entries:
+            m = _CACHE_PR_RE.search(path.name)
+            if m and int(m.group(1)) in live:
+                continue
             try:
                 if path.stat().st_mtime > cutoff:
                     continue

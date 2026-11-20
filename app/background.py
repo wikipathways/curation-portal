@@ -13,10 +13,11 @@ curator's on-demand refresh never re-checks the same review at the same moment.
 ``tick()`` is synchronous and safe to call directly, which is how the tests drive it.
 
 A tick runs, in order: the reviews a curator is looking at right now (``request_review``, which
-the review page calls instead of reconciling inline), the normal pass over every live review, the
-re-render of previews an older renderer drew, the probe that tells the publish tracker when a
-published page is up, and the curator team refresh. Each step is isolated: one failing never
-skips the next.
+the review page calls instead of reconciling inline while the loop runs; without a loop the page
+re-checks inline through ``recheck_now``, since nothing would take the request), the normal pass
+over every live review, the re-render of previews an older renderer drew, the probe that tells
+the publish tracker when a published page is up, and the curator team refresh. Each step is
+isolated: one failing never skips the next.
 """
 from __future__ import annotations
 
@@ -39,6 +40,11 @@ from app.review.untracked import UntrackedPr, scan_untracked
 
 logger = logging.getLogger("wpsubmit.background")
 
+
+#: How long a re-check asked of the loop counts as "on its way". A card polls every 2 s while it
+#: is; past this it falls back to its normal interval, so a loop that is stuck, slow or busy
+#: with a long tick cannot keep every open tab asking twice a second.
+PENDING_FRESH_SECONDS = 30.0
 
 #: How long after publication the loop keeps asking whether the published page is up. The site
 #: build takes two to four minutes and the CDN up to ten; past this the tracker stops waiting.
@@ -89,6 +95,13 @@ class BackgroundWorker:
         self._priority: set[int] = set()
         #: The one being re-checked right now, so a card can keep polling briskly until it lands.
         self._in_flight: set[int] = set()
+        #: When each pending request was first made (worker clock), for PENDING_FRESH_SECONDS.
+        self._requested_at: dict[int, float] = {}
+        #: True while ``run`` is looping. Without a loop (no App identity, or
+        #: PORTAL_BACKGROUND_INTERVAL_SECONDS=0) nothing drains ``request_review``, so a page
+        #: re-checks inline instead (main.py ``_ask_for_a_recheck``). A test that drives
+        #: ``tick`` itself sets this to stand in for the loop.
+        self.loop_running = False
         self._priority_lock = threading.Lock()
         self._make_curation = make_curation
         self._bot_provider = bot_provider
@@ -123,6 +136,7 @@ class BackgroundWorker:
         """
         with self._priority_lock:
             self._priority.add(int(pr_number))
+            self._requested_at.setdefault(int(pr_number), self._clock())
         self.poke()
 
     def priority_pending(self) -> set[int]:
@@ -130,9 +144,16 @@ class BackgroundWorker:
             return set(self._priority)
 
     def is_pending(self, pr_number: int) -> bool:
-        """Asked for and not finished yet: queued, or being re-checked at this moment."""
+        """Asked for, not finished yet, and asked recently: queued or being re-checked now.
+
+        False once the request is older than ``PENDING_FRESH_SECONDS`` even if it has not been
+        handled, so the 2 s poll it drives is bounded.
+        """
         with self._priority_lock:
-            return pr_number in self._priority or pr_number in self._in_flight
+            if pr_number not in self._priority and pr_number not in self._in_flight:
+                return False
+            asked = self._requested_at.get(pr_number)
+            return asked is None or self._clock() - asked < PENDING_FRESH_SECONDS
 
     def _take_priority(self) -> int | None:
         with self._priority_lock:
@@ -146,6 +167,24 @@ class BackgroundWorker:
     def _done_priority(self, pr_number: int) -> None:
         with self._priority_lock:
             self._in_flight.discard(pr_number)
+            if pr_number not in self._priority:
+                self._requested_at.pop(pr_number, None)
+
+    def recheck_now(self, pr_number: int) -> bool:
+        """Re-check one review here and now, on the caller's thread. True if it ran.
+
+        What a curator's page does when no loop is running to take ``request_review``: the
+        same work as the priority pass (reconcile, then the repository's checks), with the same
+        claim, so it cannot double up with a tick a test or a second replica runs.
+        """
+        curation = self._make_curation(self._bot())
+        try:
+            curation.reconcile_review(pr_number)
+            self._refresh_one(curation, pr_number)
+        except Exception:  # noqa: BLE001 - a failed re-check must not fail the page
+            logger.exception("inline re-check of PR #%s failed", pr_number)
+            return False
+        return True
 
     def poke(self) -> None:
         """Run the next tick now. Safe from the event loop and from worker threads."""
@@ -334,17 +373,23 @@ class BackgroundWorker:
     async def run(self, interval_seconds: float, *, first_delay: float = 5.0) -> None:
         self._loop = asyncio.get_running_loop()
         self._wake = asyncio.Event()
+        self.loop_running = True
         delay = first_delay
-        while True:
-            try:
-                await asyncio.wait_for(self._wake.wait(), timeout=delay)
-            except TimeoutError:
-                pass
-            self._wake.clear()
-            delay = interval_seconds
-            try:
-                await run_in_threadpool(self.tick)
-            except asyncio.CancelledError:
-                raise
-            except Exception:  # noqa: BLE001
-                logger.exception("background tick failed")
+        try:
+            while True:
+                try:
+                    await asyncio.wait_for(self._wake.wait(), timeout=delay)
+                except TimeoutError:
+                    pass
+                self._wake.clear()
+                delay = interval_seconds
+                try:
+                    await run_in_threadpool(self.tick)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:  # noqa: BLE001
+                    logger.exception("background tick failed")
+        finally:
+            self.loop_running = False
+            self._loop = None
+            self._wake = None

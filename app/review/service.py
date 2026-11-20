@@ -607,13 +607,14 @@ class CurationService:
         that died between rendering and registering.
 
         The drafts cache next door has no primary path to back up. It expires by TTL and keeps the
-        file, so this is the only thing that removes one.
+        file, so this is the only thing that removes one. It is handed the live set too: a live
+        review's last good payload is served however old (``DraftsReader.cached``), so it stays.
 
         ``live`` must be every non-terminal review, since the render sweep treats anything absent
         from it as collectable.
         """
         pr_numbers = set(live)
-        for cache, arg in ((self._previews, (pr_numbers,)), (self._drafts, ())):
+        for cache, arg in ((self._previews, (pr_numbers,)), (self._drafts, (pr_numbers,))):
             if cache is None:
                 continue
             try:
