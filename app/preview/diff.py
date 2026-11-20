@@ -45,9 +45,21 @@ class PathwayDiff:
     before: list[dict] = field(default_factory=list)
     after: list[dict] = field(default_factory=list)
     summary: dict[str, int] = field(default_factory=dict)
+    #: The same answer keyed by element id (renderer 2), which is what the viewer colours by:
+    #: ``pairs`` says which node on one side is which on the other, ``ids`` gives each id's
+    #: change. Index arrays above stay for a client that still reads the v1 shape.
+    pairs: list[dict] = field(default_factory=list)
+    ids: dict[str, dict] = field(default_factory=lambda: {"before": {}, "after": {}})
 
     def as_dict(self) -> dict:
-        return {"before": self.before, "after": self.after, "summary": self.summary}
+        return {
+            "version": 2,
+            "before": self.before,
+            "after": self.after,
+            "summary": self.summary,
+            "pairs": self.pairs,
+            "ids": self.ids,
+        }
 
 
 def _key_label(n: dict) -> tuple[str, str]:
@@ -172,7 +184,24 @@ def diff_nodes(before: list[dict], after: list[dict]) -> PathwayDiff:
     for e in a_out:
         summary[e["change"]] += 1
     summary["removed"] = sum(1 for e in b_out if e["change"] == "removed")
-    return PathwayDiff(before=b_out, after=a_out, summary=summary)
+
+    # Keyed by element id. A node from a cache older than renderer 2 has none and is simply
+    # absent here; the index arrays still describe it.
+    pair_list = [
+        {"before": before[i]["id"], "after": after[j]["id"], "change": a_out[j]["change"]}
+        for i, j in sorted(pairs.items())
+        if before[i].get("id") and after[j].get("id")
+    ]
+    ids: dict[str, dict] = {"before": {}, "after": {}}
+    for n, e in zip(before, b_out, strict=True):
+        if n.get("id"):
+            ids["before"][n["id"]] = e["change"]
+    for n, e in zip(after, a_out, strict=True):
+        if n.get("id"):
+            ids["after"][n["id"]] = dict(e)
+    return PathwayDiff(
+        before=b_out, after=a_out, summary=summary, pairs=pair_list, ids=ids
+    )
 
 
 def diff_metadata(before, after) -> dict:

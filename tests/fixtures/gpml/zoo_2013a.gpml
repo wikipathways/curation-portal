@@ -1,0 +1,171 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Renderer feature zoo (GPML2013a): one of everything the renderer has a rule for.
+     zoo_2021.gpml is the same diagram in GPML2021; tests compare the two. -->
+<Pathway xmlns="http://pathvisio.org/GPML/2013a" Name="Renderer feature zoo" Organism="Homo sapiens">
+  <Graphics BoardWidth="900.0" BoardHeight="700.0" />
+
+  <!-- A Complex of two nodes, nested inside a plain Group with a third node. -->
+  <DataNode TextLabel="AAA" GraphId="na" Type="GeneProduct" GroupRef="cpx">
+    <Graphics CenterX="100.0" CenterY="100.0" Width="80.0" Height="25.0" ZOrder="32768" FontSize="10" Valign="Middle" Color="1a5276" />
+    <Xref Database="Ensembl" ID="ENSG00000000001" />
+  </DataNode>
+  <DataNode TextLabel="BBB" GraphId="nb" Type="Protein" GroupRef="cpx">
+    <Graphics CenterX="100.0" CenterY="125.0" Width="80.0" Height="25.0" ZOrder="32768" FontSize="10" Valign="Middle" />
+    <Xref Database="Uniprot-TrEMBL" ID="P00001" />
+  </DataNode>
+  <DataNode TextLabel="CCC" GraphId="nc" Type="Rna" GroupRef="outer">
+    <Graphics CenterX="220.0" CenterY="112.0" Width="80.0" Height="25.0" ZOrder="32768" FontSize="10" FontWeight="Bold" Valign="Middle" ShapeType="RoundedRectangle" />
+    <Xref Database="" ID="" />
+  </DataNode>
+  <Group GroupId="cpx" GraphId="gcpx" Style="Complex" GroupRef="outer" />
+  <Group GroupId="outer" GraphId="gouter" Style="Group" />
+
+  <!-- A None-style group (invisible) and a Pathway-style group. -->
+  <DataNode TextLabel="DDD" GraphId="nd" Type="Metabolite" GroupRef="inv">
+    <Graphics CenterX="420.0" CenterY="100.0" Width="80.0" Height="25.0" ZOrder="32768" FontSize="10" Valign="Middle" Color="0000ff" />
+    <Xref Database="ChEBI" ID="CHEBI:15377" />
+  </DataNode>
+  <Group GroupId="inv" GraphId="ginv" Style="None" />
+  <DataNode TextLabel="Some pathway" GraphId="np" Type="Pathway" GroupRef="pwg">
+    <Graphics CenterX="600.0" CenterY="100.0" Width="100.0" Height="25.0" ZOrder="32768" FontSize="10" Valign="Middle" Color="14961e" ShapeType="None" />
+    <Xref Database="WikiPathways" ID="WP554" />
+  </DataNode>
+  <Group GroupId="pwg" GraphId="gpwg" Style="Pathway" />
+
+  <!-- A node with two states, one of them annotated. -->
+  <DataNode TextLabel="EEE" GraphId="ne" Type="GeneProduct">
+    <Graphics CenterX="100.0" CenterY="300.0" Width="80.0" Height="25.0" ZOrder="32768" FontSize="10" Valign="Middle" />
+    <Xref Database="Entrez Gene" ID="1234" />
+  </DataNode>
+  <State GraphRef="ne" TextLabel="P" GraphId="st1" StateType="PTM">
+    <Graphics RelX="1.0" RelY="-1.0" Width="15.0" Height="15.0" ShapeType="Oval" FillColor="ffff00" />
+    <Xref Database="PSI-MOD" ID="MOD:00046" />
+  </State>
+  <State GraphRef="ne" TextLabel="U" GraphId="st2">
+    <Graphics RelX="-1.0" RelY="1.0" Width="15.0" Height="15.0" ShapeType="Oval" />
+    <Xref Database="" ID="" />
+  </State>
+
+  <!-- Target nodes for the routed lines, and a long label that must wrap. -->
+  <DataNode TextLabel="FFF" GraphId="nf" Type="GeneProduct">
+    <Graphics CenterX="400.0" CenterY="400.0" Width="80.0" Height="25.0" ZOrder="32768" FontSize="10" Valign="Middle" />
+    <Xref Database="Ensembl" ID="ENSG00000000006" />
+  </DataNode>
+  <DataNode TextLabel="A rather long gene product name that will not fit on one line" GraphId="ng" Type="GeneProduct">
+    <Graphics CenterX="700.0" CenterY="300.0" Width="120.0" Height="50.0" ZOrder="32768" FontSize="10" Valign="Middle" />
+    <Xref Database="Ensembl" ID="ENSG00000000007" />
+  </DataNode>
+  <DataNode TextLabel="Rotated" GraphId="nr" Type="GeneProduct">
+    <Graphics CenterX="700.0" CenterY="500.0" Width="80.0" Height="25.0" ZOrder="32768" FontSize="10" Valign="Middle" Rotation="0.7853981633974483" />
+    <Xref Database="Ensembl" ID="ENSG00000000008" />
+  </DataNode>
+  <DataNode TextLabel="Off board" GraphId="noff" Type="GeneProduct">
+    <Graphics CenterX="980.0" CenterY="760.0" Width="80.0" Height="25.0" ZOrder="32768" FontSize="10" Valign="Middle" />
+    <Xref Database="Ensembl" ID="ENSG00000000009" />
+  </DataNode>
+
+  <!-- Lines: elbow with a broken style, curved, segmented, double, an arrow on the first point,
+       a line into a group, an anchor that a catalysis points at, and a dangling end. -->
+  <Interaction GraphId="ielbow">
+    <Graphics ConnectorType="Elbow" ZOrder="12288" LineThickness="1.0" LineStyle="Broken">
+      <Point X="140.0" Y="300.0" GraphRef="ne" RelX="1.0" RelY="0.0" />
+      <Point X="400.0" Y="387.5" GraphRef="nf" RelX="0.0" RelY="-1.0" ArrowHead="mim-stimulation" />
+    </Graphics>
+  </Interaction>
+  <Interaction GraphId="icurve">
+    <Graphics ConnectorType="Curved" ZOrder="12288" LineThickness="2.0" Color="cc0000">
+      <Point X="440.0" Y="400.0" GraphRef="nf" RelX="1.0" RelY="0.0" />
+      <Point X="700.0" Y="325.0" GraphRef="ng" RelX="0.0" RelY="1.0" ArrowHead="mim-necessary-stimulation" />
+    </Graphics>
+  </Interaction>
+  <Interaction GraphId="iseg">
+    <Graphics ConnectorType="Segmented" ZOrder="12288" LineThickness="1.0">
+      <Point X="100.0" Y="312.5" GraphRef="ne" RelX="0.0" RelY="1.0" />
+      <Point X="100.0" Y="500.0" />
+      <Point X="660.0" Y="500.0" GraphRef="nr" RelX="-1.0" RelY="0.0" ArrowHead="mim-cleavage" />
+    </Graphics>
+  </Interaction>
+  <Interaction GraphId="idouble">
+    <Attribute Key="org.pathvisio.DoubleLineProperty" Value="Double" />
+    <Graphics ZOrder="12288" LineThickness="1.0">
+      <Point X="400.0" Y="412.5" GraphRef="nf" RelX="0.0" RelY="1.0" />
+      <Point X="400.0" Y="600.0" ArrowHead="mim-inhibition" />
+    </Graphics>
+  </Interaction>
+  <Interaction GraphId="ibackwards">
+    <Graphics ZOrder="12288" LineThickness="1.0">
+      <Point X="460.0" Y="100.0" GraphRef="nd" RelX="1.0" RelY="0.0" ArrowHead="mim-inhibition" />
+      <Point X="550.0" Y="100.0" GraphRef="np" RelX="-1.0" RelY="0.0" />
+    </Graphics>
+  </Interaction>
+  <Interaction GraphId="itogroup">
+    <Graphics ZOrder="12288" LineThickness="1.0">
+      <Point X="100.0" Y="287.5" GraphRef="ne" RelX="0.0" RelY="-1.0" />
+      <Point X="100.0" Y="150.0" GraphRef="gcpx" RelX="0.0" RelY="1.0" ArrowHead="mim-binding" />
+    </Graphics>
+  </Interaction>
+  <Interaction GraphId="iconv">
+    <Graphics ZOrder="12288" LineThickness="1.0">
+      <Point X="200.0" Y="600.0" />
+      <Point X="350.0" Y="600.0" ArrowHead="mim-conversion" />
+      <Anchor Position="0.5" Shape="Circle" GraphId="anc1" />
+    </Graphics>
+  </Interaction>
+  <Interaction GraphId="icat">
+    <Graphics ZOrder="12288" LineThickness="1.0">
+      <Point X="275.0" Y="660.0" />
+      <Point X="275.0" Y="600.0" GraphRef="anc1" RelX="0.0" RelY="0.0" ArrowHead="mim-catalysis" />
+    </Graphics>
+  </Interaction>
+  <Interaction GraphId="itt">
+    <Graphics ZOrder="12288" LineThickness="1.0">
+      <Point X="760.0" Y="300.0" GraphRef="ng" RelX="1.0" RelY="0.0" />
+      <Point X="850.0" Y="420.0" ArrowHead="mim-transcription-translation" />
+    </Graphics>
+  </Interaction>
+  <GraphicalLine GraphId="gl1">
+    <Graphics ZOrder="12288" LineThickness="1.0" Color="808080">
+      <Point X="500.0" Y="650.0" />
+      <Point X="650.0" Y="650.0" ArrowHead="Arrow" />
+    </Graphics>
+  </GraphicalLine>
+
+  <!-- Shapes behind everything (no ZOrder: PathVisio default 0x4000) and labels. -->
+  <Shape TextLabel="cell" GraphId="sh1">
+    <Attribute Key="org.pathvisio.DoubleLineProperty" Value="Double" />
+    <Graphics CenterX="450.0" CenterY="350.0" Width="880.0" Height="680.0" ShapeType="RoundedRectangle" LineThickness="3.0" Color="c0c0c0" Valign="Top" FontSize="10" />
+  </Shape>
+  <Shape GraphId="sh2">
+    <Graphics CenterX="800.0" CenterY="600.0" Width="40.0" Height="40.0" ShapeType="Oval" FillColor="ffcc00" />
+  </Shape>
+  <Shape GraphId="sh3">
+    <Graphics CenterX="850.0" CenterY="600.0" Width="40.0" Height="40.0" ShapeType="Hexagon" LineStyle="Broken" />
+  </Shape>
+  <Shape GraphId="sh4">
+    <Graphics CenterX="800.0" CenterY="660.0" Width="40.0" Height="40.0" ShapeType="Mitochondria" />
+  </Shape>
+  <Shape GraphId="sh5">
+    <Graphics CenterX="850.0" CenterY="660.0" Width="40.0" Height="40.0" ShapeType="mim-degradation" />
+  </Shape>
+  <Shape GraphId="sh6">
+    <Graphics CenterX="600.0" CenterY="200.0" Width="60.0" Height="20.0" ShapeType="Brace" />
+  </Shape>
+  <Shape GraphId="sh7">
+    <Graphics CenterX="680.0" CenterY="200.0" Width="40.0" Height="40.0" ShapeType="Triangle" />
+  </Shape>
+  <Shape GraphId="sh8">
+    <Graphics CenterX="740.0" CenterY="200.0" Width="40.0" Height="40.0" ShapeType="Pentagon" />
+  </Shape>
+  <Shape GraphId="sh9">
+    <Graphics CenterX="800.0" CenterY="200.0" Width="40.0" Height="20.0" ShapeType="Arc" />
+  </Shape>
+  <Shape GraphId="sh10">
+    <Graphics CenterX="860.0" CenterY="200.0" Width="40.0" Height="40.0" ShapeType="Octagon" />
+  </Shape>
+  <Label TextLabel="Left aligned&#xA;second line" GraphId="lab1" Href="https://www.wikipathways.org/">
+    <Graphics CenterX="250.0" CenterY="450.0" Width="120.0" Height="40.0" Align="Left" Valign="Top" FontSize="10" FontStyle="Italic" Color="666666" />
+  </Label>
+  <Label TextLabel="Not a link" GraphId="lab2" Href="javascript:alert(1)">
+    <Graphics CenterX="250.0" CenterY="520.0" Width="120.0" Height="20.0" FontSize="10" />
+  </Label>
+</Pathway>

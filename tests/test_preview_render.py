@@ -34,7 +34,8 @@ def test_render_produces_valid_svg_with_nodes_edges_labels():
     assert 'viewBox="0.0 0.0 400.0 300.0"' in svg  # honours the declared board
     assert svg.count("<rect") == 3  # board background + 2 data nodes
     assert "TP53" in svg and "MDM2" in svg  # labels
-    assert "<polyline" in svg and "marker-end" in svg  # interaction with an arrowhead
+    # The interaction is a path with an arrowhead marker (renderer 2 draws paths, not polylines).
+    assert 'class="wp-edge__line"' in svg and 'marker-end="url(#wp-m-mim-stimulation)"' in svg
 
 
 def test_render_infers_viewbox_when_board_missing():
@@ -192,9 +193,10 @@ def test_geometry_and_properties_cannot_drift_apart():
     assert hotspots[0].identifier == "CHEBI:15377"
 
 
-def test_nodes_outside_a_declared_board_are_dropped():
-    # GPML can place a node beyond its own BoardWidth/Height. A hotspot there would sit off the
-    # image, where it is unclickable at best and covers the wrong thing at worst.
+def test_nodes_outside_a_declared_board_are_drawn():
+    # GPML can place a node beyond its own BoardWidth/Height. Renderer 1 cropped to the board and
+    # dropped the node's hotspot; renderer 2 grows the viewBox to take it in, because a node the
+    # curator cannot see is a node nobody reviews.
     gpml = (
         '<Pathway xmlns="http://pathvisio.org/GPML/2013a" Name="P">'
         '<DataNode TextLabel="OffBoard" Type="GeneProduct">'
@@ -203,8 +205,12 @@ def test_nodes_outside_a_declared_board_are_dropped():
         '<Graphics BoardWidth="100" BoardHeight="100"/>'
         "</Pathway>"
     )
-    _, hotspots = render_gpml_with_nodes(gpml)
-    assert hotspots == []
+    svg, hotspots = render_gpml_with_nodes(gpml)
+    # board 0..100 joined with the node 890..910 x 895..905 padded by 15
+    assert b'viewBox="0.0 0.0 925.0 920.0"' in svg
+    assert [h.label for h in hotspots] == ["OffBoard"]
+    h = hotspots[0]
+    assert 0 < h.left < 100 and 0 < h.top < 100
 
 
 def test_render_gpml_still_returns_bytes():

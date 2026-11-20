@@ -1,0 +1,187 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- zoo_2013a.gpml in GPML2021 spelling: same diagram, same element ids (groups are named by
+     their elementId here, which is what 2013a calls GroupId). -->
+<Pathway xmlns="http://pathvisio.org/GPML/2021" title="Renderer feature zoo" organism="Homo sapiens">
+  <Graphics boardWidth="900.0" boardHeight="700.0" />
+  <DataNodes>
+    <DataNode elementId="na" textLabel="AAA" type="GeneProduct" groupRef="cpx">
+      <Xref identifier="ENSG00000000001" dataSource="Ensembl" />
+      <Graphics centerX="100.0" centerY="100.0" width="80.0" height="25.0" textColor="1a5276" borderColor="1a5276" fontSize="10" vAlign="Middle" zOrder="32768" />
+    </DataNode>
+    <DataNode elementId="nb" textLabel="BBB" type="Protein" groupRef="cpx">
+      <Xref identifier="P00001" dataSource="Uniprot-TrEMBL" />
+      <Graphics centerX="100.0" centerY="125.0" width="80.0" height="25.0" fontSize="10" vAlign="Middle" zOrder="32768" />
+    </DataNode>
+    <DataNode elementId="nc" textLabel="CCC" type="Rna" groupRef="outer">
+      <Xref identifier="" dataSource="" />
+      <Graphics centerX="220.0" centerY="112.0" width="80.0" height="25.0" fontSize="10" fontWeight="Bold" vAlign="Middle" shapeType="RoundedRectangle" zOrder="32768" />
+    </DataNode>
+    <DataNode elementId="nd" textLabel="DDD" type="Metabolite" groupRef="inv">
+      <Xref identifier="CHEBI:15377" dataSource="ChEBI" />
+      <Graphics centerX="420.0" centerY="100.0" width="80.0" height="25.0" textColor="0000ff" borderColor="0000ff" fontSize="10" vAlign="Middle" zOrder="32768" />
+    </DataNode>
+    <DataNode elementId="np" textLabel="Some pathway" type="Pathway" groupRef="pwg">
+      <Xref identifier="WP554" dataSource="WikiPathways" />
+      <Graphics centerX="600.0" centerY="100.0" width="100.0" height="25.0" textColor="14961e" borderColor="14961e" fontSize="10" vAlign="Middle" shapeType="None" zOrder="32768" />
+    </DataNode>
+    <DataNode elementId="ne" textLabel="EEE" type="GeneProduct">
+      <Xref identifier="1234" dataSource="Entrez Gene" />
+      <States>
+        <State elementId="st1" textLabel="P" type="PTM">
+          <Xref identifier="MOD:00046" dataSource="PSI-MOD" />
+          <Graphics relX="1.0" relY="-1.0" width="15.0" height="15.0" shapeType="Oval" fillColor="ffff00" />
+        </State>
+        <State elementId="st2" textLabel="U">
+          <Graphics relX="-1.0" relY="1.0" width="15.0" height="15.0" shapeType="Oval" />
+        </State>
+      </States>
+      <Graphics centerX="100.0" centerY="300.0" width="80.0" height="25.0" fontSize="10" vAlign="Middle" zOrder="32768" />
+    </DataNode>
+    <DataNode elementId="nf" textLabel="FFF" type="GeneProduct">
+      <Xref identifier="ENSG00000000006" dataSource="Ensembl" />
+      <Graphics centerX="400.0" centerY="400.0" width="80.0" height="25.0" fontSize="10" vAlign="Middle" zOrder="32768" />
+    </DataNode>
+    <DataNode elementId="ng" textLabel="A rather long gene product name that will not fit on one line" type="GeneProduct">
+      <Xref identifier="ENSG00000000007" dataSource="Ensembl" />
+      <Graphics centerX="700.0" centerY="300.0" width="120.0" height="50.0" fontSize="10" vAlign="Middle" zOrder="32768" />
+    </DataNode>
+    <DataNode elementId="nr" textLabel="Rotated" type="GeneProduct">
+      <Xref identifier="ENSG00000000008" dataSource="Ensembl" />
+      <Graphics centerX="700.0" centerY="500.0" width="80.0" height="25.0" fontSize="10" vAlign="Middle" rotation="0.7853981633974483" zOrder="32768" />
+    </DataNode>
+    <DataNode elementId="noff" textLabel="Off board" type="GeneProduct">
+      <Xref identifier="ENSG00000000009" dataSource="Ensembl" />
+      <Graphics centerX="980.0" centerY="760.0" width="80.0" height="25.0" fontSize="10" vAlign="Middle" zOrder="32768" />
+    </DataNode>
+  </DataNodes>
+  <Interactions>
+    <Interaction elementId="ielbow">
+      <Waypoints>
+        <Point elementId="p1" x="140.0" y="300.0" elementRef="ne" relX="1.0" relY="0.0" />
+        <Point elementId="p2" x="400.0" y="387.5" elementRef="nf" relX="0.0" relY="-1.0" arrowHead="Stimulation" />
+      </Waypoints>
+      <Graphics lineStyle="Dashed" lineWidth="1.0" connectorType="Elbow" zOrder="12288" />
+    </Interaction>
+    <Interaction elementId="icurve">
+      <Waypoints>
+        <Point elementId="p3" x="440.0" y="400.0" elementRef="nf" relX="1.0" relY="0.0" />
+        <Point elementId="p4" x="700.0" y="325.0" elementRef="ng" relX="0.0" relY="1.0" arrowHead="NecessaryStimulation" />
+      </Waypoints>
+      <Graphics lineColor="cc0000" lineWidth="2.0" connectorType="Curved" zOrder="12288" />
+    </Interaction>
+    <Interaction elementId="iseg">
+      <Waypoints>
+        <Point elementId="p5" x="100.0" y="312.5" elementRef="ne" relX="0.0" relY="1.0" />
+        <Point elementId="p6" x="100.0" y="500.0" />
+        <Point elementId="p7" x="660.0" y="500.0" elementRef="nr" relX="-1.0" relY="0.0" arrowHead="Cleavage" />
+      </Waypoints>
+      <Graphics lineWidth="1.0" connectorType="Segmented" zOrder="12288" />
+    </Interaction>
+    <Interaction elementId="idouble">
+      <Waypoints>
+        <Point elementId="p8" x="400.0" y="412.5" elementRef="nf" relX="0.0" relY="1.0" />
+        <Point elementId="p9" x="400.0" y="600.0" arrowHead="Inhibition" />
+      </Waypoints>
+      <Graphics lineStyle="Double" lineWidth="1.0" zOrder="12288" />
+    </Interaction>
+    <Interaction elementId="ibackwards">
+      <Waypoints>
+        <Point elementId="p10" x="460.0" y="100.0" elementRef="nd" relX="1.0" relY="0.0" arrowHead="Inhibition" />
+        <Point elementId="p11" x="550.0" y="100.0" elementRef="np" relX="-1.0" relY="0.0" />
+      </Waypoints>
+      <Graphics lineWidth="1.0" zOrder="12288" />
+    </Interaction>
+    <Interaction elementId="itogroup">
+      <Waypoints>
+        <Point elementId="p12" x="100.0" y="287.5" elementRef="ne" relX="0.0" relY="-1.0" />
+        <Point elementId="p13" x="100.0" y="150.0" elementRef="cpx" relX="0.0" relY="1.0" arrowHead="Binding" />
+      </Waypoints>
+      <Graphics lineWidth="1.0" zOrder="12288" />
+    </Interaction>
+    <Interaction elementId="iconv">
+      <Waypoints>
+        <Point elementId="p14" x="200.0" y="600.0" />
+        <Point elementId="p15" x="350.0" y="600.0" arrowHead="Conversion" />
+        <Anchor elementId="anc1" position="0.5" shapeType="Circle" />
+      </Waypoints>
+      <Graphics lineWidth="1.0" zOrder="12288" />
+    </Interaction>
+    <Interaction elementId="icat">
+      <Waypoints>
+        <Point elementId="p16" x="275.0" y="660.0" />
+        <Point elementId="p17" x="275.0" y="600.0" elementRef="anc1" relX="0.0" relY="0.0" arrowHead="Catalysis" />
+      </Waypoints>
+      <Graphics lineWidth="1.0" zOrder="12288" />
+    </Interaction>
+    <Interaction elementId="itt">
+      <Waypoints>
+        <Point elementId="p18" x="760.0" y="300.0" elementRef="ng" relX="1.0" relY="0.0" />
+        <Point elementId="p19" x="850.0" y="420.0" arrowHead="TranscriptionTranslation" />
+      </Waypoints>
+      <Graphics lineWidth="1.0" zOrder="12288" />
+    </Interaction>
+  </Interactions>
+  <GraphicalLines>
+    <GraphicalLine elementId="gl1">
+      <Waypoints>
+        <Point elementId="p20" x="500.0" y="650.0" />
+        <Point elementId="p21" x="650.0" y="650.0" arrowHead="Directed" />
+      </Waypoints>
+      <Graphics lineColor="808080" lineWidth="1.0" zOrder="12288" />
+    </GraphicalLine>
+  </GraphicalLines>
+  <Labels>
+    <Label elementId="lab1" textLabel="Left aligned&#xA;second line" href="https://www.wikipathways.org/">
+      <Graphics centerX="250.0" centerY="450.0" width="120.0" height="40.0" textColor="666666" fontSize="10" fontStyle="Italic" hAlign="Left" vAlign="Top" />
+    </Label>
+    <Label elementId="lab2" textLabel="Not a link" href="javascript:alert(1)">
+      <Graphics centerX="250.0" centerY="520.0" width="120.0" height="20.0" fontSize="10" />
+    </Label>
+  </Labels>
+  <Shapes>
+    <Shape elementId="sh1" textLabel="cell">
+      <Graphics centerX="450.0" centerY="350.0" width="880.0" height="680.0" borderColor="c0c0c0" textColor="c0c0c0" borderStyle="Double" borderWidth="3.0" shapeType="RoundedRectangle" fontSize="10" vAlign="Top" />
+    </Shape>
+    <Shape elementId="sh2">
+      <Graphics centerX="800.0" centerY="600.0" width="40.0" height="40.0" fillColor="ffcc00" shapeType="Oval" />
+    </Shape>
+    <Shape elementId="sh3">
+      <Graphics centerX="850.0" centerY="600.0" width="40.0" height="40.0" borderStyle="Dashed" shapeType="Hexagon" />
+    </Shape>
+    <Shape elementId="sh4">
+      <Graphics centerX="800.0" centerY="660.0" width="40.0" height="40.0" shapeType="Mitochondria" />
+    </Shape>
+    <Shape elementId="sh5">
+      <Graphics centerX="850.0" centerY="660.0" width="40.0" height="40.0" shapeType="mim-degradation" />
+    </Shape>
+    <Shape elementId="sh6">
+      <Graphics centerX="600.0" centerY="200.0" width="60.0" height="20.0" shapeType="Brace" />
+    </Shape>
+    <Shape elementId="sh7">
+      <Graphics centerX="680.0" centerY="200.0" width="40.0" height="40.0" shapeType="Triangle" />
+    </Shape>
+    <Shape elementId="sh8">
+      <Graphics centerX="740.0" centerY="200.0" width="40.0" height="40.0" shapeType="Pentagon" />
+    </Shape>
+    <Shape elementId="sh9">
+      <Graphics centerX="800.0" centerY="200.0" width="40.0" height="20.0" shapeType="Arc" />
+    </Shape>
+    <Shape elementId="sh10">
+      <Graphics centerX="860.0" centerY="200.0" width="40.0" height="40.0" shapeType="Octagon" />
+    </Shape>
+  </Shapes>
+  <Groups>
+    <Group elementId="cpx" type="Complex" groupRef="outer">
+      <Graphics centerX="100.0" centerY="112.5" width="104.0" height="74.0" />
+    </Group>
+    <Group elementId="outer" type="Group">
+      <Graphics centerX="160.0" centerY="112.0" width="250.0" height="100.0" />
+    </Group>
+    <Group elementId="inv" type="Transparent">
+      <Graphics centerX="420.0" centerY="100.0" width="104.0" height="49.0" />
+    </Group>
+    <Group elementId="pwg" type="Pathway">
+      <Graphics centerX="600.0" centerY="100.0" width="124.0" height="49.0" />
+    </Group>
+  </Groups>
+</Pathway>
