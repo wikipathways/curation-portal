@@ -311,10 +311,13 @@
   <div class="diff-summary{% if not r.preview.diff.changed %} diff-summary--quiet{% endif %}"
        data-diff-pr="{{ r.pr_number }}" data-tour="diff-summary">
     <p class="diff-summary__line"><strong>Data nodes:</strong> {{ r.preview.diff.sentence }}</p>
+    {% if r.preview.diff.edges %}
+    <p class="diff-summary__line diff-summary__line--edges"><strong>Interactions:</strong> {{ r.preview.diff.edges.sentence }}</p>
+    {% endif %}
     {% set meta = r.preview.diff.meta %}
     {% if meta is not none %}
       {% if meta.title %}<p class="diff-summary__line"><strong>Title:</strong> &ldquo;{{ meta.title['from'] or '(none)' }}&rdquo; &rarr; &ldquo;{{ meta.title['to'] or '(none)' }}&rdquo;</p>{% endif %}
-      {% if meta.description %}<p class="diff-summary__line"><strong>Description:</strong> rewritten ({{ meta.description.from_words }} &rarr; {{ meta.description.to_words }} words).</p>{% endif %}
+      {% if meta.description %}<p class="diff-summary__line"><strong>Description:</strong> {{ r.preview.diff.description }}.</p>{% endif %}
       {% for key, word in [('references', 'References'), ('ontology_tags', 'Ontology tags')] %}
         {% if meta[key] %}
         <p class="diff-summary__line"><strong>{{ word }}:</strong>
@@ -326,7 +329,7 @@
       <p class="diff-summary__line"><strong>Title, description, references, tags:</strong> unchanged.</p>
       {% endif %}
     {% endif %}
-    {% if r.preview.diff.changed %}
+    {% if r.preview.diff.nodes_changed %}
     <ul class="diff-legend">
       {% for key, word in [('added', 'added'), ('removed', 'removed'), ('reannotated', 're-annotated'), ('relabelled', 'relabelled'), ('moved', 'moved')] %}
         {% if r.preview.diff.counts.get(key) %}

@@ -29,8 +29,11 @@
   <dt>What changed</dt>
   <dd>
     For an update: how many data nodes were added, removed, re-annotated (same label, different
-    identifier), relabelled or only moved, and whether the title, description, references or
-    ontology tags changed.
+    identifier), relabelled or only moved; how many interactions were added, removed, retyped
+    (a different arrow) or reconnected (an end attached somewhere else, or attached or let go);
+    and whether the title, description, references or ontology tags changed. A description is
+    <em>edited</em> when its length changed by no more than the repository allows (3 words or 10
+    characters) and <em>rewritten</em> when it changed by more, which the repository flags.
   </dd>
   <dt>The diagram</dt>
   <dd>
@@ -96,8 +99,10 @@
 <p>
   For an update the two diagrams move together: zoom or pan one and the other follows, and
   selecting a node selects its counterpart. Changed nodes are coloured and outlined by kind of
-  change, with a badge, so the difference does not rely on colour alone. <em>Previous</em> and
-  <em>Next change</em> step through the changes in reading order. A switch in the legend hides
+  change, with a badge, so the difference does not rely on colour alone; changed interactions
+  are traced in the same colours, with a badge halfway along. <em>Previous</em> and
+  <em>Next change</em> step through the changed nodes in reading order, then the changed
+  interactions. A switch in the legend hides
   nodes that only moved, since a re-layout can produce many of them.
 </p>
 

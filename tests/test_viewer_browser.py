@@ -104,7 +104,7 @@ def site(tmp_path):
         server.server_close()
 
 
-def _update(mode: str = "full") -> str:
+def _update(mode: str = "full", diff_url: str = "diff.json") -> str:
     return _render_pair(
         {
             "pr_number": 7,
@@ -116,7 +116,7 @@ def _update(mode: str = "full") -> str:
                 "after_svg_url": "after.svg",
                 "before_graph_url": "before-graph.json",
                 "after_graph_url": "after-graph.json",
-                "diff_url": "diff.json",
+                "diff_url": diff_url,
             },
         },
         mode,
@@ -463,3 +463,86 @@ def test_toolbar_is_one_tab_stop_and_the_arrows_move_inside_it(site):
         [f"{s}:{w}" for s in ("before", "after") for w in ("search", "viewer__canvas", "n-d001")]
         + ["before:zoom-out", "after:next-change"]
     )
+
+
+# -- interactions in the diff ----------------------------------------------------------------
+
+
+def _with_edges(site) -> None:
+    """diff-edges.json: the fixture diff plus the interaction comparison the server would add.
+
+    Computed from the fixture graphs by the server's own function, so the client is tested
+    against the shape it will be sent rather than a hand-written guess at it.
+    """
+    from app.preview.diff import diff_edges, diff_nodes
+
+    root, _ = site
+    diff = json.loads((FIXTURES / "diff.json").read_text())
+    graphs = {
+        s: json.loads((FIXTURES / f"{s}-graph.json").read_text()) for s in ("before", "after")
+    }
+    nodes = diff_nodes(graphs["before"]["nodes"], graphs["after"]["nodes"])
+    diff["minor"] = 1
+    diff["edges"] = diff_edges(graphs["before"]["edges"], graphs["after"]["edges"], nodes,
+                               graphs["before"]["nodes"], graphs["after"]["nodes"])
+    assert diff["edges"]["after"]["e-i001"] == {"change": "added"}
+    (root / "diff-edges.json").write_text(json.dumps(diff))
+
+
+def test_a_changed_interaction_is_marked_counted_and_stepped_to(site):
+    _with_edges(site)
+    out = _run(
+        site,
+        _update(diff_url="diff-edges.json"),
+        """
+        ready(function (vs) {
+          var b = vs[0], a = vs[1];
+          a.root.querySelector('[data-v="legend"]').click();
+          function texts(list, f) { return Array.prototype.map.call(list, f); }
+          var legend = texts(a.legend.querySelectorAll('.viewer__legend-diff li'),
+            function (li) { return li.textContent; });
+          var marks = texts(a.marks.querySelectorAll('.viewer__emark'),
+            function (m) { return m.getAttribute('class'); });
+          var names = a.pair.changes.map(function (c) {
+            return c.viewer.side + ':' + (c.kind || 'node') + ':' + c.item.id;
+          });
+          // Step to the last change, the interaction.
+          a.canvas.focus();
+          for (var i = 0; i < a.pair.changes.length; i++) key(document.activeElement, 'n');
+          setTimeout(function () {
+            done({ legend: legend, marks: marks,
+                   before: b.marks.querySelectorAll('.viewer__emark').length,
+                   names: names, selected: a.selected && a.selected.item.id,
+                   panel: a.panel.hidden ? null : a.panelBody.textContent,
+                   focus: side(document.activeElement) });
+          }, 300);
+        });
+        """,
+    )
+    assert "+ 1 interaction added" in out["legend"]
+    assert out["marks"] == ["viewer__emark viewer__emark--added"]
+    assert out["before"] == 0
+    # The nodes first, in reading order, then the interaction.
+    assert out["names"][-1] == "after:edge:e-i001"
+    assert all(":node:" in n for n in out["names"][:-1]) and len(out["names"]) == 5
+    assert out["selected"] == "e-i001"
+    assert "+ added" in out["panel"]
+    assert out["focus"].startswith("after:viewer__canvas")
+
+
+def test_a_diff_without_interactions_still_marks_the_nodes(site):
+    # A cache compared before interactions were: no edge marks, no edge counts, the same four
+    # node changes as ever.
+    out = _run(
+        site,
+        _update(),
+        """
+        ready(function (vs) {
+          var a = vs[1];
+          done({ emarks: a.marks.querySelectorAll('.viewer__emark').length,
+                 marks: a.marks.querySelectorAll('.viewer__mark').length,
+                 changes: a.pair.changes.length });
+        });
+        """,
+    )
+    assert out == {"emarks": 0, "marks": 3, "changes": 4}

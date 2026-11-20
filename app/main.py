@@ -69,6 +69,7 @@ from app.models import Base, ReviewStatus, UntrackedDismissal
 from app.pipeline import DraftsReader
 from app.pipeline.collection import CollectionReports
 from app.preview import PreviewService
+from app.preview.diff import describe_description_change, describe_edge_changes
 from app.preview.metadata import parse_curation_metadata
 from app.ratelimit import RateLimited, SubmissionRateLimiter
 from app.review.adoption import AdoptionService
@@ -1000,14 +1001,36 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             return None
         counts = diff["summary"]
         parts = [f"{counts[k]} {word}" for k, word in _DIFF_WORDS if counts.get(k)]
+        meta = diff.get("meta") if isinstance(diff.get("meta"), dict) else None
+        description = meta.get("description") if meta else None
+        # Interactions (app.preview.diff.diff_edges). None on a cache written before they were
+        # compared: that says nothing about them, which is not the same as "none changed".
+        edges = diff.get("edges") if isinstance(diff.get("edges"), dict) else None
+        edge_counts = edges.get("summary") if edges else None
+        edge_view = None
+        if isinstance(edge_counts, dict):
+            edge_view = {
+                "counts": edge_counts,
+                "sentence": describe_edge_changes(edge_counts),
+                "changed": any(
+                    edge_counts.get(k) for k in ("added", "removed", "retyped", "reconnected")
+                ),
+            }
         return {
             "counts": counts,
             "sentence": ", ".join(parts) if parts else "No data nodes were added, removed or "
             "re-annotated.",
-            "changed": bool(parts),
+            # Anything changed on the diagram; ``nodes_changed`` is what the node legend needs.
+            "changed": bool(parts) or bool(edge_view and edge_view["changed"]),
+            "nodes_changed": bool(parts),
+            "edges": edge_view,
             # Title, description, references, ontology tags (app.preview.diff.diff_metadata).
             # Absent on a cache written before Wave 3.
-            "meta": diff.get("meta") if isinstance(diff.get("meta"), dict) else None,
+            "meta": meta,
+            "description": (
+                describe_description_change(description) if isinstance(description, dict)
+                else None
+            ),
         }
 
     def _review_view(request: Request, r) -> dict:

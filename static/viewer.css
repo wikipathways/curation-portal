@@ -188,6 +188,19 @@
 .viewer__badge--reannotated circle { fill: var(--diff-reannotated); }
 .viewer__badge--relabelled circle { fill: var(--diff-relabelled); }
 .viewer__badge--moved circle { fill: var(--diff-moved); }
+/* A changed interaction: a wide band along its route under the badge, in the colour and dash of
+   the node change it corresponds to (retyped and reconnected read as a changed node). */
+.viewer__emark {
+  fill: none;
+  stroke-width: 7px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-opacity: 0.6;
+  vector-effect: non-scaling-stroke;
+}
+.viewer__emark--added { stroke: var(--diff-added); }
+.viewer__emark--removed { stroke: var(--diff-removed); stroke-dasharray: 1 9; }
+.viewer__emark--reannotated { stroke: var(--diff-reannotated); stroke-dasharray: 10 3 2 3; }
 .review-card--hide-moved .viewer__mark--moved,
 .review-card--hide-moved .viewer__badge--moved { display: none; }
 
