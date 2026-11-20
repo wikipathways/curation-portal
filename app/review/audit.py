@@ -8,9 +8,10 @@ Asking each of those paths to write an event would be a dozen chances to forget 
 - ``opened``: a new row (the submitter, or the pull request author for an adopted one);
 - ``status``: any status change, with the note that explains it where there is one;
 - ``assigned``: the assigned curator changing;
-- ``checklist``: a person's answer to a checklist item. Answers the portal derives from the file or
-  the repository's pipeline are not recorded — they are rewritten on every upload and would bury
-  the human decisions the trail exists for.
+- ``checklist``: a person's answer to a checklist item. The automated hints beside the items are
+  not recorded — they are rewritten on every upload and pipeline run and would bury the human
+  decisions the trail exists for — and neither are the states the portal filled in on rows written
+  before it stopped doing so.
 
 The actor is whoever the service method was acting for (``acting_as``), else ``portal``. Bulk
 UPDATEs on the table (the reconcile claim) bypass the ORM and are deliberately not recorded.
@@ -100,6 +101,10 @@ def _checklist_events(old: list | None, new: list | None) -> list[dict]:
             continue
         prior = before.get(item.get("key")) or {}
         if prior.get("state") == item.get("state") and not prior.get("auto"):
+            continue
+        if prior.get("auto") and item.get("state") == "pending":
+            # An app-filled state on an old row giving way to a fresh, unanswered item: nobody
+            # decided anything.
             continue
         out.append(
             {

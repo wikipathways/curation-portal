@@ -1,28 +1,40 @@
-"""The structured curation checklist (design §4.5) — modular, with automatable checks.
+"""The structured curation checklist (design §4.5) — modular, with automated hints.
 
 A reviewer works a fixed list of checks per pathway; approval requires every *required* item to be
 marked ``pass``. Each item's state is stored per-review as JSON, so the template can change without
 a schema migration.
 
-Two kinds of automation, both **advisory** — a curator can always overrule an auto-derived state:
+**Only a curator sets an item's state.** Every item starts ``pending`` and stays there until a
+curator answers it: not at creation, not when the repository's pipeline reports back, not when an
+update is scoped. The app used to pre-fill states, and a live review (PR #91, 2026-11-20) showed
+what that costs: ``ontology_tags`` sat at N/A on a pathway carrying two tags, because the
+repository's own extractor had reported none and that reading overwrote the portal's. Even a
+correct automated answer still has to be interpreted (are those tags the right ones?), so the
+checklist now asks and the automation advises.
+
+What the automation found is kept beside the state as a *hint*: ``suggested`` (the state it would
+have chosen, or None) and ``hint`` (why). The card shows it as "Automated check: … Suggests Pass."
+A later refresh may rewrite the hint; it never touches ``state``.
 
 - ``auto_check`` — given the pathway's parsed metadata (``app.preview.metadata.CurationMetadata``),
   return a suggested state + explanatory note. E.g. "all data nodes have identifiers" → ``pass``.
-  Items with an ``auto_check`` are pre-filled when the review is created and flagged ``auto`` so the
-  UI shows they were machine-suggested.
 - ``relevant_for_update`` — given (before, after) metadata, whether the check applies to *this*
-  update. An update that didn't touch the title shouldn't ask the curator to re-check the title.
-  Irrelevant items are auto-set to ``na`` and made non-blocking, with a note saying why.
+  update. An item the update did not touch gets the hint "this update did not touch it" and the
+  suggestion ``na``; a curator who agrees marks it N/A, which makes it non-blocking.
+
+Item fields: ``key``, ``label``, ``required``, ``state``, ``note`` (the curator's own note),
+``auto`` (False on every new row; True only on rows written before this rule, whose states the app
+filled in), ``suggested``, ``hint`` and, for update-scoped items, ``scoped``.
 
 ## Adding or changing a check
 
 1. Append a ``ChecklistItemDef(key, label, required=...)`` to ``CURATION_CHECKLIST``. ``key`` is a
    stable identifier the API uses to update the item — never reuse or rename one in place.
-2. To automate it, pass ``auto_check=<fn(metadata) -> AutoResult>``. Keep it cheap and offline
+2. To give it a hint, pass ``auto_check=<fn(metadata) -> AutoResult>``. Keep it cheap and offline
    (no network) — it runs on every submission; verification that needs the network (does an id
    actually resolve?) belongs in a note with a link, not the auto_check.
 3. To scope it to relevant updates, pass ``relevant_for_update=<fn(before, after) -> bool>``.
-4. No migration is needed — the checklist is a JSON column. Existing open reviews keep the checklist
+4. No migration is needed — the checklist is a JSON column. Existing reviews keep the checklist
    they were created with; only new reviews pick up the change.
 """
 from __future__ import annotations
@@ -109,10 +121,10 @@ def _auto_naming(m, before=None, kind: str = "new") -> AutoResult:
 
 
 #: What the same item can honestly say where the *repository* names the file. The app commits a
-#: placeholder there and the publish workflow assigns the id, so claiming the app got the naming
-#: right is untrue — and, because ``refresh_pipeline_checks`` only fills items still pending, an
-#: auto-pass here also locks out the check that can answer it: the repository's own record of
-#: the slug, compared against the one the app predicted (``app.pipeline.drafts._naming_check``).
+#: placeholder there and the publish workflow assigns the id, so suggesting the app got the naming
+#: right is untrue. The hint that can answer it is the repository's own record of the slug,
+#: compared against the one the app predicted (``app.pipeline.drafts._naming_check``), which
+#: ``refresh_pipeline_checks`` writes once the pipeline has run.
 _PIPELINE_NAMING = AutoResult(
     ChecklistState.PENDING.value,
     "The repository files this pathway and assigns its WPID at publication. Its own record of "
@@ -192,9 +204,9 @@ CURATION_CHECKLIST: list[ChecklistItemDef] = [
         auto_check=_auto_datanodes,
         relevant_for_update=_rel_datanodes,
         help=(
-            "Every data node carries a database identifier. Pre-filled from the file; open the "
-            "data node table and check that the identifiers point at the right genes, proteins "
-            "and metabolites."
+            "Every data node carries a database identifier. The automated check counts the nodes "
+            "without one; open the data node table and check that the identifiers point at the "
+            "right genes, proteins and metabolites."
         ),
     ),
     ChecklistItemDef(
@@ -205,10 +217,9 @@ CURATION_CHECKLIST: list[ChecklistItemDef] = [
         relevant_for_update=_rel_references,
         help=(
             "Open each listed reference and check that it exists and supports the pathway. "
-            "The portal can count references in the file but not read them, so the file alone "
-            "never ticks this. Where the repository's own processing runs, it is ticked once "
-            "that processing has resolved every reference the file declares, and marked as a "
-            "problem when some did not resolve."
+            "The portal can count references in the file but not read them. Where the "
+            "repository's own processing runs, the automated check says whether it resolved "
+            "every reference the file declares."
         ),
     ),
     ChecklistItemDef(
@@ -218,9 +229,9 @@ CURATION_CHECKLIST: list[ChecklistItemDef] = [
         auto_check=_auto_naming,
         help=(
             "Where the file sits and which identifier it gets. Where the repository publishes "
-            "through its own workflows, it assigns both and this item fills in from its record "
-            "once its pipeline has run; where the portal merges, the portal assigns them and "
-            "this passes on its own."
+            "through its own workflows, it assigns both, and the automated check compares its "
+            "record with what the portal expected once its pipeline has run; where the portal "
+            "merges, the portal assigns them."
         ),
     ),
     # "Meaningful" is still a human judgement, and the auto-check cannot reach ``pass`` — but it
@@ -234,8 +245,8 @@ CURATION_CHECKLIST: list[ChecklistItemDef] = [
         relevant_for_update=_rel_description,
         help=(
             "Is the title specific, and does the description summarise the pathway in two or "
-            "three sentences? The automatic check can only say a description is missing or "
-            "short; whether it is meaningful is your call, so this never passes on its own."
+            "three sentences? The automated check can only say a description is missing or "
+            "short; whether it is meaningful is your call."
         ),
     ),
     # No auto_check, and there cannot be one: whether an interaction is *connected* is about the
@@ -258,14 +269,15 @@ CURATION_CHECKLIST: list[ChecklistItemDef] = [
         auto_check=_auto_ontology,
         relevant_for_update=_rel_ontology,
         help=(
-            "Optional. Whether the pathway carries ontology tags (pathway, disease or cell "
-            "type). Never blocks approval."
+            "Optional. Whether the pathway carries suitable ontology tags (pathway, disease or "
+            "cell type). The automated check counts them; whether they fit the pathway is your "
+            "call. Never blocks approval."
         ),
     ),
     # Derived from the pull request's file list rather than from the GPML, so it has no
-    # ``auto_check`` (which takes metadata) and is filled in by ``build_checklist`` directly.
-    # Always passes for a portal submission — the app commits one file — and exists for the
-    # pull requests the app did not open, where changing several pathways at once is real.
+    # ``auto_check`` (which takes metadata) and its hint comes from ``build_checklist`` directly.
+    # Always suggests pass for a portal submission — the app commits one file — and exists for
+    # the pull requests the app did not open, where changing several pathways at once is real.
     ChecklistItemDef(
         "one_pathway_per_pr",
         "One pathway per pull request",
@@ -303,13 +315,11 @@ def requirement_for(key: str, state: str) -> bool:
 
 
 def _one_pathway_result(paths: list[str] | None) -> tuple[str, str]:
-    """State and note for ``one_pathway_per_pr``.
+    """Suggested state and hint for ``one_pathway_per_pr``.
 
-    Unknown paths resolve to ``na`` — "nothing to check" — and **not** to pending. Pending on a
-    required item blocks approval, which would wedge every review written before this item
-    existed, and every row whose file list could not be read. ``na`` is the honest word and
-    ``requirement_for`` already makes it non-blocking, restoring requiredness the moment it
-    leaves ``na`` (issue #27).
+    Unknown paths suggest ``na`` — "nothing to check" — since there is no file list to judge.
+    The item itself still starts pending like every other: the curator decides, and marking it
+    N/A takes it off the approval gate (``requirement_for``).
     """
     if not paths:
         return (
@@ -317,7 +327,7 @@ def _one_pathway_result(paths: list[str] | None) -> tuple[str, str]:
             "Not checked: the pull request's file list was not read.",
         )
     if len(paths) == 1:
-        return ChecklistState.PASS.value, ""
+        return ChecklistState.PASS.value, "The pull request changes one pathway."
     named = ", ".join(f"`{p}`" for p in paths)
     return (
         ChecklistState.FAIL.value,
@@ -325,6 +335,27 @@ def _one_pathway_result(paths: list[str] | None) -> tuple[str, str]:
         f"one pathway per pull request — its own workflow greps a single GPML — so approving "
         f"this would publish at most one of them. Ask the author to split it.",
     )
+
+
+#: The hint on an update-scoped item the update left alone.
+SCOPED_HINT = "This update did not touch it."
+
+
+def _item(d: ChecklistItemDef, suggested: str | None, hint: str, *, scoped: bool = False) -> dict:
+    """One fresh item: unanswered, with what the automation found beside it."""
+    item = {
+        "key": d.key,
+        "label": d.label,
+        "required": requirement_for(d.key, ChecklistState.PENDING.value),
+        "state": ChecklistState.PENDING.value,
+        "note": "",
+        "auto": False,
+        "suggested": suggested,
+        "hint": hint,
+    }
+    if scoped:
+        item["scoped"] = True
+    return item
 
 
 def build_checklist(
@@ -335,20 +366,22 @@ def build_checklist(
     pipeline_mode: bool = False,
     pathway_paths: list[str] | None = None,
 ) -> list[dict]:
-    """Build a review's checklist, applying auto-checks and (for updates) relevance scoping.
+    """Build a review's checklist: every item pending, with automated hints beside it.
 
     ``metadata`` is the parsed *after* metadata; ``before`` the base-version metadata (updates
-    only). With neither, every item is a blank ``pending`` — the plain template.
+    only). With neither, every item is a blank ``pending`` with no hint beyond what the file list
+    says — the plain template.
 
     ``pipeline_mode`` says the target repository owns naming and publication, which changes what
-    one item can truthfully claim (see ``_PIPELINE_NAMING``).
+    one item's hint can truthfully claim (see ``_PIPELINE_NAMING``).
 
     ``pathway_paths`` is every pathway GPML the pull request touches, known only where the file
     list was read — adoption. It is the one input here that does not come from the GPML.
     """
     items: list[dict] = []
     for d in CURATION_CHECKLIST:
-        # Scope updates: an item whose subject didn't change is auto-N/A and non-blocking.
+        # Scope updates: an item whose subject didn't change suggests N/A. Only a suggestion: the
+        # curator who agrees marks it N/A, and that is what takes it off the approval gate.
         if (
             kind == "update"
             and before is not None
@@ -356,39 +389,47 @@ def build_checklist(
             and d.relevant_for_update is not None
             and not d.relevant_for_update(before, metadata)
         ):
-            items.append(
-                {
-                    "key": d.key,
-                    "label": d.label,
-                    "required": requirement_for(d.key, ChecklistState.NA.value),
-                    "state": ChecklistState.NA.value,
-                    "note": "Not relevant: this update did not touch it.",
-                    "auto": True,
-                }
-            )
+            items.append(_item(d, ChecklistState.NA.value, SCOPED_HINT, scoped=True))
             continue
 
-        state, note, auto = ChecklistState.PENDING.value, "", False
+        suggested: str | None = None
+        hint = ""
         if d.key == "one_pathway_per_pr":
-            state, note = _one_pathway_result(pathway_paths)
-            auto = True
+            suggested, hint = _one_pathway_result(pathway_paths)
         elif d.key == "naming_ok" and pipeline_mode:
-            state, note, auto = _PIPELINE_NAMING.state, _PIPELINE_NAMING.note, True
+            suggested, hint = _PIPELINE_NAMING.state, _PIPELINE_NAMING.note
         elif metadata is not None and d.auto_check is not None:
             res = d.auto_check(metadata, before=before, kind=kind)
-            state, note, auto = res.state, res.note, True
-        items.append(
-            {
-                "key": d.key,
-                "label": d.label,
-                # An auto "N/A" means there is nothing to check, so it must not block approval.
-                "required": requirement_for(d.key, state),
-                "state": state,
-                "note": note,
-                "auto": auto,
-            }
-        )
+            suggested, hint = res.state, res.note
+        items.append(_item(d, suggested, hint))
     return items
+
+
+def hint_text(item: dict) -> str:
+    """The automated hint for one item in words, or "" when there is none.
+
+    "Automated check: 2 ontology tags. Suggests Pass." Shared by the review card and the mirror
+    comment so both say the same sentence. A ``pending`` suggestion is information without a
+    verdict, so it carries no "Suggests".
+    """
+    hint = (item.get("hint") or "").strip()
+    suggested = item.get("suggested")
+    word = _SUGGEST_WORD.get(suggested or "")
+    if not hint and not word:
+        return ""
+    parts = ["Automated check:"]
+    if hint:
+        parts.append(hint if hint[-1] in ".!?" else hint + ".")
+    if word:
+        parts.append(f"Suggests {word}.")
+    return " ".join(parts)
+
+
+_SUGGEST_WORD = {
+    ChecklistState.PASS.value: "Pass",
+    ChecklistState.FAIL.value: "Fail",
+    ChecklistState.NA.value: "N/A",
+}
 
 
 def default_checklist() -> list[dict]:

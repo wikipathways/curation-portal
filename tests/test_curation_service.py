@@ -69,13 +69,13 @@ def test_register_is_idempotent_and_queue_lists_open(session_factory):
     queue = svc.list_queue()
     assert [r.pr_number for r in queue] == [1, 2]
     assert queue[0].status == ReviewStatus.OPEN
-    # Fresh review starts with the full checklist. Everything derived from the GPML is pending;
+    # Fresh review starts with the full checklist, every item pending: only a curator answers.
     # `one_pathway_per_pr` reads the pull request's file list, which this registration did not
-    # supply, so it is `na` — nothing to check — and therefore non-blocking.
+    # supply, so its hint suggests N/A — nothing to check — and the curator decides.
     assert len(queue[0].checklist) == len(CURATION_CHECKLIST)
-    states = {i["key"]: i["state"] for i in queue[0].checklist}
-    assert states.pop("one_pathway_per_pr") == "na"
-    assert set(states.values()) == {"pending"}
+    assert {i["state"] for i in queue[0].checklist} == {"pending"}
+    one = next(i for i in queue[0].checklist if i["key"] == "one_pathway_per_pr")
+    assert one["suggested"] == "na"
 
 
 def test_get_missing_raises(session_factory):
@@ -285,7 +285,8 @@ def test_find_open_new_review_and_revise_rebuilds_checklist(session_factory):
     review = svc.revise(1, metadata=parse_curation_metadata(revised))
     assert review.status == ReviewStatus.OPEN  # re-opened
     dn = next(i for i in review.checklist if i["key"] == "datanodes_mapped")
-    assert dn["state"] == "pass" and dn["auto"] is True  # checklist rebuilt from new content
+    # Checklist rebuilt from the new content: unanswered, with the new file's hint.
+    assert (dn["state"], dn["auto"], dn["suggested"]) == ("pending", False, "pass")
 
 
 def test_reupload_after_changes_requested_reopens_review(session_factory):

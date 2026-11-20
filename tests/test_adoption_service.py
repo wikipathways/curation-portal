@@ -15,6 +15,7 @@ from app.github import FakeGitHubClient
 from app.locks import PathwayLockRegistry
 from app.preview import PreviewService
 from app.review.adoption import AdoptionService
+from app.review.checklist import is_complete
 from app.review.service import CurationService, ReviewNotFound
 
 REPO = "wikipathways/sandbox-wp-db"
@@ -208,9 +209,11 @@ def test_a_multi_pathway_pull_request_is_adopted_but_cannot_be_approved(
     assert svc.adopt(58).adopted is True
     review = svc._curation.get(58)
     item = next(i for i in review.checklist if i["key"] == "one_pathway_per_pr")
-    assert item["state"] == "fail"
+    # The curator answers; the file list is the hint they answer from, and the gate stays shut.
+    assert (item["state"], item["suggested"]) == ("pending", "fail")
     assert item["required"] is True
-    assert "WP1072" in item["note"] and "WP179" in item["note"]
+    assert "WP1072" in item["hint"] and "WP179" in item["hint"]
+    assert not is_complete(review.checklist)
 
 
 def test_a_closed_pull_request_is_not_adopted(session_factory, previews):

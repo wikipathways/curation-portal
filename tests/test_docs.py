@@ -189,9 +189,13 @@ def test_checklist_help_does_not_deny_what_the_code_fills_in(tmp_path):
     from app.pipeline.drafts import DraftArtifacts, reference_check
 
     for item in _checklist():
-        if item["auto"]:
+        if item["hinted"]:
             assert "never ticked automatically" not in item["help"].lower(), item["key"]
-    # In pipeline mode the repository's bibliography does tick references_valid; the help says so.
+        # Nothing is ticked for the curator any more, and the help must not say otherwise.
+        for claim in ("passes on its own", "ticked once", "fills in from", "pre-filled"):
+            assert claim not in item["help"].lower(), (item["key"], claim)
+    # In pipeline mode the repository's bibliography gives references_valid a pass hint; the
+    # help says so.
     two = [{"id": "a"}, {"id": "b"}]
     artifacts = DraftArtifacts("WP1__PR1", True, [], two, {}, None, None, None)
     assert reference_check(artifacts, gpml_reference_count=2)[0] == "pass"

@@ -452,13 +452,15 @@
     <ul>
       {% for it in r.checklist %}
       {# data-label so the script can name this item in the Approve button's title without
-         scraping it back out of the label span, which also carries the bullet and the auto chip. #}
+         scraping it back out of the label span, which also carries the required bullet. #}
       <li class="checklist__item" data-key="{{ it.key }}" data-label="{{ it.label }}"
           data-required="{{ 'true' if it.required else 'false' }}">
         <span class="state-pill state-pill--{{ it.state }}" data-state="{{ it.state }}">{{ state_icon(it.state) }} <span class="state-pill__text">{{ STATE_LABEL.get(it.state, it.state) }}</span></span>
         {# Rendered even when not required, and hidden, so the script can show and hide it as a
            state change moves the item on and off the approval gate. #}
-        <span class="checklist__label">{{ it.label }}<span class="checklist__req"{% if not it.required %} hidden{% endif %}><span class="req" aria-hidden="true">&bull;</span><span class="visually-hidden">required</span></span>{% if it.auto %}<span class="checklist__auto" title="Suggested from the pathway metadata. Override it if you disagree.">auto</span>{% endif %}</span>
+        {# `auto` only on rows written before the portal stopped answering items for the curator:
+           their state is still the app's guess, and the chip says so. #}
+        <span class="checklist__label">{{ it.label }}<span class="checklist__req"{% if not it.required %} hidden{% endif %}><span class="req" aria-hidden="true">&bull;</span><span class="visually-hidden">required</span></span>{% if it.auto %}<span class="checklist__auto" title="Filled in by the portal before curators answered every item themselves. Override it if you disagree.">auto</span>{% endif %}</span>
         {% if it.note %}<span class="checklist__note">{{ it.note }}</span>{% endif %}
         {% if can_act %}
         <span class="checklist__controls" role="group" aria-label="Set state for {{ it.label }}">
@@ -467,6 +469,10 @@
           <button type="button" class="chip-btn chip-btn--na" data-state="na" aria-pressed="{{ 'true' if it.state == 'na' else 'false' }}">N/A</button>
         </span>
         {% endif %}
+        {# What the portal or the repository's pipeline found: a hint under the item, never its
+           answer (app/review/checklist.py). #}
+        {% set hint = it | checklist_hint %}
+        {% if hint %}<span class="checklist__hint{% if it.suggested in ('pass', 'fail', 'na') %} checklist__hint--{{ it.suggested }}{% endif %}">{{ hint }}</span>{% endif %}
       </li>
       {% endfor %}
     </ul>

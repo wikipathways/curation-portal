@@ -25,6 +25,7 @@ from app.review.audit import as_actor, default_actor
 from app.review.checklist import (
     ChecklistState,
     build_checklist,
+    hint_text,
     is_complete,
     is_valid_key,
     requirement_for,
@@ -240,8 +241,10 @@ def render_mirror_comment(
     for item in review.checklist:
         req = " (required)" if item.get("required") else ""
         state = _PLAIN_STATE.get(item.get("state", "pending"), item.get("state", "pending"))
-        note = item.get("note") or ""
-        lines.append(f"| {item['label']}{req} | {state} | {f'_{note}_' if note else ''} |")
+        # The curator's own note, then what the automation found. The hint is labelled as such
+        # so a GitHub reader cannot take "Suggests Pass" for the state column's answer.
+        notes = [f"_{text}_" for text in (item.get("note") or "", hint_text(item)) if text]
+        lines.append(f"| {item['label']}{req} | {state} | {' '.join(notes)} |")
     if quality is not None and quality.findings:
         lines += ["", quality.to_markdown(heading="What the portal measured")]
     # ``approved_by`` records who approved it, and is deliberately not cleared when an approval
@@ -296,51 +299,75 @@ def _meta_text(metadata, attr: str, limit: int) -> str | None:
     return value.strip()[:limit]
 
 
+def _answered(item: dict) -> bool:
+    """Whether a curator has answered this item.
+
+    ``auto`` is True only on items of rows written before the app stopped setting states, where
+    the state was the app's guess rather than anybody's answer.
+    """
+    return not item.get("auto") and item.get("state") not in (None, "pending")
+
+
 def _merge_checklist(old: list[dict], fresh: list[dict]) -> list[dict]:
     """Re-derive the checklist from new content without discarding a curator's own answers.
 
-    ``auto`` is maintained by every writer — ``build_checklist`` sets it when an auto-check
-    produced the value, ``set_checklist_item`` sets it per call — so it means "nobody has
-    answered this by hand", which is exactly the question here. An item a curator answered is
-    kept; everything else is replaced by what the new file says.
+    An item a curator answered keeps its state and note and takes the new file's hint; everything
+    else is replaced by the fresh, unanswered item.
     """
-    kept = {
-        item["key"]: item
-        for item in old
-        if not item.get("auto") and item.get("state") not in (None, "pending")
-    }
-    return [kept.get(item["key"], item) for item in fresh]
+    kept = {item["key"]: item for item in old if _answered(item)}
+    merged = []
+    for item in fresh:
+        prior = kept.get(item["key"])
+        if prior is None:
+            merged.append(item)
+            continue
+        answer = dict(prior)
+        for field in ("suggested", "hint", "scoped"):
+            answer.pop(field, None)
+            if field in item:
+                answer[field] = item[field]
+        merged.append(answer)
+    return merged
 
 
-def _apply_checklist_item(item: dict, state: str, note: str | None, auto: bool) -> bool:
-    """Write one answer onto one checklist item in place. True when anything changed."""
+def _apply_checklist_item(item: dict, state: str, note: str | None) -> bool:
+    """Write a curator's answer onto one checklist item in place. True when anything changed.
+
+    The only writer of ``state``: the app suggests (``suggested`` / ``hint``) and never answers.
+    """
     key = item["key"]
     was_auto = bool(item.get("auto"))
     contradicts = item.get("state") != state
     changed = item.get("state") != state
     item["state"] = state
-    changed = changed or bool(item.get("auto")) != auto
-    item["auto"] = auto
+    changed = changed or was_auto
+    item["auto"] = False
     # ``na`` never blocks approval, and an item leaving ``na`` gets its requiredness back (issue
     # #27). This writer used to set state and leave ``required`` alone, so a curator marking a
     # required item N/A disabled Approve with no way back except guessing at Pass.
     required = requirement_for(key, state)
     changed = changed or bool(item.get("required")) != required
     item["required"] = required
-    # None = "not editing the note" — a Pass/Fail/N/A click must not erase the auto-derived
-    # explanation the curator is reading.
+    # None = "not editing the note" — a Pass/Fail/N/A click must not erase the note.
     if note is not None:
         changed = changed or item.get("note") != note
         item["note"] = note
-    elif not auto and was_auto and contradicts and item.get("note"):
-        # ...but where the click *contradicts* that explanation, leaving it unmarked states the
-        # opposite of what the item now says. PR #42 ended up reading "References resolve — pass"
-        # above the note "The pipeline resolved 0 of the 1 reference in the GPML", which is not a
-        # nuance, it is two answers to one question. Kept rather than cleared: what the pipeline
-        # saw is evidence, and a curator overriding it is the interesting part of the record.
-        # Only its standing changes.
+    elif was_auto and contradicts and item.get("note"):
+        # Only on rows from before the app stopped answering items, whose note is the app's
+        # explanation of a state it chose. Where the click contradicts it, leaving it unmarked
+        # states the opposite of what the item now says: PR #42 read "References resolve — pass"
+        # above "The pipeline resolved 0 of the 1 reference in the GPML". Kept rather than
+        # cleared: what the pipeline saw is evidence. Only its standing changes.
         item["note"] = f"Overridden by a curator. {item['note']}"
         changed = True
+    return changed
+
+
+def _apply_checklist_hint(item: dict, suggested: str | None, hint: str) -> bool:
+    """Write an automated hint onto one item in place. Never touches the curator's answer."""
+    changed = item.get("suggested") != suggested or (item.get("hint") or "") != (hint or "")
+    item["suggested"] = suggested
+    item["hint"] = hint or ""
     return changed
 
 
@@ -726,9 +753,10 @@ class CurationService:
     ) -> Review:
         """Create the review row for a freshly opened submission PR (idempotent by PR number).
 
-        ``metadata`` (parsed from the uploaded GPML) pre-fills the checklist with auto-derived,
-        curator-overridable states; ``before_metadata`` (updates only) scopes the checklist to what
-        actually changed. Both optional — without them the plain all-pending checklist is used.
+        ``metadata`` (parsed from the uploaded GPML) gives the checklist its automated hints; every
+        item still starts pending for a curator to answer. ``before_metadata`` (updates only)
+        marks the items the update did not touch. Both optional — without them the plain checklist
+        is used.
 
         ``wpid`` is None for a new pathway in pipeline mode: the id does not exist until the
         target repo assigns one. ``head_branch`` is recorded because the branch name can then no
@@ -992,7 +1020,7 @@ class CurationService:
         head_sha: str | None = None,
     ) -> Review:
         """A revision landed on a review's PR: re-open it and rebuild the checklist from the new
-        metadata, so the curator re-reviews the changed content from a fresh auto-derived baseline.
+        metadata, so the curator re-reviews the changed content from a fresh, unanswered checklist.
 
         ``submitter_note`` follows the same rule as ``register``: a blank one keeps what is there.
         """
@@ -1105,18 +1133,14 @@ class CurationService:
         state: str,
         note: str | None = None,
         *,
-        auto: bool = False,
         actor: str | None = None,
     ) -> Review:
-        """Set one checklist item's state (and optionally its note).
+        """A curator answers one checklist item (and optionally notes why).
 
-        ``auto`` says who is answering. It is stored on the item, because the flag is what tells
-        a later re-upload whether the answer can be re-derived from the new file or belongs to a
-        curator — and it used to record only how the item was *built*, so a machine-written
-        answer on an item with no auto-check looked human and survived forever, while a curator's
-        override of an auto-derived item was thrown away on the next upload.
+        The only path that sets an item's state. The app's own findings go through
+        ``set_checklist_hints`` and land beside the answer, never on it.
         """
-        return self.set_checklist_items(pr_number, {key: (state, note)}, auto=auto, actor=actor)
+        return self.set_checklist_items(pr_number, {key: (state, note)}, actor=actor)
 
     @as_actor("actor")
     def set_checklist_items(
@@ -1124,20 +1148,41 @@ class CurationService:
         pr_number: int,
         updates: dict[str, tuple[str, str | None]],
         *,
-        auto: bool = False,
         actor: str | None = None,
     ) -> Review:
-        """Set several items at once: one version-guarded write and one mirror for all of them.
-
-        ``refresh_pipeline_checks`` fills up to five items per pass, and writing them one at a
-        time cost five commits and five mirror comment edits, each of which GitHub then
-        announced back to the webhook.
-        """
+        """Answer several items at once: one version-guarded write and one mirror for all."""
         for key, (state, _note) in updates.items():
             if not is_valid_key(key):
                 raise ValueError(f"unknown checklist item: {key}")
             if state not in {s.value for s in ChecklistState}:
                 raise ValueError(f"invalid checklist state: {state}")
+        return self._write_checklist(
+            pr_number,
+            updates,
+            lambda item, update: _apply_checklist_item(item, *update),
+        )
+
+    def set_checklist_hints(
+        self, pr_number: int, updates: dict[str, tuple[str | None, str]]
+    ) -> Review:
+        """Rewrite the automated hints (``suggested`` and ``hint``) on some items.
+
+        Never touches ``state``: a hint is what the app found, and only a curator answers. A
+        refresh that learns something new about an item the curator already answered updates the
+        hint beside their answer and leaves the answer alone.
+        """
+        for key, (suggested, _hint) in updates.items():
+            if not is_valid_key(key):
+                raise ValueError(f"unknown checklist item: {key}")
+            if suggested is not None and suggested not in {s.value for s in ChecklistState}:
+                raise ValueError(f"invalid suggested state: {suggested}")
+        return self._write_checklist(
+            pr_number,
+            updates,
+            lambda item, update: _apply_checklist_hint(item, *update),
+        )
+
+    def _write_checklist(self, pr_number: int, updates: dict, apply) -> Review:
         # The checklist is one JSON blob on the review row, so setting an item is a
         # read-modify-write of the whole list. Two curators — or a burst of clicks — updating
         # *different* items at once would otherwise lose updates: each reads the list, changes
@@ -1157,10 +1202,9 @@ class CurationService:
                     changed = False
                     for item in checklist:
                         if item["key"] in updates:
-                            state, note = updates[item["key"]]
-                            changed = _apply_checklist_item(item, state, note, auto) or changed
+                            changed = apply(item, updates[item["key"]]) or changed
                     if not changed:
-                        # refresh_pipeline_checks re-derives the same answers on every pass.
+                        # refresh_pipeline_checks re-derives the same hints on every pass.
                         # Writing them back would bump the row's version and re-post the mirror
                         # comment on the pull request each time.
                         return review
@@ -1178,16 +1222,20 @@ class CurationService:
     def refresh_pipeline_checks(
         self, pr_number: int, *, gpml_reference_count: int | None = None
     ) -> Review | None:
-        """Fill in checklist items from the target repo's own derived artifacts.
+        """Update checklist hints from the target repo's own derived artifacts.
 
         That repo already resolves every data node against BridgeDb, resolves every reference
-        against PubMed, and extracts the title, description and ontology tags — so most of what a
-        curator has been ticking by hand is already computed and public. This reads it back.
+        against PubMed, and extracts the title, description and ontology tags. This reads it back
+        and puts what it says beside the items as hints.
 
-        Two rules make it safe to run on every page load:
+        Three rules make it safe to run on every pass:
 
-        - it only writes an item that is still ``pending`` and auto-derived, so a curator's
-          explicit click is never overwritten by a later fetch;
+        - it writes hints only, never an item's state: only a curator answers an item, so a
+          refresh can never overwrite one (or pre-empt one, which is what put N/A on PR #91's
+          ontology tags while the GPML carried two);
+        - a reader with no opinion (``None``) leaves the GPML-derived hint standing, and an
+          update-scoped hint ("this update did not touch it") is left alone, since the pipeline
+          judges the whole pathway rather than the change;
         - it swallows everything, because the artifacts are often missing (that repo's PR
           workflow failed 14 of its last 20 runs, measured 2026-07-27) and a curator must still
           get a working page.
@@ -1230,45 +1278,16 @@ class CurationService:
                 results[key] = outcome
         results.update(info_checks(artifacts))
 
-        updates: dict[str, tuple[str, str | None]] = {}
-        for key, (state, note) in results.items():
+        updates: dict[str, tuple[str | None, str]] = {}
+        for key, (suggested, hint) in results.items():
             current = next((i for i in checklist if i.get("key") == key), None)
-            if current is None:
+            if current is None or current.get("scoped"):
                 continue
-            # Re-derive our *own* answers; never touch a curator's. The gate used to be "only
-            # if still pending", which the docstring above has always described as "pending and
-            # auto-derived" — and the difference is a real defect, not pedantry. Once this
-            # writer put a ``fail`` on an item, that item was no longer pending, so it could
-            # never correct itself: a submitter fixing exactly what it complained about, and a
-            # fresh pipeline run agreeing, left the failure standing forever.
-            #
-            # Seen on PR #42, 2026-08-14. ``references_valid`` was written ``fail`` — "resolved
-            # 0 of the 1 reference" — off a first upload whose reference no ``<BiopaxRef>``
-            # cited. The revision cited it, ``refs.tsv`` came back with the reference in it, and
-            # the review page still said the pipeline had resolved none, directly beside its own
-            # panel reporting "1 references resolved". A curator with less evidence to hand would
-            # reasonably have believed the stale verdict and asked for changes already made.
-            #
-            # ``auto`` is exactly the right test and already means what is needed here: every
-            # writer maintains it, and ``_merge_checklist`` uses it for the same question.
-            answered_by_hand = (
-                not current.get("auto", False)
-                and current.get("state") != ChecklistState.PENDING.value
-            )
-            if answered_by_hand:
-                continue
-            # The pipeline's tables are a second opinion, and a second opinion does not get to
-            # drop a requirement. Since issue #27 an `na` here would no longer wedge approval —
-            # `requirement_for` would quietly make the item non-blocking instead — which is the
-            # milder failure but still the wrong one: the item stops being asked. `pending` plus
-            # the note says the same thing and leaves it in front of the curator.
-            if state == ChecklistState.NA.value and current.get("required"):
-                state = ChecklistState.PENDING.value
-            updates[key] = (state, note)
+            updates[key] = (suggested, hint)
         if not updates:
             return None
         try:
-            return self.set_checklist_items(pr_number, updates, auto=True)
+            return self.set_checklist_hints(pr_number, updates)
         except (ReviewNotFound, ValueError, StaleDataError):
             return None
 

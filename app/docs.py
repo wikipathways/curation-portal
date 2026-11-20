@@ -70,20 +70,21 @@ def _rules() -> list[dict]:
 
 
 def _checklist() -> list[dict]:
-    # "Filled in automatically" read off what the checklist builder really does rather than
-    # declared again: one item (one_pathway_per_pr) is answered from the pull request's file
-    # list, not by an auto_check, and only build_checklist knows that.
-    auto = {d.key for d in CURATION_CHECKLIST if d.auto_check is not None} | {
+    # "Automated hint" read off what the checklist builder really does rather than declared
+    # again: one item (one_pathway_per_pr) gets its hint from the pull request's file list, not
+    # from an auto_check, and only build_checklist knows that. No item is ever answered for the
+    # curator; this only says which ones carry a suggestion beside them.
+    hinted = {d.key for d in CURATION_CHECKLIST if d.auto_check is not None} | {
         item["key"]
         for item in build_checklist(pathway_paths=["pathways/WP1/WP1.gpml"], pipeline_mode=True)
-        if item["auto"]
+        if item.get("suggested") is not None or item.get("hint")
     }
     return [
         {
             "key": d.key,
             "label": d.label,
             "required": d.required,
-            "auto": d.key in auto,
+            "hinted": d.key in hinted,
             "update_scoped": d.relevant_for_update is not None,
             "help": d.help,
         }

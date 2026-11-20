@@ -1,7 +1,13 @@
 from __future__ import annotations
 
 from app.preview.metadata import parse_curation_metadata
-from app.review.checklist import build_checklist, default_checklist, is_complete
+from app.review.checklist import (
+    build_checklist,
+    default_checklist,
+    hint_text,
+    is_complete,
+    requirement_for,
+)
 
 # Two mapped data nodes, a title + description, an ontology tag, no references.
 MAPPED = """<?xml version="1.0"?>
@@ -27,78 +33,90 @@ def _item(checklist, key):
     return next(i for i in checklist if i["key"] == key)
 
 
-def test_auto_checks_prefill_states():
+def _unanswered(item):
+    """Every item starts like this: nobody has answered it, and the app never does."""
+    return item["state"] == "pending" and item["auto"] is False and item["note"] == ""
+
+
+def test_every_item_starts_pending_with_hints():
     cl = build_checklist(metadata=parse_curation_metadata(MAPPED), kind="new")
-    assert _item(cl, "datanodes_mapped")["state"] == "pass"
-    assert _item(cl, "datanodes_mapped")["auto"] is True
-    assert _item(cl, "naming_ok")["state"] == "pass"
-    assert _item(cl, "ontology_tags")["state"] == "pass"
-    # "Meaningful" stays a human judgement, so the auto-check can never reach pass — but it does
-    # run, and its note says how the description measures against what the repository asks for.
-    assert _item(cl, "description_ok")["state"] == "pending"
-    assert _item(cl, "description_ok")["auto"] is True
-    # "Interactions are connected" is on the repository's reviewer checklist and cannot be
-    # answered from parsed annotation, so it stays a blank human judgement.
-    assert _item(cl, "interactions_connected")["state"] == "pending"
-    assert _item(cl, "interactions_connected")["auto"] is False
-    # No references is `pending`, not `na` (issue #27). The repository asks for at least one, so
-    # a pathway with none has not answered the check — it is exactly the thing a curator should
-    # be weighing, and `na` was quietly taking it off the approval gate instead.
+    assert all(_unanswered(i) for i in cl)
+    # The automated findings are kept as suggestions beside the items.
+    assert _item(cl, "datanodes_mapped")["suggested"] == "pass"
+    assert _item(cl, "naming_ok")["suggested"] == "pass"
+    onto = _item(cl, "ontology_tags")
+    assert (onto["suggested"], onto["hint"]) == ("pass", "1 ontology tag.")
+    # "Meaningful" stays a human judgement, so the description check never suggests pass — but it
+    # does run, and its hint says how the description measures against what the repository asks.
+    assert _item(cl, "description_ok")["suggested"] == "pending"
+    assert _item(cl, "description_ok")["hint"]
+    # "Interactions are connected" and the render cannot be read from parsed annotation: no hint.
+    for key in ("interactions_connected", "render_ok"):
+        assert (_item(cl, key)["suggested"], _item(cl, key)["hint"]) == (None, "")
+    # No references suggests pending, not na (issue #27): the repository asks for at least one.
     refs = _item(cl, "references_valid")
-    assert refs["state"] == "pending"
+    assert refs["suggested"] == "pending"
     assert refs["required"] is True
-    assert "at least one" in refs["note"]
-    # The render check stays a human judgement — no auto state.
-    assert _item(cl, "render_ok")["state"] == "pending"
-    assert _item(cl, "render_ok")["auto"] is False
+    assert "at least one" in refs["hint"]
 
 
-def test_well_annotated_submission_only_needs_human_checks():
+def test_hint_text_names_the_finding_and_the_suggestion():
     cl = build_checklist(metadata=parse_curation_metadata(MAPPED), kind="new")
-    assert is_complete(cl) is False  # the human judgements are still pending
-    # The structural checks auto-pass; only the human judgements remain. `references_valid` is
-    # among them because MAPPED declares none and the repository asks for one.
-    for key in ("render_ok", "description_ok", "interactions_connected", "references_valid"):
-        assert _item(cl, key)["state"] == "pending"
-        _item(cl, key)["state"] = "pass"
+    assert hint_text(_item(cl, "ontology_tags")) == (
+        "Automated check: 1 ontology tag. Suggests Pass."
+    )
+    # A pending suggestion is information without a verdict.
+    assert "Suggests" not in hint_text(_item(cl, "description_ok"))
+    assert hint_text(_item(cl, "description_ok")).startswith("Automated check: ")
+    assert hint_text(_item(cl, "render_ok")) == ""
+
+
+def test_well_annotated_submission_still_needs_every_answer():
+    cl = build_checklist(metadata=parse_curation_metadata(MAPPED), kind="new")
+    assert is_complete(cl) is False
+    # A curator answers every required item, including the ones the automation would pass.
+    for item in cl:
+        if item["required"]:
+            item["state"] = "pass"
     assert is_complete(cl) is True
 
 
-def test_unmapped_datanode_auto_fails_with_note():
+def test_unmapped_datanode_suggests_fail_with_hint():
     cl = build_checklist(metadata=parse_curation_metadata(UNMAPPED), kind="new")
     item = _item(cl, "datanodes_mapped")
-    assert item["state"] == "fail"
-    assert "no identifier" in item["note"]
-    assert "MysteryGene" in item["note"]
+    assert _unanswered(item)
+    assert item["suggested"] == "fail"
+    assert "no identifier" in item["hint"]
+    assert "MysteryGene" in item["hint"]
+    assert hint_text(item).endswith("Suggests Fail.")
 
 
 def test_default_checklist_is_all_pending():
     cl = default_checklist()
+    assert all(_unanswered(i) for i in cl)
     # `one_pathway_per_pr` is derived from the pull request's file list, not from the GPML, so a
-    # template built with no inputs has nothing to check. It resolves to `na` rather than
-    # `pending` on purpose: pending on a required item blocks approval, and a template must not
-    # wedge the gate.
-    checked = [i for i in cl if i["key"] != "one_pathway_per_pr"]
-    assert all(i["state"] == "pending" and i["auto"] is False for i in checked)
+    # template built with no inputs has nothing to check: it suggests N/A, and stays required
+    # until a curator agrees.
     one = _item(cl, "one_pathway_per_pr")
-    assert (one["state"], one["required"]) == ("na", False)
+    assert (one["suggested"], one["required"]) == ("na", True)
 
 
-def test_update_scopes_unchanged_checks_to_na():
+def test_update_scoping_only_suggests_na():
     before = parse_curation_metadata(MAPPED)
     after = parse_curation_metadata(MAPPED)  # identical → nothing changed
     cl = build_checklist(metadata=after, before=before, kind="update")
     dn = _item(cl, "datanodes_mapped")
-    assert dn["state"] == "na"
-    assert dn["required"] is False  # irrelevant → non-blocking
-    assert "Not relevant" in dn["note"]
-    # A check with no relevance rule (render) is always kept.
+    assert _unanswered(dn)
+    assert dn["required"] is True  # still asked: only the curator's N/A takes it off the gate
+    assert (dn["suggested"], dn["scoped"]) == ("na", True)
+    assert hint_text(dn) == "Automated check: This update did not touch it. Suggests N/A."
+    # A check with no relevance rule (render) is always kept, with no hint.
     assert _item(cl, "render_ok")["required"] is True
-    # With every changeable subject unchanged and the always-kept human checks marked pass,
-    # approval isn't blocked by the scoped-out items.
+    assert "scoped" not in _item(cl, "render_ok")
+    # The curator follows the suggestions: N/A where suggested, pass on the rest.
     for i in cl:
-        if i["key"] in ("render_ok", "interactions_connected"):
-            i["state"] = "pass"
+        i["state"] = "na" if i["suggested"] == "na" else "pass"
+        i["required"] = requirement_for(i["key"], i["state"])
     assert is_complete(cl) is True
 
 
@@ -107,5 +125,23 @@ def test_update_keeps_check_when_subject_changed():
     after = parse_curation_metadata(UNMAPPED)  # data nodes differ
     cl = build_checklist(metadata=after, before=before, kind="update")
     dn = _item(cl, "datanodes_mapped")
-    assert dn["required"] is True  # relevant → normal auto-check runs
-    assert dn["state"] == "fail"
+    assert dn["required"] is True
+    assert _unanswered(dn)
+    assert dn["suggested"] == "fail"  # relevant → the normal check gives the hint
+    assert "scoped" not in dn
+
+
+def test_pipeline_naming_and_file_list_hints():
+    cl = build_checklist(
+        metadata=parse_curation_metadata(MAPPED),
+        kind="new",
+        pipeline_mode=True,
+        pathway_paths=["pathways/WP1/WP1.gpml", "pathways/WP2/WP2.gpml"],
+    )
+    assert all(_unanswered(i) for i in cl)
+    naming = _item(cl, "naming_ok")
+    assert naming["suggested"] == "pending"
+    assert "assigns its WPID" in naming["hint"]
+    one = _item(cl, "one_pathway_per_pr")
+    assert one["suggested"] == "fail"
+    assert "changes 2 pathways" in one["hint"]

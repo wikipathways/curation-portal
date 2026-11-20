@@ -48,7 +48,7 @@
       { anchor: 'viewer-toolbar', title: 'Diagram tools',
         body: 'Fit, fullscreen, search by label or identifier, and a legend. For an update, step through the changes one by one.' },
       { anchor: 'checklist', title: 'Curation checklist',
-        body: 'What a curator answers before approving. Items marked "auto" were suggested from the file; required items carry a dot.' },
+        body: 'What a curator answers before approving. Every item starts unanswered; "Automated check" under an item is a hint, not an answer. Required items carry a dot.' },
       { anchor: 'actions', title: 'Decide',
         body: 'Approve, request changes or reject. Approve unlocks once every required item is marked Pass.' },
       { anchor: 'revise', title: 'Upload a fix',

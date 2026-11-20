@@ -732,7 +732,7 @@ def test_a_re_upload_re_derives_the_checklist_from_the_new_file(session_factory)
         metadata=parse_curation_metadata(unannotated),
     )
     before = next(i for i in svc.get(pr).checklist if i["key"] == "datanodes_mapped")
-    assert before["state"] == ChecklistState.FAIL.value
+    assert (before["state"], before["suggested"]) == ("pending", ChecklistState.FAIL.value)
 
     svc.register(
         pr_number=pr, wpid=554, submitter="alice", kind="update",
@@ -740,7 +740,7 @@ def test_a_re_upload_re_derives_the_checklist_from_the_new_file(session_factory)
     )
 
     after = next(i for i in svc.get(pr).checklist if i["key"] == "datanodes_mapped")
-    assert after["state"] == ChecklistState.PASS.value
+    assert (after["state"], after["suggested"]) == ("pending", ChecklistState.PASS.value)
 
 
 def test_a_re_upload_keeps_what_a_curator_answered_by_hand(session_factory):
@@ -763,6 +763,8 @@ def test_a_re_upload_keeps_what_a_curator_answered_by_hand(session_factory):
     item = next(i for i in svc.get(pr).checklist if i["key"] == "description_ok")
     assert item["state"] == "pass"
     assert item["note"] == "checked it myself"
+    # ...and the answer carries the new file's hint beside it.
+    assert "description" in item["hint"].lower()
 
 
 

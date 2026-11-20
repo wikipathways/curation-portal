@@ -5,7 +5,7 @@ pushes a rendered draft into the *sister* site repo `wikipathways/sandbox-wp.gh.
 a slug built from the PR number — `WP0__PR54` for a new pathway, `WP<id>__PR54` for an edit —
 and links the resulting draft page from the PR description. Those files are the only rendered
 view of a submission the pipeline produces, so the dashboard reads them to fill its preview slot
-and to pre-fill the curation checklist from what the pipeline itself extracted.
+and to put hints beside the curation checklist from what the pipeline itself extracted.
 
 Read anonymously over raw.githubusercontent.com, deliberately, and *not* through
 `app.github.client`: that abstraction is about the target repo and its two authenticated
@@ -626,18 +626,16 @@ def _parse_json(raw: bytes) -> dict | None:
 
 # ---- checklist mapping --------------------------------------------------------------------
 #
-# Each returns a (state, note) the caller may apply to a checklist item, or None meaning "say
-# nothing" — the item then keeps whatever the app's own GPML-derived auto-check put there. The
-# pipeline's tables are a second opinion, not a replacement, and they must never turn a check
-# that the app answered into an empty one.
+# Each returns a (suggested state, hint) the caller writes beside a checklist item, or None
+# meaning "no opinion" — the item then keeps the hint the app's own GPML-derived check gave it.
+# The pipeline's tables are a second opinion, not a replacement: they must never turn a hint the
+# app could give into an empty one. None of this sets an item's state; only a curator does
+# (``app.review.checklist``).
 #
-# None of these ever returns `na`, on purpose. `build_checklist` pairs an auto-derived `na` with
-# `required=False`, because `is_complete` demands `pass` on every required item; the caller here
-# writes only state and note and never touches `required`. An `na` landing on a still-required
-# `datanodes_mapped` or `references_valid` would therefore leave an item approval can never
-# accept until a curator overrode it by hand. `pending` plus an explaining note says the same
-# thing without wedging the review. The one exception is `ontology_tags`, which
-# `CURATION_CHECKLIST` declares `required=False` outright, so an `na` there blocks nothing.
+# "No opinion" includes a reading that is empty because the pipeline did not look. Its info.json
+# carried `"ontology-ids": []` for PR #91, whose GPML has two <OntologyTerm> elements: the
+# repository's metadata extractor does not read them. Taken at its word, that empty list replaced
+# the portal's correct "2 ontology tags" with "No ontology tags".
 
 
 def datanode_check(artifacts: DraftArtifacts) -> tuple[str, str] | None:
@@ -739,16 +737,18 @@ def reference_check(
 def info_checks(artifacts: DraftArtifacts) -> dict[str, tuple[str, str]]:
     """`naming_ok`, `description_ok` and `ontology_tags`, from the pipeline's info.json.
 
-    Empty when there is no info.json — the caller applies nothing and the checklist stands.
+    Empty when there is no info.json — the caller applies nothing and the hints stand. An item
+    the info.json has no opinion on is left out.
     """
     if not artifacts.available or not artifacts.info:
         return {}
     info = artifacts.info
-    return {
+    found = {
         "naming_ok": _naming_check(artifacts.slug, info),
         "description_ok": _description_check(info),
         "ontology_tags": _ontology_check(info),
     }
+    return {key: value for key, value in found.items() if value is not None}
 
 
 def _naming_check(slug: str, info: dict) -> tuple[str, str]:
@@ -808,9 +808,17 @@ def _description_check(info: dict) -> tuple[str, str]:
     )
 
 
-def _ontology_check(info: dict) -> tuple[str, str]:
+def _ontology_check(info: dict) -> tuple[str, str] | None:
+    """The pipeline's ontology reading, or None when it found none.
+
+    An empty list is no opinion rather than "no tags": the repository's extractor does not read
+    GPML ``<OntologyTerm>`` elements (PR #91: two in the file, ``[]`` in info.json), so an empty
+    list says nothing about the pathway, and the GPML-derived hint is the better reading.
+    """
     raw = info.get("ontology-ids") or []
     tags = [_split_curie(str(value)) for value in raw if str(value).strip()]
+    if not tags:
+        return None
     result = _ONTOLOGY_AUTO_CHECK(_OntologyView(ontology_tags=tags))
     return result.state, result.note
 

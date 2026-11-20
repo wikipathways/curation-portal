@@ -1,8 +1,11 @@
 <p>
-  A curator answers these before approving. Approval needs every <em>required</em> item marked
-  Pass; an item marked N/A never blocks. Items <em>filled in automatically</em> start with the
-  portal's suggestion, which the curator can overrule. For an update, items marked
-  <em>update-aware</em> are set to N/A when the edit did not touch what they ask about.
+  A curator answers these before approving. Every item starts unanswered: the portal never ticks
+  one, because even a correct automated reading (two ontology tags, every data node annotated)
+  still needs someone to judge it. Approval needs every <em>required</em> item marked Pass; an
+  item marked N/A never blocks. Items with an <em>automated hint</em> show what the portal or the
+  repository's pipeline found beside the item, for example
+  &ldquo;Automated check: 2 ontology tags. Suggests Pass.&rdquo; For an update, items marked
+  <em>update-aware</em> say so when the edit did not touch what they ask about, and suggest N/A.
 </p>
 <div class="docs-table__scroll">
 <table class="docs-table docs-table--checklist">
@@ -17,7 +20,7 @@
         <code class="docs-id">{{ it.key }}</code>
         <span class="docs-tags">
           <span class="docs-tag{% if it.required %} docs-tag--required{% endif %}">{{ 'Required' if it.required else 'Optional' }}</span>
-          {% if it.auto %}<span class="docs-tag">Filled in automatically</span>{% endif %}
+          {% if it.hinted %}<span class="docs-tag">Automated hint</span>{% endif %}
           {% if it.update_scoped %}<span class="docs-tag">Update-aware</span>{% endif %}
         </span>
       </td>

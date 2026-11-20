@@ -602,6 +602,9 @@
       item.setAttribute('data-required', required);
       var bullet = item.querySelector('.checklist__req');
       if (bullet) bullet.hidden = !srv.required;
+      // An old row's "auto" chip marks a state the portal filled in; a curator's answer ends that.
+      var autoChip = item.querySelector('.checklist__auto');
+      if (autoChip && !srv.auto) autoChip.remove();
     });
     recomputeApprove(card);
   }

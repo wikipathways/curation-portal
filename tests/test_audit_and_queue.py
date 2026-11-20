@@ -64,14 +64,17 @@ def test_a_close_seen_from_github_is_attributed_to_github(tmp_path):
         assert status[-1][2]["to"] == "closed"
 
 
-def test_derived_checklist_answers_are_not_in_the_trail(tmp_path):
+def test_automated_hints_are_not_in_the_trail(tmp_path):
     app, current = _authed_app(tmp_path)
     with TestClient(app) as c:
         current["user"] = "bob"
         pr = _submit(c)
         svc = app.state.worker._make_curation(None)
-        svc.set_checklist_item(pr, "naming_ok", "pass", auto=True)
+        svc.set_checklist_hints(pr, {"naming_ok": ("pass", "Filed as WP0__PR1.")})
         assert not [e for e in _events(app, pr) if e[1] == "checklist"]
+        # A curator's answer is.
+        svc.set_checklist_item(pr, "naming_ok", "pass", actor="bob")
+        assert [e for e in _events(app, pr) if e[1] == "checklist"]
 
 
 def test_the_review_page_shows_the_history(tmp_path):

@@ -74,6 +74,7 @@ from app.ratelimit import RateLimited, SubmissionRateLimiter
 from app.review.adoption import AdoptionService
 from app.review.audit import acting_as
 from app.review.audit import history as review_history
+from app.review.checklist import hint_text
 from app.review.conversation import PORTAL_MARKERS, ConversationCache
 from app.review.conversation import present as present_conversation
 from app.review.service import (
@@ -192,6 +193,9 @@ def _ago(value) -> str:
 
 
 templates.env.filters["ago"] = _ago
+#: "Automated check: 2 ontology tags. Suggests Pass." under a checklist item; the mirror comment
+#: uses the same sentence (app.review.checklist.hint_text).
+templates.env.filters["checklist_hint"] = hint_text
 
 
 _STATIC_DIR = _ROOT / "static"
@@ -1759,7 +1763,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             wpid=result.wpid,
             submitter=submitter,
             kind="new",
-            metadata=after_meta,  # pre-fills the checklist with auto-derived states
+            metadata=after_meta,  # gives the checklist its automated hints
             head_branch=result.branch,
             head_repo=result.head_repo,
             head_sha=result.head_sha,

@@ -1036,12 +1036,11 @@ RULES: tuple[Rule, ...] = (
         _check_description,
         predicts_repo=True,
         needs_text=False,
-        # Never better than pending, even on a clean file. ``refresh_pipeline_checks`` only writes
-        # items still pending, so any state the app puts here pre-empts the repository's own
-        # description check — and that one is strictly better, because it quotes what the
-        # repository's extractor pulled out, which is the text that will appear on the published
-        # page and can differ from the GPML comment. Failing is still worth saying: where there is
-        # no description at all, both would say the same thing and the repository may never run.
+        # Never suggests better than pending, even on a clean file: "meaningful" is the curator's
+        # judgement, and the repository's own description reading (which ``refresh_pipeline_checks``
+        # puts beside the item once it runs) quotes what its extractor pulled out, the text that
+        # will appear on the published page. Failing is still worth saying: where there is no
+        # description at all, both would say the same thing and the repository may never run.
         checklist=ChecklistBinding(
             "description_ok",
             state_for={Severity.PASS.value: _PENDING, Severity.WARN.value: _PENDING},

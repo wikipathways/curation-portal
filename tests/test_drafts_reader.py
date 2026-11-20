@@ -199,8 +199,21 @@ def test_description_check_fails_on_the_empty_description_the_pipeline_often_wri
         ChecklistState.FAIL.value,
         "The pipeline extracted no description.",
     )
-    # No ontology-ids key at all must read as the optional "none", not as a crash.
-    assert checks["ontology_tags"][0] == ChecklistState.NA.value
+    # No ontology-ids key at all is no opinion, not a crash: the GPML-derived hint stands.
+    assert "ontology_tags" not in checks
+
+
+def test_an_empty_ontology_list_is_no_opinion(tmp_path):
+    """PR #91: the GPML had two <OntologyTerm> elements and info.json said `"ontology-ids": []`,
+    because the repository's metadata extractor does not read them. Read as "No ontology tags",
+    that replaced the portal's correct reading."""
+    files = real_files()
+    files[INFO_PATH] = (
+        b'{"wpid": "WP0__PR10", "title": "T", "description": "D", "ontology-ids": []}'
+    )
+    checks = info_checks(make_reader(serve(files), tmp_path).fetch(SLUG))
+    assert "ontology_tags" not in checks
+    assert "naming_ok" in checks and "description_ok" in checks
 
 
 # ---- the pipeline produced nothing --------------------------------------------------------
