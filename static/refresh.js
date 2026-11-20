@@ -154,8 +154,10 @@
     setTimeout(function () { liveRegion.textContent = msg; }, 50);
   }
 
-  // "4 min ago", as the server's `ago` filter words it (main.py _ago). For <time data-ago>,
-  // whose wording is left out of the card's ETag and so kept current here.
+  // "4 min ago", "yesterday", "3 weeks ago", as the server's `ago` filter words it (main.py
+  // _ago, and _age past a day). For <time data-ago>, whose wording is left out of the card's
+  // ETag and so kept current only here: a finished card is not polled, and its Refresh gets a
+  // 304, so every age has to be worded here, not only the first day's.
   function ago(iso) {
     var t = Date.parse(iso);
     if (isNaN(t)) return null;
@@ -163,7 +165,11 @@
     if (s < 45) return 'just now';
     if (s < 3600) return Math.max(1, Math.round(s / 60)) + ' min ago';
     if (s < 86400) return Math.floor(s / 3600) + ' h ago';
-    return null; // older: the server's day-level wording stands
+    var d = Math.floor(s / 86400);
+    if (d === 1) return 'yesterday';
+    if (d < 14) return d + ' days ago';
+    if (d < 70) return Math.floor(d / 7) + ' weeks ago';
+    return Math.floor(d / 30) + ' months ago';
   }
 
   function refreshTimes(el) {
@@ -389,7 +395,9 @@
             var a = document.activeElement;
             if (now !== el || !a || a === document.body || a === btn) btn.focus({ preventScroll: true });
           }
-          var span = now && now.querySelector && now.querySelector('.review-card__checked');
+          // A finished review says when it finished instead of when it was checked.
+          var span = now && now.querySelector &&
+            now.querySelector('.review-card__checked, .review-card__outcome');
           announce('Review refreshed.' + (span && span.textContent.trim() ? ' ' + span.textContent.trim() + '.' : ''));
         })
         .catch(function () {

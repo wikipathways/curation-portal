@@ -409,6 +409,12 @@ class DraftsReader:
         update's page existed all along, so it counts only once GitHub Pages reports a
         ``Last-Modified`` at or after the publication; without that header there is no telling
         the old page from the new one, and the answer is None rather than a guess.
+
+        It sees what the CDN edge nearest the portal serves, which lagged the new page by about
+        a minute on 2026-11-20 (sandbox #93). Nothing on the request gets past that edge: on
+        GitHub Pages' Fastly a unique query string, ``Cache-Control: no-cache``, ``max-age=0``
+        and ``Pragma: no-cache`` were all answered from cache (``x-cache: HIT``, the same
+        ``age`` as the plain URL; measured 2026-11-20), so the probe adds none of them.
         """
         try:
             resp = self._client.head(self.published_url(wpid))

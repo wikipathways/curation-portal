@@ -124,13 +124,22 @@
   {% if is_curator and r.record_wpid %}
   <div class="publish-panel">
     <h3>Record the published WPID</h3>
+    {# An update keeps its WPID: there is nothing for the repository to assign, only the
+       publication to confirm. The server refuses any other id for it. #}
+    {% set is_update = r.kind == 'update' and r.wpid %}
     <p class="publish-panel__hint">
+      {% if is_update -%}
+      The publication normally arrives here by itself shortly after the publish workflow runs,
+      and for this edit it has not. If <code>{{ repo }}</code> did publish it, record WP{{ r.wpid }}
+      here. That closes the review out and is what the dashboard shows from then on.
+      {%- else -%}
       The WPID normally arrives here by itself shortly after the publish workflow runs, and for
       this pathway it has not. If <code>{{ repo }}</code> did publish it, put the identifier it
       assigned here. That closes the review out and is what the dashboard shows from then on.
+      {%- endif %}
     </p>
-    <label class="visually-hidden" for="published-wpid-{{ r.pr_number }}">Assigned WPID</label>
-    <input type="text" id="published-wpid-{{ r.pr_number }}" class="published-wpid" placeholder="WP5678" autocomplete="off" inputmode="numeric">
+    <label class="visually-hidden" for="published-wpid-{{ r.pr_number }}">{{ 'Published WPID' if is_update else 'Assigned WPID' }}</label>
+    <input type="text" id="published-wpid-{{ r.pr_number }}" class="published-wpid" placeholder="WP5678" autocomplete="off" inputmode="numeric"{% if is_update %} value="WP{{ r.wpid }}"{% endif %}>
     <button type="button" class="btn btn--sm btn--record-wpid">Record it</button>
   </div>
   {% endif %}
@@ -173,9 +182,16 @@
     <div class="review-card__fresh">
       {# Not a live region: it is rewritten every minute by the timer. A Refresh press is
          announced once, by refresh.js. #}
+      {# A finished review is not re-checked, so "Checked …" would only grow older; it says when
+         it finished instead. A <time data-ago>, like the tracker's: refresh.js keeps the wording
+         current and the ETag leaves it out. #}
+      {% if r.outcome_at %}
+      <span class="review-card__outcome">{{ r.status_label }} <time datetime="{{ r.outcome_at.isoformat() }}" data-ago>{{ r.outcome_at | ago }}</time></span>
+      {% else %}
       <span class="review-card__checked">
         {%- if r.checked_at %}Checked {{ r.checked_at | ago }}{% elif r.actionable or r.awaiting_wpid %}Checking with GitHub{% endif -%}
       </span>
+      {% endif %}
       <button type="button" class="btn btn--ghost btn--sm review-card__refresh" data-refresh-card data-tour="refresh" aria-label="Refresh this review">Refresh</button>
     </div>
     {# Carries its label rather than being a bare glyph. This is the route to the page where the
