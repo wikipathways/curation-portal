@@ -139,3 +139,36 @@ def test_a_fold_that_first_appears_starts_closed(site):  # noqa: F811
     # The fold stays closed, the panel that was open keeps its state, and nothing is mounted in
     # the closed fold.
     assert out == {"fold": False, "inner": True, "mounted": False}
+
+
+def test_an_opened_fold_stays_open_across_the_queue_refresh(site):  # noqa: F811
+    # The queue's Refresh replaces the whole list rather than one card. It used to swap the cards
+    # in without carrying over which panels were open, so an opened fold closed on every press.
+    fresh_page = (
+        '<!doctype html><html><body><main id="main"><div class="container">'
+        + _card(_solo("after.svg"), fold=True)
+        + "</div></main></body></html>"
+    )
+    out = _run(
+        site,
+        _card(_solo("after.svg"), fold=True),
+        "var FRESH = " + json.dumps(fresh_page) + ";\n"
+        + """
+        window.fetch = function () {
+          return Promise.resolve(new Response(FRESH, { status: 200 }));
+        };
+        var old = document.querySelector('article.review-card');
+        old.querySelector('details[data-details-key]').open = true;
+        WPRefresh.page().then(function () {
+          setTimeout(function () {
+            var now = document.querySelector('article.review-card');
+            ready(function (vs) {
+              done({ swapped: now !== old,
+                     open: now.querySelector('details[data-details-key]').open,
+                     mounted: !!vs[0] && vs[0].root.isConnected });
+            });
+          }, 50);
+        });
+        """,
+    )
+    assert out == {"swapped": True, "open": True, "mounted": True}

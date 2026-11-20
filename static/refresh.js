@@ -341,12 +341,31 @@
         var fresh = doc.querySelector('#main .container');
         if (!fresh) throw new Error('no page content in the response');
         var y = window.scrollY;
+        // Which panels were open in each card, by PR, so an opened "Review details" (or any
+        // other panel) survives the whole-list refresh the way it survives a one-card swap.
+        var opened = {};
+        container.querySelectorAll('article.review-card[data-pr]').forEach(function (el) {
+          opened[el.getAttribute('data-pr')] = openDetails(el);
+        });
         if (window.WPViewer && window.WPViewer.unmountAll) window.WPViewer.unmountAll(container);
         container.querySelectorAll('article.review-card').forEach(function (el) {
           clearTimeout(timers.get(el));
         });
-        container.replaceChildren.apply(container, Array.prototype.slice.call(fresh.childNodes).map(
-          function (n) { return document.importNode(n, true); }));
+        var nodes = Array.prototype.slice.call(fresh.childNodes).map(
+          function (n) { return document.importNode(n, true); });
+        // Restored before the cards are in the document, so a fold opened here is open by the
+        // time wp:card-replaced asks the viewer to mount what is visible.
+        nodes.forEach(function (n) {
+          if (!n.querySelectorAll) return;
+          var cards = n.matches && n.matches('article.review-card[data-pr]') ? [n] : [];
+          cards = cards.concat(Array.prototype.slice.call(
+            n.querySelectorAll('article.review-card[data-pr]')));
+          cards.forEach(function (el) {
+            var open = opened[el.getAttribute('data-pr')];
+            if (open) restoreDetails(el, open);
+          });
+        });
+        container.replaceChildren.apply(container, nodes);
         window.scrollTo(0, y);
         container.querySelectorAll('article.review-card').forEach(function (el) {
           document.dispatchEvent(new CustomEvent('wp:card-replaced', { detail: el }));
