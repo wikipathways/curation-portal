@@ -52,15 +52,25 @@ class SecurityHeadersMiddleware:
     background tasks.
     """
 
-    def __init__(self, app: ASGIApp, *, site_host: str = "", enforce: bool = False) -> None:
+    def __init__(
+        self,
+        app: ASGIApp,
+        *,
+        site_host: str = "",
+        enforce: bool = False,
+        exempt_paths: tuple[str, ...] = (),
+    ) -> None:
         self.app = app
+        # FastAPI's Swagger page loads its scripts from a CDN and starts them inline, which this
+        # policy forbids by design; it carries no user content, so it goes without the header.
+        self.exempt_paths = exempt_paths
         self.header = (
             b"content-security-policy" if enforce else b"content-security-policy-report-only"
         )
         self.value = build_csp(site_host).encode("latin-1")
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] != "http":
+        if scope["type"] != "http" or scope.get("path") in self.exempt_paths:
             await self.app(scope, receive, send)
             return
 

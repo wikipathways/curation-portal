@@ -852,6 +852,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         SecurityHeadersMiddleware,
         site_host=settings_site_host(settings),
         enforce=not settings.csp_report_only,
+        exempt_paths=("/api/docs",),
     )
     app.add_middleware(
         SessionMiddleware,

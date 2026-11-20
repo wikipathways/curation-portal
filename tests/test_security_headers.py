@@ -52,7 +52,10 @@ def test_templates_have_no_inline_script_or_handlers():
 
 
 def test_swagger_moved_and_openapi_stays(client):
-    assert client.get("/api/docs").status_code == 200
+    r = client.get("/api/docs")
+    assert r.status_code == 200
+    # Swagger UI loads from a CDN and runs inline; the enforced policy would leave it blank.
+    assert "content-security-policy" not in r.headers
     assert client.get("/openapi.json").status_code == 200
 
 
