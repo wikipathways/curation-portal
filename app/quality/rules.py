@@ -207,6 +207,10 @@ class Rule:
     #: checklist auto-check in the places where no GPML text is in hand.
     needs_text: bool = True
     checklist: ChecklistBinding | None = None
+    #: What the rule asks of a pathway and why, in words for the biologist reading /docs. Kept on
+    #: the rule rather than in the template so a new rule cannot ship without its explanation (a
+    #: test requires it) and the help page cannot describe a rule that no longer exists.
+    explain: str = ""
 
 
 # ---- helpers --------------------------------------------------------------------------------
@@ -861,32 +865,170 @@ def _check_ontology(s: Subject) -> tuple[str, str] | None:
 # diff summary follows.
 
 RULES: tuple[Rule, ...] = (
-    Rule("gpml.readable", "Readable XML", _check_readable),
-    Rule("gpml.root", "GPML root element", _check_root),
-    Rule("gpml.namespace", "GPML namespace", _check_namespace),
-    Rule("gpml.name", "Title", _check_name),
-    Rule("gpml.organism", "Organism", _check_organism),
-    Rule("render.drawable", "Renderable", _check_drawable, needs_text=False),
-    Rule("gpml.board", "Pathway canvas", _check_board),
-    Rule("gpml.line_thickness", "Interaction line thickness", _check_line_thickness),
-    Rule("gpml.group_zorder", "Group stacking order", _check_group_zorder),
-    Rule("gpml.author", "Authors", _check_author),
-    Rule("gpml.version", "Version", _check_version, predicts_repo=True),
-    Rule("gpml.embedded_wpid", "Pathway identifier", _check_embedded_wpid),
-    Rule("gpml.citation_ids", "Empty citation IDs", _check_citation_ids),
-    Rule("gpml.datanodes", "DataNodes in GPML", _check_datanodes_present, needs_text=False),
+    Rule(
+        "gpml.readable",
+        "Readable XML",
+        _check_readable,
+        explain=(
+            "The file has to be well-formed XML: every tag closed and nothing cut off. A file "
+            "saved by PathVisio always is; one edited by hand or truncated in a download may not "
+            "be. Files that declare a DOCTYPE or ENTITY are refused too. An unreadable file is "
+            "refused before anything else is checked."
+        ),
+    ),
+    Rule(
+        "gpml.root",
+        "GPML root element",
+        _check_root,
+        explain=(
+            "A GPML file has one <Pathway> element that holds everything else. Without it the "
+            "file is not a pathway and is refused."
+        ),
+    ),
+    Rule(
+        "gpml.namespace",
+        "GPML namespace",
+        _check_namespace,
+        explain=(
+            "The <Pathway> element must declare the GPML namespace, which tells software the "
+            "file is a PathVisio/WikiPathways pathway. PathVisio writes it for you. Refused "
+            "without it."
+        ),
+    ),
+    Rule(
+        "gpml.name",
+        "Title",
+        _check_name,
+        explain=(
+            "The pathway needs a title, the Name attribute on <Pathway>. Refused without one."
+        ),
+    ),
+    Rule(
+        "gpml.organism",
+        "Organism",
+        _check_organism,
+        explain=(
+            "The pathway needs an organism (the Organism attribute, for example Homo sapiens). "
+            "The drawing and the repository's metadata step both depend on it, so a file "
+            "without one is refused."
+        ),
+    ),
+    Rule(
+        "render.drawable",
+        "Renderable",
+        _check_drawable,
+        needs_text=False,
+        explain=(
+            "Whether the portal could draw a diagram from the file. Curators review the "
+            "drawing, so a pathway that cannot be drawn is a problem. Reported once the pull "
+            "request exists, on the review page."
+        ),
+    ),
+    Rule(
+        "gpml.board",
+        "Pathway canvas",
+        _check_board,
+        explain=(
+            "The pathway must declare its canvas size: a <Graphics> element with BoardWidth and "
+            "BoardHeight directly under <Pathway>. Without it the repository's metadata step "
+            "fails, which costs the identifier table, the reference list and the draft page. "
+            "PathVisio always writes it; a hand-built file often does not."
+        ),
+    ),
+    Rule(
+        "gpml.line_thickness",
+        "Interaction line thickness",
+        _check_line_thickness,
+        explain=(
+            "Every interaction and graphical line needs a LineThickness on its <Graphics>. The "
+            "repository's metadata step fails without it, with the same cost as a missing "
+            "canvas. PathVisio always writes it."
+        ),
+    ),
+    Rule(
+        "gpml.group_zorder",
+        "Group stacking order",
+        _check_group_zorder,
+        explain=(
+            "In every group (a complex, for example) at least one member needs a ZOrder, the "
+            "stacking order, on its <Graphics>. Without one the repository's converter cannot "
+            "place the group, so no diagram or draft page is made and publishing fails later. "
+            "PathVisio always writes it."
+        ),
+    ),
+    Rule(
+        "gpml.author",
+        "Authors",
+        _check_author,
+        explain=(
+            "Who made the pathway, the Author attribute. The portal fills in your GitHub name "
+            "when the file has none, so for an upload this is only advice. A pull request "
+            "opened directly on GitHub gets no such repair, and there it is a problem: the "
+            "repository's metadata step crashes without an author."
+        ),
+    ),
+    Rule(
+        "gpml.version",
+        "Version",
+        _check_version,
+        predicts_repo=True,
+        explain=(
+            "The Version attribute. The repository stamps it as WP<id>_r<date and time> when it "
+            "publishes. Leave it empty or in that form; anything else, such as an old "
+            "Version=\"1\", is carried into the published file."
+        ),
+    ),
+    Rule(
+        "gpml.embedded_wpid",
+        "Pathway identifier",
+        _check_embedded_wpid,
+        explain=(
+            "Whether the identifier written inside the file (in Version) matches the pathway you "
+            "are submitting it as. It catches the wrong file picked from a downloads folder, or "
+            "a new pathway started from a copy of an old one."
+        ),
+    ),
+    Rule(
+        "gpml.citation_ids",
+        "Empty citation IDs",
+        _check_citation_ids,
+        explain=(
+            "Literature references with an empty ID. The repository patches them so its "
+            "metadata step can run, but an empty citation ID is the most common reason that "
+            "step fails, so it is worth fixing in your own copy."
+        ),
+    ),
+    Rule(
+        "gpml.datanodes",
+        "DataNodes in GPML",
+        _check_datanodes_present,
+        needs_text=False,
+        explain=(
+            "The pathway contains at least one data node: a gene, protein, metabolite and so on."
+        ),
+    ),
     Rule(
         "content.datanode_annotation",
         "Datanode annotation",
         _check_datanode_annotation,
         needs_text=False,
         checklist=ChecklistBinding("datanodes_mapped"),
+        explain=(
+            "Every data node should carry a database identifier (Ensembl, NCBI Gene, UniProt, "
+            "ChEBI and so on) so it links out and can be used in analyses. For an update only "
+            "the change counts: nodes left unannotated beyond those the pathway already had are "
+            "a problem, the older ones are reported as worth a look."
+        ),
     ),
     Rule(
         "content.title_length",
         "Title length",
         _check_title_length,
         predicts_repo=True,
+        explain=(
+            f"The repository's own check: a title of at least {_MIN_TITLE_CHARS} characters. "
+            "Shorter titles are flagged for review."
+        ),
     ),
     Rule(
         "content.description",
@@ -904,6 +1046,13 @@ RULES: tuple[Rule, ...] = (
             "description_ok",
             state_for={Severity.PASS.value: _PENDING, Severity.WARN.value: _PENDING},
         ),
+        explain=(
+            "The repository asks for a two to three sentence description of the processes the "
+            f"pathway shows, at least {_MIN_DESCRIPTION_WORDS} words for a new pathway. On an "
+            f"update a rewrite of more than {_EDIT_MAX_WORD_DIFF} words or "
+            f"{_EDIT_MAX_CHAR_DIFF} characters is flagged so a curator looks at it, and removing "
+            "the description is a problem."
+        ),
     ),
     Rule(
         "content.datanode_changes",
@@ -911,6 +1060,10 @@ RULES: tuple[Rule, ...] = (
         _check_datanode_changes,
         predicts_repo=True,
         needs_text=False,
+        explain=(
+            "Whether an update added, removed or changed data nodes. The repository flags any "
+            "such change for review. It tells the curator where to look; it is not a fault."
+        ),
     ),
     Rule(
         "content.references",
@@ -922,6 +1075,12 @@ RULES: tuple[Rule, ...] = (
         checklist=ChecklistBinding(
             "references_valid", state_for={Severity.PASS.value: _PENDING}
         ),
+        explain=(
+            "At least one literature reference that is cited somewhere in the pathway (on the "
+            "pathway itself, a node or an interaction). A reference listed in the file but cited "
+            "nowhere does not count, because nothing downstream shows it. An update that drops "
+            "citations is a problem. Whether each reference is correct is for the curator."
+        ),
     ),
     Rule(
         "content.ontology",
@@ -929,6 +1088,10 @@ RULES: tuple[Rule, ...] = (
         _check_ontology,
         needs_text=False,
         checklist=ChecklistBinding("ontology_tags"),
+        explain=(
+            "Ontology tags (pathway, disease, cell type) are optional. When present they help "
+            "people find the pathway."
+        ),
     ),
 )
 
