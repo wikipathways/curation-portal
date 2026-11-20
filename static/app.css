@@ -800,25 +800,6 @@ a.pager__step:hover { background: var(--surface); border-color: var(--moss); }
   padding: 0.5rem 0.75rem;
   border-bottom: 1px solid var(--line);
 }
-.preview__frame > img { width: 100%; height: 19rem; object-fit: contain; background: var(--surface); padding: 0.5rem; }
-
-/* pan / zoom preview */
-.zoom { position: relative; background: var(--surface); }
-.zoom__viewport {
-  height: 19rem;
-  overflow: hidden;
-  /* Vertical swipes scroll the queue; once zoomed, the gesture pans the diagram instead. */
-  touch-action: pan-y;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  /* The breathing room used to sit on the image itself. It moved here so the stage wraps the
-     drawing exactly: hotspots are percentages of the drawing, and padding inside the measured
-     box would offset every one of them by half a rem. */
-  padding: 0.5rem;
-  box-sizing: border-box;
-}
-.review-card--expanded .zoom__viewport { height: 30rem; }
 
 /* ---------- queue density ----------
    The card macro is used at two densities from one definition, and the queue's job is triage: a
@@ -826,87 +807,24 @@ a.pager__step:hover { background: var(--surface); border-color: var(--moss); }
    in one screen. At full size the diagram alone pushed the checklist and every decision button —
    Approve, Reject, Request changes, Assign — below the fold on every card, so the queue was a
    list you could read but not act on. The detail page keeps the full-size treatment. */
-.review-card:not(.review-card--expanded) .zoom__viewport { height: 13rem; }
-.review-card:not(.review-card--expanded) .preview__frame > img { height: 13rem; }
 /* Everything this panel says is either repeated by the automated-checks block above (a failed
    run) or is detail for a curator who has already committed to the review. */
 .review-card:not(.review-card--expanded) .pipeline-panel { display: none; }
 .review-card:not(.review-card--expanded) .checklist__item { padding: 0.35rem 0; }
 .review-card:not(.review-card--expanded) .checklist { margin-bottom: 0.8rem; }
-.zoom--zoomed .zoom__viewport { cursor: grab; touch-action: none; }
-.zoom--zoomed .zoom__viewport:active { cursor: grabbing; }
-/* Zoom and pan are applied to the stage, not the image, so the hotspot overlay moves with the
-   drawing instead of being left behind. */
-.zoom__stage {
-  position: relative;
-  display: block;
-  line-height: 0;
-  max-width: 100%;
-  max-height: 100%;
-  will-change: transform;
-}
-.zoom .zoom__img {
-  display: block;
-  max-width: 100%;
-  max-height: 100%;
-  user-select: none;
-  -webkit-user-drag: none;
-}
-/* Zoomed, JS gives the stage an explicit pixel size; the image fills it. */
-.zoom--zoomed .zoom__stage > .zoom__img { width: 100%; height: 100%; }
-
-/* ---------- clickable data nodes (issue #14) ---------- */
-/* Box set by JS from the image's measured position, not inset:0 — the image is letterboxed
-   inside the stage, so filling the stage would offset every hotspot. */
-.zoom__hotspots { position: absolute; }
-.hotspot {
-  position: absolute;
-  padding: 0;
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: 3px;
-  cursor: pointer;
-  /* Invisible until wanted: the drawing is the review, and forty outlined boxes over it is
-     noise. Hover, focus and the active selection are the only times it shows itself. */
-  transition: background-color 120ms ease, border-color 120ms ease;
-}
-.hotspot:hover,
-.hotspot:focus-visible,
-.hotspot--active {
-  background: color-mix(in srgb, var(--moss) 16%, transparent);
-  border-color: var(--moss);
-  outline: none;
-}
-.zoom--interactive .zoom__viewport { cursor: default; }
 
 /* ---------- before/after diff (issue #24) ---------- */
-/* The colours are the summary. Kept as variables so the legend swatch, the hotspot and the
-   panel tag cannot drift into three different greens. */
+/* The colours are the summary. Kept as variables so the legend swatch, the diagram outline and
+   the panel tag cannot drift into three different greens. Okabe-Ito hues, picked to stay apart
+   under the common colour-vision deficiencies; the outline style (solid, dotted, double, dashed)
+   and the badge on each changed node carry the same distinction for anyone they still fail. */
 :root {
-  --diff-added: #1a9850;
-  --diff-removed: #c0392b;
-  --diff-reannotated: #b8860b;
-  --diff-relabelled: #7b4fa8;
+  --diff-added: #009e73;
+  --diff-removed: #d55e00;
+  --diff-reannotated: #0072b2;
+  --diff-relabelled: #cc79a7;
   --diff-moved: #6b7785;
 }
-/* Persistent, unlike the plain hotspot: a changed node has to be findable without hovering
-   every box on the diagram, which is the entire point. Unchanged nodes stay invisible. */
-.zoom--diffed .hotspot--added { background: color-mix(in srgb, var(--diff-added) 20%, transparent); border-color: var(--diff-added); }
-.zoom--diffed .hotspot--removed { background: color-mix(in srgb, var(--diff-removed) 20%, transparent); border-color: var(--diff-removed); }
-.zoom--diffed .hotspot--reannotated { background: color-mix(in srgb, var(--diff-reannotated) 24%, transparent); border-color: var(--diff-reannotated); }
-.zoom--diffed .hotspot--relabelled { background: color-mix(in srgb, var(--diff-relabelled) 20%, transparent); border-color: var(--diff-relabelled); }
-.zoom--diffed .hotspot--moved { background: color-mix(in srgb, var(--diff-moved) 14%, transparent); border-color: var(--diff-moved); border-style: dashed; }
-/* Colour alone is not a distinction for everyone reading this, and five hues over a diagram
-   that is itself coloured is a lot to ask of any eye. The border weight and dashes carry the
-   same information, and the hotspot's own aria-label says the word. */
-.zoom--diffed .hotspot--added,
-.zoom--diffed .hotspot--removed,
-.zoom--diffed .hotspot--reannotated,
-.zoom--diffed .hotspot--relabelled { border-width: 2px; }
-.zoom--diffed .hotspot--reannotated { border-style: double; border-width: 3px; }
-.zoom--diffed .hotspot--removed { border-style: dotted; border-width: 2px; }
-/* Drops the colour, keeps the button: the node is still clickable and still readable. */
-.review-card--hide-moved .hotspot--moved { background: transparent; border-color: transparent; }
 
 .diff-summary {
   margin: 0 0 0.5rem;
@@ -1005,31 +923,6 @@ a.pager__step:hover { background: var(--surface); border-color: var(--moss); }
 }
 .node-panel__props dt { color: var(--ink-muted); }
 .node-panel__props dd { margin: 0; overflow-wrap: anywhere; }
-.zoom__controls {
-  position: absolute;
-  right: 0.4rem;
-  bottom: 0.4rem;
-  display: flex;
-  gap: 0.25rem;
-  opacity: 0.55;
-  transition: opacity 0.15s;
-}
-.zoom:hover .zoom__controls,
-.zoom:focus-within .zoom__controls,
-.zoom--zoomed .zoom__controls { opacity: 1; }
-.zoom__btn {
-  font: inherit;
-  font-size: 0.75rem;
-  line-height: 1;
-  min-width: 1.6rem;
-  padding: 0.3rem 0.4rem;
-  border: 1px solid var(--line-strong);
-  border-radius: var(--radius-s);
-  background: var(--surface);
-  color: var(--ink);
-  cursor: pointer;
-}
-.zoom__btn:hover { border-color: var(--moss); color: var(--moss); }
 
 /* curation metadata panel */
 .meta-panel { display: flex; flex-direction: column; gap: 0.6rem; margin: 0.4rem 0 1rem; }
