@@ -771,6 +771,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             ),
             drafts=st.drafts,
             previews=st.preview,
+            preview_retention=timedelta(days=settings.preview_retention_days),
             defer=defer,
         )
 

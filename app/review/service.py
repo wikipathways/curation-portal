@@ -564,6 +564,7 @@ class CurationService:
         reconcile_min_interval: timedelta = timedelta(seconds=30),
         drafts=None,
         previews=None,
+        preview_retention: timedelta = timedelta(days=90),
         defer: Callable[..., None] | None = None,
     ) -> None:
         self._session_factory = session_factory
@@ -594,6 +595,9 @@ class CurationService:
         # (issue #18). Optional because nothing else in this service needs it, and every test
         # that does not care about previews should not have to build one.
         self._previews = previews
+        # How long a finished review that keeps its render (published, merged) keeps it before
+        # the sweep takes it. See ``_KEEPS_RENDER``.
+        self._preview_retention = preview_retention
         # ``defer(fn, *args)`` runs ``fn`` after the response has gone (a request's
         # BackgroundTasks). With it, the mirror comment and the approval comment leave the
         # request path: a curator's click waits for the decision, not for three more GitHub
@@ -610,19 +614,48 @@ class CurationService:
     def is_curator(self, user: str) -> bool:
         return self._curators.is_curator(user)
 
-    def _free_preview(self, pr_number: int) -> None:
-        """Drop the cached render once a review is terminal (issue #18).
+    #: Finished reviews whose render is kept after the transition, so the diagram stays on the
+    #: card and the review page of an approved or published pathway — the one a curator, and
+    #: anyone following the publication, still opens. Rejected and closed submissions are freed
+    #: at once (issue #18): nothing will be published from them. Approved and publish-failed
+    #: reviews are not terminal and were never freed; these two are the terminal ones kept, for
+    #: ``preview_retention`` after they finished, then the sweep takes them.
+    _KEEPS_RENDER = (ReviewStatus.PUBLISHED, ReviewStatus.MERGED)
+
+    def _free_preview(self, pr_number: int, status: ReviewStatus) -> None:
+        """Drop the cached render once a review is rejected or closed (issue #18).
 
         Called explicitly at each terminal transition rather than folded into ``_maybe_mirror``:
         the two only look interchangeable, and the reject path does not mirror, so hanging this
-        off that would have leaked exactly the case a curator hits most.
+        off that would have leaked exactly the case a curator hits most. A status in
+        ``_KEEPS_RENDER`` keeps its render; the sweep bounds how long.
         """
-        if self._previews is None:
+        if self._previews is None or status in self._KEEPS_RENDER:
             return
         try:
             self._previews.discard(pr_number)
         except Exception:  # noqa: BLE001 - freeing disk must never fail a curation action
-            pass
+            logger.warning("could not free the render of PR #%s", pr_number, exc_info=True)
+
+    def _retained(self) -> set[int]:
+        """Finished reviews whose render is still within ``preview_retention``.
+
+        Finished at ``published_at`` or ``merged_at``; ``updated_at`` for a row that recorded
+        neither.
+        """
+        cutoff = utcnow() - self._preview_retention
+        with self._session_factory() as s:
+            rows = s.execute(
+                select(
+                    Review.pr_number, Review.published_at, Review.merged_at, Review.updated_at
+                ).where(Review.status.in_(self._KEEPS_RENDER))
+            ).all()
+        kept = set()
+        for pr_number, published_at, merged_at, updated_at in rows:
+            finished = _aware(published_at or merged_at or updated_at)
+            if finished is not None and finished > cutoff:
+                kept.add(pr_number)
+        return kept
 
     def _sweep_caches(self, live: Iterable[int]) -> None:
         """Collect what the two on-disk caches are holding and nothing needs (issue #18).
@@ -630,24 +663,34 @@ class CurationService:
         For the renders, the call sites above are the primary path and this is the backstop — for
         the reason a backstop was needed at all: two terminal transitions had been missed, and the
         ones that get missed are by definition the ones nobody was thinking about. It also reaches
-        what no transition can: reviews terminalised before any of this existed, and a submission
-        that died between rendering and registering.
+        what no transition can: reviews terminalised before any of this existed, a submission
+        that died between rendering and registering, and the published and merged reviews whose
+        render was kept, once ``preview_retention`` has passed.
 
         The drafts cache next door has no primary path to back up. It expires by TTL and keeps the
-        file, so this is the only thing that removes one. It is handed the live set too: a live
-        review's last good payload is served however old (``DraftsReader.cached``), so it stays.
+        file, so this is the only thing that removes one. It is handed the live set only: a live
+        review's last good payload is served however old (``DraftsReader.cached``), and a
+        published one reads no drafts at all.
 
         ``live`` must be every non-terminal review, since the render sweep treats anything absent
-        from it as collectable.
+        from what it keeps as collectable.
         """
         pr_numbers = set(live)
-        for cache, arg in ((self._previews, (pr_numbers,)), (self._drafts, (pr_numbers,))):
-            if cache is None:
+        renders = pr_numbers
+        if self._previews is not None:
+            try:
+                renders = pr_numbers | self._retained()
+            except Exception:  # noqa: BLE001 - keep everything finished rather than guess
+                logger.warning("could not list retained renders; skipping the sweep",
+                               exc_info=True)
+                renders = None
+        for cache, keep in ((self._previews, renders), (self._drafts, pr_numbers)):
+            if cache is None or keep is None:
                 continue
             try:
-                cache.sweep(*arg)
+                cache.sweep(keep)
             except Exception:  # noqa: BLE001 - freeing disk must never fail a dashboard load
-                pass
+                logger.warning("cache sweep failed", exc_info=True)
 
     def _maybe_welcome(self, review: Review) -> None:
         """Best-effort acknowledgement, posted once per submission. Never fails the submission.
@@ -1400,7 +1443,7 @@ class CurationService:
             review.decided_by = curator
             review.merged_at = utcnow()
             s.commit()
-            self._free_preview(review.pr_number)
+            self._free_preview(review.pr_number, review.status)
             self._maybe_mirror(review)
             return review
 
@@ -1567,7 +1610,7 @@ class CurationService:
                 s.commit()
             raise
 
-        self._free_preview(pr_number)
+        self._free_preview(pr_number, ReviewStatus.REJECTED)
         self._free_pathway(wpid, curator, return_wpid=True, pr_number=pr_number)
 
         with self._session_factory() as s:
@@ -1674,7 +1717,7 @@ class CurationService:
             review.published_at = utcnow()
             review.decision_note = f"WPID recorded by @{curator}"
             s.commit()
-            self._free_preview(review.pr_number)
+            self._free_preview(review.pr_number, review.status)
             self._maybe_mirror(review)
         # Terminal, so whatever the submission was holding has to come free — an update holds
         # the lock on the pathway it edits, and nothing else will release it now.
@@ -1902,7 +1945,7 @@ class CurationService:
             if merged:
                 review.merged_at = utcnow()
             s.commit()
-            self._free_preview(review.pr_number)
+            self._free_preview(review.pr_number, review.status)
             self._maybe_mirror(review)
             return review
 
@@ -2047,12 +2090,9 @@ class CurationService:
                     review.published_at = utcnow()
             s.commit()
             if not unchanged:
-                if status == ReviewStatus.PUBLISHED:
-                    # In pipeline mode this is *the* way a submission succeeds, so leaving it out
-                    # meant the live deployment leaked a cache on every pathway it published --
-                    # the ordinary path, not an edge. PUBLISH_FAILED keeps its render: it is not
-                    # terminal, and the curator who has to sort it out will want to see it.
-                    self._free_preview(pr_number)
+                # No render to free: a published review keeps its diagram on the card
+                # (``_KEEPS_RENDER``), and the sweep removes it once ``preview_retention`` has
+                # passed. PUBLISH_FAILED keeps its render as it always did: it is not terminal.
                 self._maybe_mirror(review)
             return review
 
@@ -2701,6 +2741,6 @@ class CurationService:
             if status in self._TERMINAL:
                 # Reaches this way when a curator rejects with the label on GitHub rather than in
                 # the dashboard, which is the same terminal state by a different door.
-                self._free_preview(review.pr_number)
+                self._free_preview(review.pr_number, status)
             self._maybe_mirror(review)
             return review

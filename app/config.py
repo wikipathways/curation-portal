@@ -238,6 +238,11 @@ class Settings(BaseSettings):
     preview_artifact_name: str = "pr-preview"
     preview_cache_dir: str = "./preview-cache"
     preview_cache_ttl_seconds: int = 60
+    # Days a published or merged review keeps its cached render, so the diagram stays on its card
+    # and review page after the publication. Rejected and closed reviews are freed at once; the
+    # hourly sweep removes a kept render once this many days have passed since the review
+    # finished. 0 lets the next sweep take them.
+    preview_retention_days: int = 90
     # Refuse approve-and-merge until the PR-preview CI workflow has completed successfully
     # (design problem #1: never merge a pathway whose render/validation hasn't run green).
     require_preview_check: bool = True
