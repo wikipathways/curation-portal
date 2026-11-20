@@ -298,9 +298,18 @@ def render_gpml_with_nodes(gpml: bytes | str) -> tuple[bytes, list[NodeHotspot]]
 
 
 def render_gpml_full(gpml: bytes | str) -> RenderResult:
-    """Render to SVG, hotspots and the graph sidecar in one pass."""
-    pw = parse_pathway(gpml)
-    result = _Renderer(pw).run()
+    """Render to SVG, hotspots and the graph sidecar in one pass.
+
+    Raises only ``RenderError``. Anything else escaping the drawing is a renderer bug that some
+    file found, and the callers' contract (a failed preview, never a crash) must hold for it too.
+    """
+    try:
+        pw = parse_pathway(gpml)
+        result = _Renderer(pw).run()
+    except RenderError:
+        raise
+    except Exception as exc:  # noqa: BLE001 — the safety net; see the docstring
+        raise RenderError(f"renderer failed: {type(exc).__name__}") from exc
     try:
         assert_safe_svg(result.svg)
     except UnsafeSvg as exc:  # a renderer bug, never the input's fault — but never serve it
@@ -611,16 +620,11 @@ class _Renderer:
         self.group_members = {k: [m for m in v if "#" not in m] for k, v in members.items()}
         self.group_bbox = geo.group_bboxes(members, rects)
 
-        def z_of(gdid: str, seen: set[str]) -> float | None:
-            if gdid in seen:
-                return None
-            seen.add(gdid)
-            vals = []
-            for m in self.group_members.get(gdid, []):
-                v = z_of(m, seen) if m in members else zs.get(m)
-                if v is not None:
-                    vals.append(v)
-            return (min(vals) - 1) if vals else None
+        # A group without its own ZOrder sits just under its lowest member. Folded without
+        # recursion, like the outlines: nesting depth is the file's to choose.
+        derived_z = geo.fold_groups(
+            self.group_members, zs.get, lambda vals: (min(vals) - 1) if vals else None
+        )
 
         for g in pw.groups:
             gdid = self.did[("group", g.index)]
@@ -629,7 +633,7 @@ class _Renderer:
                 continue
             z = g.style.z
             if z is None:
-                z = z_of(gdid, set())
+                z = derived_z.get(gdid)
             if z is None:
                 z = _DEFAULT_Z["Group"]
             self._draw_group(g, gdid, box, z)

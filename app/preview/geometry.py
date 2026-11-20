@@ -17,10 +17,13 @@ The routing rules follow what PathVisio draws, as far as a reviewer can tell the
 from __future__ import annotations
 
 import math
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Iterator
+from typing import TypeVar
 
 Point = tuple[float, float]
 Rect = tuple[float, float, float, float]  # x, y, w, h
+
+T = TypeVar("T")
 
 H, V = "h", "v"
 
@@ -200,6 +203,59 @@ def union(rects: Iterable[Rect]) -> Rect | None:
     return x0, y0, x1 - x0, y1 - y0
 
 
+def fold_groups(
+    members: dict[str, list[str]],
+    leaf: Callable[[str], T | None],
+    combine: Callable[[list[T]], T | None],
+) -> dict[str, T | None]:
+    """A value for every group, computed from its members' values, without recursion.
+
+    ``members`` maps a group id to member ids, where a member that is itself a key of
+    ``members`` is a nested group and contributes its own folded value, and any other member
+    contributes ``leaf(member)``. ``combine`` gets the members' non-None values in order.
+
+    Walked with an explicit stack rather than by recursion: groups chained a few thousand deep
+    by GroupRef are a ~100 KB file, and Python's recursion limit would turn one into a crash.
+    A GroupRef cycle (a group that contains itself, directly or not) is cut where it closes.
+    Each group is folded once.
+    """
+    out: dict[str, T | None] = {}
+    for root in members:
+        if root in out:
+            continue
+        on_path = {root}
+        stack: list[tuple[str, Iterator[str], list[T]]] = [
+            (root, iter(members.get(root, ())), [])
+        ]
+        while stack:
+            gid, it, parts = stack[-1]
+            descended = False
+            for m in it:
+                if m in members:
+                    if m in out:
+                        v = out[m]
+                    elif m in on_path:
+                        v = None  # the cycle closes here
+                    else:
+                        on_path.add(m)
+                        stack.append((m, iter(members.get(m, ())), []))
+                        descended = True
+                        break
+                else:
+                    v = leaf(m)
+                if v is not None:
+                    parts.append(v)
+            if descended:
+                continue
+            stack.pop()
+            on_path.discard(gid)
+            value = combine(parts)
+            out[gid] = value
+            if stack and value is not None:
+                stack[-1][2].append(value)
+    return out
+
+
 def group_bboxes(
     members: dict[str, list[str]],
     rects: dict[str, Rect],
@@ -209,36 +265,19 @@ def group_bboxes(
     """Outline of every group: its members' union, grown by ``margin``, nested groups included.
 
     ``members`` maps a group id to member ids (element or group ids); ``rects`` holds the
-    elements' own boxes. A GroupRef cycle (a group that contains itself, directly or not) is
-    cut where it closes, so a hostile file cannot recurse the renderer to death.
+    elements' own boxes. A GroupRef cycle is cut where it closes, and nesting of any depth is
+    walked without recursion (``fold_groups``), so a hostile file cannot crash the renderer.
     """
-    out: dict[str, Rect] = {}
 
-    def box(gid: str, visiting: set[str]) -> Rect | None:
-        if gid in out:
-            return out[gid]
-        if gid in visiting:
-            return None
-        visiting.add(gid)
-        parts: list[Rect] = []
-        for m in members.get(gid, []):
-            if m in members:
-                r = box(m, visiting)
-            else:
-                r = rects.get(m)
-            if r is not None:
-                parts.append(r)
-        visiting.discard(gid)
+    def grow(parts: list[Rect]) -> Rect | None:
         u = union(parts)
         if u is None:
             return None
         x, y, w, h = u
-        out[gid] = (x - margin, y - margin, w + 2 * margin, h + 2 * margin)
-        return out[gid]
+        return x - margin, y - margin, w + 2 * margin, h + 2 * margin
 
-    for gid in members:
-        box(gid, set())
-    return out
+    folded = fold_groups(members, rects.get, grow)
+    return {gid: box for gid, box in folded.items() if box is not None}
 
 
 # -- shapes ------------------------------------------------------------------------------------

@@ -27,6 +27,7 @@ from app.preview.svg import (
     UnsafeSvg,
     _num,
     assert_safe_svg,
+    attr_text,
     safe_color,
     safe_font,
 )
@@ -415,6 +416,62 @@ def test_group_bboxes_survive_cycles():
     boxes = geo.group_bboxes({"a": ["n1", "b"], "b": ["n2", "a"]},
                              {"n1": (0, 0, 10, 10), "n2": (20, 0, 10, 10)}, margin=0)
     assert boxes["a"] == (0, 0, 30, 10)
+
+
+def test_fold_groups_walks_any_depth_without_recursion():
+    depth = 5000  # far beyond the interpreter's recursion limit
+    members = {f"g{i}": [f"g{i + 1}"] for i in range(depth)}
+    members[f"g{depth}"] = ["n"]
+    boxes = geo.group_bboxes(members, {"n": (0, 0, 10, 10)}, margin=1)
+    assert boxes["g0"] == (-(depth + 1), -(depth + 1), 10 + 2 * (depth + 1), 10 + 2 * (depth + 1))
+    z = geo.fold_groups(members, {"n": 5.0}.get, lambda v: (min(v) - 1) if v else None)
+    assert z["g0"] == 5.0 - (depth + 1)
+
+
+def _deeply_nested_groups(n: int) -> bytes:
+    parts = ['<Pathway xmlns="http://pathvisio.org/GPML/2013a" Name="deep" Organism="x">',
+             '<DataNode TextLabel="A" GraphId="n0" Type="GeneProduct" GroupRef="g0">'
+             '<Graphics CenterX="50" CenterY="50" Width="40" Height="20"/></DataNode>']
+    for i in range(n):
+        ref = f' GroupRef="g{i + 1}"' if i < n - 1 else ""
+        parts.append(f'<Group GroupId="g{i}" GraphId="gg{i}" Style="Group"{ref}/>')
+    parts.append("</Pathway>")
+    return "".join(parts).encode()
+
+
+def test_groups_nested_thousands_deep_render():
+    # ~100 KB, passes validation, and used to raise RecursionError out of the renderer, which
+    # left the preview "pending" for good and the backfill retrying it every tick.
+    r = render_gpml_full(_deeply_nested_groups(1500))
+    assert_safe_svg(r.svg)
+    assert len(r.graph["groups"]) == 1500
+
+
+def test_an_unexpected_renderer_error_is_a_render_error(monkeypatch):
+    from app.preview import render
+
+    def boom(self):
+        raise ZeroDivisionError("a renderer bug")
+
+    monkeypatch.setattr(render._Renderer, "run", boom)
+    with pytest.raises(RenderError):
+        render_gpml_full((FIXTURES / "1_new_AhR_dioxin.gpml").read_bytes())
+
+
+@pytest.mark.parametrize("raw", [
+    "javajavascript:script: pathway", "uurl(rl(x", "JAVAjavascript:SCRIPT:x",
+    "jajavascript:vascript:",
+])
+def test_attr_text_leaves_no_payload_behind(raw):
+    out = attr_text(raw).lower()
+    assert "javascript:" not in out and "url(" not in out
+
+
+def test_a_pathway_with_a_nested_payload_in_its_name_still_renders():
+    gpml = (FIXTURES / "1_new_AhR_dioxin.gpml").read_bytes()
+    gpml = gpml.replace(b'Name="', b'Name="javajavascript:script: uurl(rl(x ', 1)
+    r = render_gpml_full(gpml)
+    assert_safe_svg(r.svg)
 
 
 def test_wrap_text():
