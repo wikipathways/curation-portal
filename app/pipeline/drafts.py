@@ -27,11 +27,15 @@ import io
 import json
 import re
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 
 import httpx
 
+from app import obs
 from app.review.checklist import CURATION_CHECKLIST, ChecklistState
 
 _RAW_BASE = "https://raw.githubusercontent.com"
@@ -68,6 +72,14 @@ _UNMAPPED_VALUES = {"", "na", "null", "none"}
 # anything about the cache, since past the TTL nothing can serve the file anyway.
 _DRAFT_SWEEP_INTERVAL_SECONDS = 3600.0
 _DRAFT_SWEEP_TTL_MARGIN = 4
+
+#: How long a failed read is not retried. Without it every background pass re-asked a site that
+#: had just refused, three files per review, each able to wait out the 10 s timeout.
+_ERROR_BACKOFF_SECONDS = 120.0
+
+#: The pipeline's own drawing, served same-origin at ``/previews/{pr}/pipeline.svg``. Capped so a
+#: runaway render cannot fill the cache volume; real ones are a few hundred kB.
+_MAX_PIPELINE_SVG_BYTES = 5 * 1024 * 1024
 
 
 def _checklist_auto_check(key: str):
@@ -187,6 +199,7 @@ class DraftsReader:
         cache_dir: str | Path,
         ttl_seconds: int = 300,
         transport: httpx.BaseTransport | None = None,
+        clock: Callable[[], float] = time.time,
     ) -> None:
         self._repo = repo.strip("/")
         self._branch = branch
@@ -200,7 +213,16 @@ class DraftsReader:
         # and a fresh connection per file would dominate the render. Never closed — the reader is
         # built once at startup and lives as long as the process, and the app's lifespan has no
         # shutdown half to close it in.
-        self._client = httpx.Client(transport=transport, timeout=10.0, follow_redirects=True)
+        self._client = obs.instrument_httpx(
+            httpx.Client(transport=transport, timeout=10.0, follow_redirects=True), "raw"
+        )
+        self._clock = clock
+        #: slug -> wall-clock time before which a failed read is not retried. In memory: a
+        #: restart retrying at once is fine, and an on-disk marker would read as a cached answer.
+        self._error_until: dict[str, float] = {}
+        #: slug -> when the pipeline SVG was last asked for, so a missing one is not re-asked on
+        #: every background pass.
+        self._svg_checked: dict[str, float] = {}
 
     # -- slugs -----------------------------------------------------------------------------
     @staticmethod
@@ -263,6 +285,9 @@ class DraftsReader:
     def fetch(self, slug: str) -> DraftArtifacts:
         """Read a draft's artifacts, from the disk cache when it is still fresh.
 
+        Network. Called from the background loop (``refresh_pipeline_checks``); a page reads
+        ``cached`` instead, so no page waits on raw.githubusercontent.com.
+
         Never raises. A draft that does not exist, a site repo that is unreachable and a file
         that will not parse all come back as `available=False`, because none of them is a reason
         to fail a curator's page load.
@@ -274,16 +299,121 @@ class DraftsReader:
         if cached is not None:
             return self._artifacts(slug, cached)
 
+        # A read that failed moments ago is not retried yet; the last good answer stands.
+        if self._clock() < self._error_until.get(slug, 0.0):
+            return self.cached(slug)
+
         try:
             payload = self._fetch_remote(slug)
         except Exception:
-            # Deliberately *not* cached. A transport failure or a non-404 status says nothing
-            # about whether the draft exists, and caching it would freeze a healthy draft as
-            # missing for the whole TTL.
-            return self._unavailable(slug)
+            # Deliberately *not* cached as an answer. A transport failure or a non-404 status
+            # says nothing about whether the draft exists, and caching it would freeze a healthy
+            # draft as missing for the whole TTL. What was last read stays on disk and is served.
+            self._error_until[slug] = self._clock() + _ERROR_BACKOFF_SECONDS
+            return self.cached(slug)
 
+        self._error_until.pop(slug, None)
         self._write_cache(slug, payload)
         return self._artifacts(slug, payload)
+
+    def cached(self, slug: str) -> DraftArtifacts:
+        """What the last successful fetch found, from disk only, however old. Never the network.
+
+        The page path. ``fetch`` used to run on every page render and could hold one for the
+        reader's 10 s timeout per file; the background loop keeps this copy current instead.
+        """
+        if not _SLUG_RE.fullmatch(slug or ""):
+            return self._unavailable(slug)
+        with obs.timed("disk"):
+            envelope = self._read_envelope(slug)
+        if envelope is None:
+            return self._unavailable(slug)
+        return self._artifacts(slug, envelope.get("payload") or {})
+
+    # -- the pipeline's own drawing ----------------------------------------------------------
+    def _svg_cache_path(self, slug: str) -> Path:
+        return self._cache_path(slug).with_suffix(".svg")
+
+    def svg_path(self, slug: str) -> Path | None:
+        """The cached pipeline SVG for ``slug``, or None. Disk only."""
+        if not _SLUG_RE.fullmatch(slug or ""):
+            return None
+        path = self._svg_cache_path(slug)
+        return path if path.is_file() else None
+
+    def fetch_svg(self, slug: str) -> bool:
+        """Cache the pipeline's rendered SVG for ``slug``. Background only. True when it wrote.
+
+        raw.githubusercontent.com serves ``.svg`` as ``text/plain`` with ``nosniff``, so an
+        ``<img>`` pointed there draws nothing. The portal serves its copy same-origin instead,
+        under the same locked-down headers as its own renders. Asked at most once per TTL.
+        """
+        if not _SLUG_RE.fullmatch(slug or ""):
+            return False
+        now = self._clock()
+        last = self._svg_checked.get(slug)
+        if last is not None and now - last < self._ttl_seconds:
+            return False
+        if now < self._error_until.get(slug, 0.0):
+            return False
+        self._svg_checked[slug] = now
+        try:
+            resp = self._client.get(self._raw_url(f"draft_assets/{slug}/{slug}.svg"))
+        except Exception:  # noqa: BLE001 - transport trouble: keep what is on disk
+            return False
+        path = self._svg_cache_path(slug)
+        if resp.status_code == 404:
+            path.unlink(missing_ok=True)
+            return False
+        body = resp.content
+        head = body[:256].lstrip()
+        if (
+            not resp.is_success
+            or len(body) > _MAX_PIPELINE_SVG_BYTES
+            or not (head.startswith(b"<svg") or head.startswith(b"<?xml"))
+        ):
+            return False
+        try:
+            self._cache_dir.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_name(path.name + ".tmp")
+            tmp.write_bytes(body)
+            tmp.replace(path)
+        except OSError:
+            return False
+        return True
+
+    # -- the published page --------------------------------------------------------------------
+    def page_live(self, wpid: int, since: datetime | None = None) -> bool | None:
+        """Is the published page up, and (for an update) rebuilt since ``since``? None: unknown.
+
+        One HEAD request. A new pathway's page did not exist before, so a 200 is the answer. An
+        update's page existed all along, so it counts only once GitHub Pages reports a
+        ``Last-Modified`` at or after the publication; without that header there is no telling
+        the old page from the new one, and the answer is None rather than a guess.
+        """
+        try:
+            resp = self._client.head(self.published_url(wpid))
+        except Exception:  # noqa: BLE001 - unreachable says nothing about the page
+            return None
+        if resp.status_code == 404:
+            return False
+        if not resp.is_success:
+            return None
+        if since is None:
+            return True
+        modified = resp.headers.get("last-modified")
+        if not modified:
+            return None
+        try:
+            when = parsedate_to_datetime(modified)
+        except (TypeError, ValueError):
+            return None
+        if when.tzinfo is None:
+            when = when.replace(tzinfo=UTC)
+        if since.tzinfo is None:
+            since = since.replace(tzinfo=UTC)
+        # Last-Modified has whole seconds; the publication time does not.
+        return when >= since.replace(microsecond=0)
 
     def draft_page_exists(self, slug: str) -> bool | None:
         """Is the draft page the publish workflow needs there? None when that cannot be told.
@@ -357,6 +487,11 @@ class DraftsReader:
         )
 
     @staticmethod
+    def unavailable(slug: str) -> DraftArtifacts:
+        """The "nothing on file" answer, for a caller that knows not to look."""
+        return DraftsReader._unavailable(slug)
+
+    @staticmethod
     def _unavailable(slug: str) -> DraftArtifacts:
         return DraftArtifacts(
             slug=slug,
@@ -378,13 +513,23 @@ class DraftsReader:
         scope = hashlib.sha256(f"{self._repo}\n{self._branch}".encode()).hexdigest()[:12]
         return self._cache_dir / f"{slug}.{scope}.json"
 
-    def _read_cache(self, slug: str) -> dict | None:
+    def _read_envelope(self, slug: str) -> dict | None:
         path = self._cache_path(slug)
         try:
             envelope = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return None
-        if time.time() - float(envelope.get("fetched_at", 0)) > self._ttl_seconds:
+        return envelope if isinstance(envelope, dict) else None
+
+    def _read_cache(self, slug: str) -> dict | None:
+        envelope = self._read_envelope(slug)
+        if envelope is None:
+            return None
+        try:
+            fetched_at = float(envelope.get("fetched_at", 0))
+        except (TypeError, ValueError):
+            return None
+        if self._clock() - fetched_at > self._ttl_seconds:
             return None
         return envelope.get("payload") or {}
 
@@ -396,7 +541,7 @@ class DraftsReader:
         try:
             self._cache_dir.mkdir(parents=True, exist_ok=True)
             self._cache_path(slug).write_text(
-                json.dumps({"fetched_at": time.time(), "payload": payload}), encoding="utf-8"
+                json.dumps({"fetched_at": self._clock(), "payload": payload}), encoding="utf-8"
             )
         except (OSError, ValueError):
             pass  # the cache is an optimisation; losing it costs requests, not correctness
@@ -426,7 +571,8 @@ class DraftsReader:
         cutoff = time.time() - max(self._ttl_seconds * _DRAFT_SWEEP_TTL_MARGIN, 60.0)
         freed = 0
         try:
-            entries = sorted(self._cache_dir.glob("*.json"))
+            # The pipeline SVGs age out with the payloads they belong to.
+            entries = sorted([*self._cache_dir.glob("*.json"), *self._cache_dir.glob("*.svg")])
         except OSError:
             return 0
         for path in entries:
