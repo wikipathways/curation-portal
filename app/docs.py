@@ -15,7 +15,7 @@ from collections.abc import Callable
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 
-from app.quality import RULES, Severity
+from app.quality import RULES, Severity, description_change
 from app.review.checklist import CURATION_CHECKLIST, build_checklist
 from app.review.status import STATUS, queue_tabs
 
@@ -144,6 +144,7 @@ def _labels(settings) -> list[dict]:
 def docs_context(settings) -> dict:
     """Everything ``docs.html`` renders that comes from code rather than prose."""
     pipeline_mode = settings.is_pipeline_mode
+    limits = description_change("", "")
     return {
         "rules": _rules(),
         "severities": [
@@ -156,6 +157,11 @@ def docs_context(settings) -> dict:
         # "user" (the submitter, straight on the repository). The prose about forks, and whether
         # the pull request is the submitter's own, depends on it.
         "submit_identity": settings.submit_identity,
+        # The repository's limits on a description edit, read from the rule that applies them.
+        "description_limits": {
+            "words": limits["max_words"],
+            "chars": limits["max_chars"],
+        },
     }
 
 

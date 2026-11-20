@@ -300,3 +300,19 @@ def test_tour_follows_on_when_the_step_on_screen_vanishes():
     # Everything vanishing ends it, but not as "done".
     r = _tour("all-vanish")
     assert r["afterVanish"] is None and r["stored"] == "interrupted"
+
+
+def test_the_description_limits_on_the_help_page_come_from_the_rule(tmp_path, monkeypatch):
+    # The rules module promises that moving a threshold is a one-line change; the help page must
+    # follow it rather than keep its own copy of the numbers.
+    import app.quality.rules as rules
+
+    with _app(tmp_path) as c:
+        page = _flat(c.get("/docs").text)
+    assert "the repository allows (3 words or 10 characters)" in page
+
+    monkeypatch.setattr(rules, "_EDIT_MAX_WORD_DIFF", 5)
+    monkeypatch.setattr(rules, "_EDIT_MAX_CHAR_DIFF", 40)
+    with _app(tmp_path) as c:
+        page = _flat(c.get("/docs").text)
+    assert "the repository allows (5 words or 40 characters)" in page

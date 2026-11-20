@@ -9,11 +9,13 @@ the one-word change, which is what WP5430 was on main.
 """
 from __future__ import annotations
 
+import dataclasses
 import io
 import json
 import re
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.github import FakeGitHubClient
@@ -34,6 +36,9 @@ from app.quality import description_change, inspect_gpml
 from tests.test_api import _authed_app, _login, _settings
 
 FIXTURES = Path(__file__).parent / "fixtures" / "gpml"
+PUBLISHED = Path(__file__).parent / "fixtures" / "published"
+ZOO_2013A = (FIXTURES / "zoo_2013a.gpml").read_text(encoding="utf-8")
+ZOO_2021 = (FIXTURES / "zoo_2021.gpml").read_text(encoding="utf-8")
 V1 = (FIXTURES / "b_wp5430_nqo1_v1.gpml").read_text(encoding="utf-8")
 
 
@@ -108,20 +113,55 @@ def test_description_wording_below_and_above_the_limits():
         entry = {
             "from_words": len(was.split()), "to_words": len(now.split()),
             "word_delta": c["word_delta"], "char_delta": c["char_delta"], "rewritten": c["over"],
+            "max_words": c["max_words"], "max_chars": c["max_chars"],
         }
         return describe_description_change(entry)
 
     base = "one two three four five six seven eight nine ten"
     assert says(base, base + " eleven") == "edited (+1 word)"
-    assert says(base, "one two three four five six seven") == "rewritten (10 → 7 words)"
+    assert says(base, "one two three four five six") == "rewritten (10 → 6 words)"
+    # Three words is within the limit, so the 15 characters are what made this a rewrite.
+    assert says(base, "one two three four five six seven") == (
+        "rewritten (10 → 7 words, −15 characters)"
+    )
     assert says(base + " a b c", base) == "edited (−3 words)"
     assert says(base, base.replace("one", "uno")) == "edited (same length, reworded)"
     assert says(base, base.replace("one", "ones")) == "edited (+1 character)"
     assert says("", base) == "added (10 words)"
     assert says(base, "") == "removed (was 10 words)"
+    # Past the character limit with the word count unchanged: the card names the measurement
+    # that made it a rewrite, rather than "8 → 8 words".
+    was = "the receptor binds dioxin and moves in cells"
+    assert says(was, was.replace("cells", "hepatocytesxxxxxxx")) == (
+        "rewritten (8 → 8 words, +13 characters)"
+    )
+    # Within the word limit, past the character one: the character count is what tipped it.
+    assert says(was, was + " xxxxxxxxxxxxx") == "rewritten (8 → 9 words, +14 characters)"
     # A cache written before the deltas were recorded keeps its old wording.
     assert describe_description_change({"from_words": 51, "to_words": 52}) == (
         "rewritten (51 → 52 words)"
+    )
+
+
+def test_a_description_added_to_a_base_without_one_is_added_on_both():
+    before = dataclasses.replace(parse_curation_metadata(BEFORE.encode()), description="")
+    after = parse_curation_metadata(V1.encode())
+    entry = diff_metadata(before, after)["description"]
+    assert describe_description_change(entry) == "added (52 words)"
+    finding = inspect_gpml(V1, before=before, kind="update").by_id("content.description")
+    assert finding.severity == "warn"
+    assert finding.detail == (
+        "This edit adds a description (52 words). The repository flags any change to the "
+        "description of more than 3 words or 10 characters."
+    )
+    assert "changed by" not in finding.detail and "rewrites" not in finding.detail
+
+    short = V1.replace(after.description, "AhR genes.")
+    finding = inspect_gpml(short, before=before, kind="update").by_id("content.description")
+    assert (finding.severity, finding.detail) == (
+        "pass",
+        "This edit adds a short description (2 words), under the repository's limit of 3 words "
+        "or 10 characters.",
     )
 
 
@@ -202,6 +242,89 @@ def test_a_node_renamed_under_a_new_graph_id_keeps_its_lines():
     )
     d = _diff(V1, moved)
     assert d["summary"]["reconnected"] == 0 and d["summary"]["unchanged"] == 7
+
+
+def test_an_interaction_retyped_and_reconnected_keeps_its_old_arrow():
+    # i005 runs to d008 with a transcription-translation arrow; point it at d006 with an
+    # inhibition arrow. Reconnected wins, and the panel still has the old arrow to strike through.
+    both = V1.replace(
+        'GraphRef="d008" RelX="0.0" RelY="-1.0" ArrowHead="mim-transcription-translation"',
+        'GraphRef="d006" RelX="0.0" RelY="-1.0" ArrowHead="mim-inhibition"',
+    )
+    assert both != V1
+    d = _diff(V1, both)
+    assert d["after"]["e-i005"] == {
+        "change": "reconnected", "was": {"type_label": "transcription translation"},
+    }
+    # Reconnected alone, same arrow: nothing to strike through.
+    moved = V1.replace(
+        'GraphRef="d008" RelX="0.0" RelY="-1.0" ArrowHead="mim-transcription-translation"',
+        'GraphRef="d006" RelX="0.0" RelY="-1.0" ArrowHead="mim-transcription-translation"',
+    )
+    assert _diff(V1, moved)["after"]["e-i005"] == {"change": "reconnected"}
+
+
+_ALL_FIXTURES = sorted(FIXTURES.glob("*.gpml")) + sorted(PUBLISHED.glob("*.gpml"))
+
+
+@pytest.mark.parametrize("path", _ALL_FIXTURES, ids=lambda p: p.name)
+def test_every_fixture_against_itself_changes_no_interaction(path):
+    src = path.read_text(encoding="utf-8")
+    d = _diff(src, src)
+    assert {k: d["summary"][k] for k in ("added", "removed", "retyped", "reconnected")} == {
+        "added": 0, "removed": 0, "retyped": 0, "reconnected": 0,
+    }
+
+
+def test_the_same_pathway_in_gpml_2013a_and_2021_changes_no_interaction():
+    # A dialect conversion: GraphRef/GroupRef become elementRef, and a group is referred to by
+    # its GroupId rather than its GraphId. Ends at a group and at an anchor included.
+    d = _diff(ZOO_2013A, ZOO_2021)
+    assert d["summary"]["unchanged"] == 9
+    assert {k: d["summary"][k] for k in ("added", "removed", "retyped", "reconnected")} == {
+        "added": 0, "removed": 0, "retyped": 0, "reconnected": 0,
+    }
+    assert {"before": "e-icat", "after": "e-icat", "change": "unchanged"} in d["pairs"]
+    assert {"before": "e-itogroup", "after": "e-itogroup", "change": "unchanged"} in d["pairs"]
+
+
+def test_an_id_that_merely_contains_auto_is_not_a_made_up_one():
+    # A real group and anchor id with "auto" in it still match across the sides; only the
+    # renderer's own "<prefix>auto<i>" form is kept apart.
+    src = ZOO_2013A.replace('"cpx"', '"autocpx"').replace('"anc1"', '"autoanc1"')
+    assert "autocpx" in src and "autoanc1" in src
+    d = _diff(src, src)
+    assert d["summary"]["reconnected"] == 0 and d["summary"]["unchanged"] == 9
+
+
+def test_moving_a_group_end_or_an_anchor_end_is_a_reconnection():
+    # e-itogroup ends at the complex; point it at the data node FFF instead.
+    to_node = ZOO_2013A.replace(
+        'GraphRef="gcpx" RelX="0.0" RelY="1.0" ArrowHead="mim-binding"',
+        'GraphRef="nf" RelX="0.0" RelY="1.0" ArrowHead="mim-binding"',
+    )
+    assert to_node != ZOO_2013A
+    d = _diff(ZOO_2013A, to_node)
+    assert d["after"]["e-itogroup"] == {"change": "reconnected"}
+    assert d["summary"]["reconnected"] == 1
+
+    # e-icat catalyses the conversion at anc1; give the conversion a second anchor on both
+    # sides and move the catalysis to it.
+    two = ZOO_2013A.replace(
+        '<Anchor Position="0.5" Shape="Circle" GraphId="anc1" />',
+        '<Anchor Position="0.5" Shape="Circle" GraphId="anc1" />\n'
+        '      <Anchor Position="0.25" Shape="Circle" GraphId="anc2" />',
+    )
+    assert two != ZOO_2013A
+    moved = two.replace(
+        'GraphRef="anc1" RelX="0.0" RelY="0.0" ArrowHead="mim-catalysis"',
+        'GraphRef="anc2" RelX="0.0" RelY="0.0" ArrowHead="mim-catalysis"',
+    )
+    assert moved != two
+    assert _diff(two, two)["summary"]["reconnected"] == 0
+    d = _diff(two, moved)
+    assert d["after"]["e-icat"] == {"change": "reconnected"}
+    assert d["summary"]["reconnected"] == 1
 
 
 def test_graphical_lines_are_not_compared():

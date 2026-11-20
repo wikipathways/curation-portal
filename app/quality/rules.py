@@ -790,13 +790,29 @@ def _check_description(s: Subject) -> tuple[str, str] | None:
             "overview of the processes it describes.",
         )
     if s.kind == "update" and s.before is not None:
-        change = description_change(getattr(s.before, "description", "") or "", description)
+        was = (getattr(s.before, "description", "") or "").strip()
+        change = description_change(was, description)
         word_diff = abs(change["word_delta"])
         char_diff = abs(change["char_delta"])
         limit = (
             f"the repository's limit of {_EDIT_MAX_WORD_DIFF} words or "
             f"{_EDIT_MAX_CHAR_DIFF} characters"
         )
+        if not was:
+            # The card calls this "added" (app.preview.diff.describe_description_change); so
+            # does the rule, rather than describing a first description as a rewrite.
+            added = _plural(_words(description), "word")
+            if change["over"]:
+                return (
+                    Severity.WARN.value,
+                    f"This edit adds a description ({added}). The repository flags any change "
+                    f"to the description of more than {_EDIT_MAX_WORD_DIFF} words or "
+                    f"{_EDIT_MAX_CHAR_DIFF} characters.",
+                )
+            return (
+                Severity.PASS.value,
+                f"This edit adds a short description ({added}), under {limit}.",
+            )
         if change["over"]:
             return (
                 Severity.WARN.value,

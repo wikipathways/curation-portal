@@ -33,6 +33,7 @@ is a cache written before it, and reads as "interactions not compared", never as
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 
 from app.quality import description_change
@@ -53,6 +54,11 @@ EDGE_CHANGES = ("added", "removed", "retyped", "reconnected", "unchanged")
 #: version of this module, and ``PreviewService.needs_rerender`` sends it back through the
 #: renderer (from the GPML on disk) so its ``diff.json`` gains what it lacks. 2: interactions.
 DIFF_VERSION = 2
+
+#: The ``data-id`` the renderer makes up for an element whose own id it cannot use
+#: (``app.preview.render._assign_ids``: a prefix such as ``g-`` or ``a-``, then ``auto<i>``).
+#: Matched whole, so a real id that merely contains "auto" (a group ``autocpx``) is not one.
+_AUTO_ID = re.compile(r"[a-z]+-auto\d+")
 
 
 @dataclass
@@ -249,7 +255,7 @@ def _endpoint_keys(diff: PathwayDiff, before: list[dict], after: list[dict]):
     counterpart (added or removed) gets a key only its own side can produce: a line to it is a
     line to something new. Anything else (a label, a group, a state, another line's anchor) is
     matched on its id, which comes from its GraphId and survives an edit the same way; an id the
-    renderer had to make up (``auto``) means nothing across sides and is kept apart too.
+    renderer had to make up (``<prefix>auto<i>``) means nothing across sides and is kept apart too.
     """
     paired_b = {p["before"]: p["after"] for p in diff.pairs}
     paired_a = set(paired_b.values())
@@ -261,7 +267,7 @@ def _endpoint_keys(diff: PathwayDiff, before: list[dict], after: list[dict]):
             return None
         if did in paired_b:
             return ("node", paired_b[did])
-        if did in node_b or "auto" in did:
+        if did in node_b or _AUTO_ID.fullmatch(did):
             return ("before", did)
         return ("id", did)
 
@@ -270,7 +276,7 @@ def _endpoint_keys(diff: PathwayDiff, before: list[dict], after: list[dict]):
             return None
         if did in paired_a:
             return ("node", did)
-        if did in node_a or "auto" in did:
+        if did in node_a or _AUTO_ID.fullmatch(did):
             return ("after", did)
         return ("id", did)
 
@@ -298,7 +304,7 @@ def diff_edges(
 
     A matched pair is **retyped** when the arrow changed and **reconnected** when either end now
     lands somewhere else (an end attached or let go counts); a change of both reads as
-    reconnected, the larger of the two.
+    reconnected, the larger of the two, and still carries the old arrow as ``was``.
     """
     before = [e for e in before_edges if isinstance(e, dict) and e.get("kind") == "Interaction"]
     after = [e for e in after_edges if isinstance(e, dict) and e.get("kind") == "Interaction"]
@@ -352,8 +358,9 @@ def diff_edges(
             change = "unchanged"
         summary[change] += 1
         entry: dict = {"change": change}
-        if change == "retyped":
-            # The panel strikes the old arrow through beside the new one.
+        if (b.get("type") or "") != (a.get("type") or ""):
+            # The panel strikes the old arrow through beside the new one, whether or not an end
+            # moved as well.
             entry["was"] = {"type_label": b.get("type_label") or b.get("type") or ""}
         if b.get("id"):
             b_ids[b["id"]] = change
@@ -437,9 +444,13 @@ def describe_description_change(entry: dict) -> str:
         return f"added ({a} word{'' if a == 1 else 's'})"
     if not a:
         return f"removed (was {b} word{'' if b == 1 else 's'})"
-    if entry.get("rewritten"):
-        return f"rewritten ({b} \u2192 {a} words)"
     words, chars = entry.get("word_delta") or 0, entry.get("char_delta") or 0
+    if entry.get("rewritten"):
+        if abs(words) <= (entry.get("max_words") or 0):
+            # Only the character count went past its limit; say so, or "8 → 8 words" reads as
+            # no change at all.
+            return f"rewritten ({b} \u2192 {a} words, {_signed(chars, 'character')})"
+        return f"rewritten ({b} \u2192 {a} words)"
     if words:
         return f"edited ({_signed(words, 'word')})"
     if chars:
